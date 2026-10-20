@@ -1,0 +1,6105 @@
+use std::{
+    collections::{HashMap, HashSet, VecDeque, hash_map::DefaultHasher},
+    env,
+    hash::{Hash, Hasher},
+    ops::Range,
+    rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
+
+use anyhow::Result;
+use async_channel::Sender;
+use chrono::Timelike;
+use futures::future::{Either, pending, select};
+use gpui::{
+    App, Bounds, ClipboardItem, Context, EventEmitter, FocusHandle, PathPromptOptions, Pixels,
+    Point, SharedString, Subscription, Timer, Window, px,
+};
+use oxide_ssh::SshConnectionHandle;
+use oxide_terminal_core::{
+    GraphicsOptions, KittyFileTransmissionControl, LocalPtyConfig, SerialControlLine,
+    SerialControlState, SerialDisplayMode, SerialLineEnding, SerialRuntimeOptions, SerialSendMode,
+    SerialSessionConfig, ShellIntegrationLifecycleState, ShellIntegrationStatus, SshSessionConfig,
+    TelnetSessionConfig, TermMode, TerminalCell, TerminalCommandMark, TerminalCommandMarkClosedBy,
+    TerminalCommandMarkConfidence, TerminalCommandMarkDetectionSource, TerminalCommandMarkEvent,
+    TerminalCwdIntegrationLaunchState, TerminalDrainBudget, TerminalDrainReport,
+    TerminalEditorApplication, TerminalEditorClipboardOperation, TerminalEditorIntegrationEvent,
+    TerminalEvent, TerminalLifecycle, TerminalOutputProcessor, TerminalProcessInfo,
+    TerminalProcessProbe, TerminalRow, TerminalSearchMatch, TerminalSession, TerminalSessionKind,
+    TerminalSnapshot, TmuxSeparator, TmuxSeparatorDirection, TrzszTransferDirection,
+    TrzszTransferSelection, serial_list_ports,
+};
+use oxide_trzsz::TrzszState;
+use parking_lot::Mutex;
+use zeroize::Zeroizing;
+
+use crate::background_cache::BackgroundImageRenderCache;
+use crate::command_facts::{
+    CommandFactLedger, SharedTerminalCommandHistory, TerminalAiCommandRecord,
+    TerminalAutosuggestCandidate, TerminalAutosuggestCommandRecord, TerminalAutosuggestInputState,
+    TerminalCommandFact,
+};
+use crate::privilege_prompt::{
+    PrivilegeInputObservation, PrivilegePromptMatch, PrivilegePromptSnapshot,
+    PrivilegePromptTracker,
+};
+use crate::session_log::TerminalSessionLog;
+use crate::terminal_ui::*;
+use crate::terminal_view::*;
+use oxide_terminal_recording::{
+    TerminalRecorder, TerminalRecordingOptions, TerminalRecordingState, TerminalRecordingStatus,
+    TerminalRecordingTheme,
+};
+
+mod image_cache;
+mod ime;
+mod interactions;
+mod paste;
+mod render;
+mod scrollbar;
+
+use crate::modem_worker::{
+    ModemPromptSelection, ModemWorkerEvent, ModemWorkerJob, ModemWorkerProgress,
+    format_modem_bytes, run_modem_worker_job,
+};
+use crate::trzsz_worker::{
+    TrzszPromptRequest, TrzszPromptSelection, TrzszWorkerEvent, TrzszWorkerJob,
+    run_trzsz_worker_job,
+};
+use image_cache::ImageRenderCache;
+pub(crate) use image_cache::TerminalRenderedImage;
+pub(crate) use ime::TerminalInputHandler;
+use scrollbar::{
+    HorizontalScrollbarDrag, HorizontalScrollbarGeometry, ScrollbarDrag, ScrollbarGeometry,
+};
+
+#[derive(Clone, Debug)]
+enum TmuxPromptKind {
+    RenameSession(u64),
+    RenameWindow(u64),
+    Command,
+}
+
+#[derive(Clone, Debug)]
+struct TmuxPromptState {
+    kind: TmuxPromptKind,
+    value: String,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TmuxSeparatorDrag {
+    separator: TmuxSeparator,
+    last_point: TerminalPoint,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TerminalShortcut {
+    Copy,
+    Paste,
+    Terminate,
+    Kill,
+    WordBackward,
+    WordForward,
+    PageUp,
+    PageDown,
+    LineUp,
+    LineDown,
+    Top,
+    Bottom,
+}
+
+pub struct TerminalKeybindings {
+    pub bindings: Vec<(gpui::KeyBinding, TerminalShortcut)>,
+    pub normalize: fn(&gpui::Keystroke) -> Option<gpui::Keystroke>,
+}
+impl gpui::Global for TerminalKeybindings {}
+impl TerminalKeybindings {
+    pub fn resolve(&self, key: &gpui::Keystroke) -> Option<TerminalShortcut> {
+        let key = (self.normalize)(key)?;
+        self.bindings
+            .iter()
+            .find(|(binding, _)| {
+                binding
+                    .keystrokes()
+                    .first()
+                    .is_some_and(|binding| key.should_match(binding))
+            })
+            .map(|(_, action)| *action)
+    }
+}
+
+pub type SharedTerminalSession = Arc<Mutex<TerminalSession>>;
+pub type TerminalInputInterceptor =
+    Arc<dyn Fn(&[u8]) -> TerminalInputInterceptorResult + Send + Sync>;
+pub type TerminalInputBroadcaster = Rc<dyn Fn(TerminalBroadcastInputKind, &[u8], &mut App)>;
+const PRIVILEGE_PROMPT_DEBUG_ENV: &str = "oxide_PRIVILEGE_DEBUG";
+const TERMINAL_ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
+const SMOOTH_SCROLL_ANIMATION_DURATION: Duration = Duration::from_millis(125);
+const DRAIN_BOOST_POLL_INTERVAL: Duration = Duration::from_millis(8);
+const SSH_DRAIN_BOOST_POLL_INTERVAL: Duration = Duration::from_millis(1);
+const MAX_UI_TERMINAL_DRAIN_DURATION: Duration = Duration::from_millis(2);
+const RECENT_TERMINAL_ACTIVITY_WINDOW: Duration = Duration::from_millis(600);
+const TERMINAL_PERFORMANCE_SAMPLE_CAPACITY: usize = 256;
+const RECENT_TERMINAL_INPUT_WINDOW: Duration = Duration::from_millis(220);
+const ACTIVE_PROCESS_INFO_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
+const EDITOR_INTEGRATION_HEARTBEAT_TIMEOUT: Duration = Duration::from_millis(2500);
+const EDITOR_CLIPBOARD_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+const TERMINAL_SEARCH_DEBOUNCE: Duration = Duration::from_millis(24);
+const BACKGROUND_IMAGE_COMPLETION_POLL_INTERVAL: Duration = Duration::from_millis(32);
+const TERMINAL_AUTOSUGGEST_MAX_CANDIDATES: usize = 8;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TerminalPaneEvent {
+    InputActivity,
+    Exited {
+        exit_code: Option<i32>,
+    },
+    // Output contents stay pane-owned; consumers only learn that the visible buffer changed.
+    OutputActivity,
+    // CWD payloads stay pane-owned; Workspace only recomputes the active metadata key.
+    CurrentDirectoryChanged,
+    // Recording contents stay pane-owned; consumers only reschedule visible elapsed chrome.
+    RecordingStatusChanged,
+    // Session log contents and paths stay pane-owned; consumers only refresh log controls.
+    SessionLogStatusChanged,
+    // Prompt text and credentials stay pane-owned; consumers only recompute the active hint.
+    PrivilegePromptStateChanged,
+    // The event carries intent only; Workspace resolves any credential in the active scope.
+    PrivilegePromptSubmitRequested,
+    // The requested action remains pane-owned until the active Workspace consumes it.
+    ContextActionRequested,
+    // Match payloads remain pane-owned; Workspace drains them using the source pane identity.
+    TriggerMatchesAvailable,
+    // Search completion is asynchronous; Workspace reads the latest pane-owned status.
+    SearchStatusChanged,
+    // Persistence stays workspace-owned because panes do not own saved connection profiles.
+    SerialLineEndingsChanged {
+        input: Option<SerialLineEnding>,
+        output: Option<SerialLineEnding>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TerminalBroadcastInputKind {
+    Protocol,
+    Text,
+    Paste,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TerminalWorkingDirectorySource {
+    ShellIntegration,
+    SessionDefault,
+    VisibleCommand,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TerminalCwdShellIntegrationStatus {
+    NotAttempted,
+    Installing,
+    Active,
+    Failed,
+    Disabled,
+}
+
+#[derive(Clone, Copy)]
+struct ActiveTerminalEditorIntegration {
+    state: TerminalEditorIntegrationEvent,
+    last_seen: Instant,
+}
+
+#[derive(Clone, Copy)]
+struct PendingTerminalEditorClipboard {
+    application: TerminalEditorApplication,
+    operation: TerminalEditorClipboardOperation,
+    requested_at: Instant,
+}
+
+fn editor_integration_is_usable(
+    free_type_mode: bool,
+    terminal_mode: TermMode,
+    integration: TerminalEditorIntegrationEvent,
+    heartbeat_age: Duration,
+    foreground_command: Option<&str>,
+) -> bool {
+    free_type_mode
+        && terminal_mode.contains(TermMode::ALT_SCREEN)
+        && integration.active
+        && heartbeat_age <= EDITOR_INTEGRATION_HEARTBEAT_TIMEOUT
+        && foreground_command
+            .is_none_or(|command| integration.application.matches_process_command(command))
+}
+
+fn initial_cwd_shell_integration_status(
+    enabled: bool,
+    session_kind: TerminalSessionKind,
+    launch_state: TerminalCwdIntegrationLaunchState,
+) -> TerminalCwdShellIntegrationStatus {
+    if !enabled {
+        return TerminalCwdShellIntegrationStatus::Disabled;
+    }
+    if session_kind != TerminalSessionKind::LocalPty {
+        return TerminalCwdShellIntegrationStatus::NotAttempted;
+    }
+    match launch_state {
+        TerminalCwdIntegrationLaunchState::Prepared => {
+            TerminalCwdShellIntegrationStatus::Installing
+        }
+        TerminalCwdIntegrationLaunchState::Unavailable => TerminalCwdShellIntegrationStatus::Failed,
+        TerminalCwdIntegrationLaunchState::NotRequested => {
+            TerminalCwdShellIntegrationStatus::NotAttempted
+        }
+    }
+}
+
+fn log_privilege_prompt_terminal_pane(args: std::fmt::Arguments<'_>) {
+    if env::var_os(PRIVILEGE_PROMPT_DEBUG_ENV).is_some() {
+        eprintln!("[oxide:privilege] {args}");
+    }
+}
+
+fn privilege_input_observation_name(observation: PrivilegeInputObservation) -> &'static str {
+    match observation {
+        PrivilegeInputObservation::Normal => "normal",
+        PrivilegeInputObservation::SecretEntry => "secret-entry",
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TerminalCursorAnchor {
+    pub x: f32,
+    pub y: f32,
+    pub line_height: f32,
+    pub char_width: f32,
+    pub container_width: f32,
+    pub container_height: f32,
+}
+
+pub enum TerminalInputInterceptorResult {
+    Continue(Vec<u8>),
+    Suppress,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TerminalSearchStatus {
+    pub query: Option<String>,
+    pub active_match: Option<usize>,
+    pub match_count: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TerminalSerialStatus {
+    pub config: SerialSessionConfig,
+    pub lifecycle: TerminalLifecycle,
+    pub control_state: SerialControlState,
+    pub runtime_options: SerialRuntimeOptions,
+    pub port_available: Option<bool>,
+    pub can_reconnect: bool,
+}
+
+/// A serial operation requested by another application-owned surface.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TerminalSerialAction {
+    RefreshPortPresence,
+    SendBreak,
+    SetDataTerminalReady(bool),
+    SetRequestToSend(bool),
+    SetLocalEcho(bool),
+    SetLineEnding(SerialLineEnding),
+    SetOutputLineEnding(SerialLineEnding),
+    SetDisplayMode(SerialDisplayMode),
+    SetSendMode(SerialSendMode),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Actions that must execute through the entity owning the live Telnet session.
+pub enum TerminalTelnetAction {
+    SendControl(oxide_terminal_core::TelnetControlCommand),
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct TerminalEventEffect {
+    needs_notify: bool,
+}
+
+impl TerminalEventEffect {
+    fn notify() -> Self {
+        Self { needs_notify: true }
+    }
+
+    fn combine(&mut self, effect: Self) {
+        self.needs_notify |= effect.needs_notify;
+    }
+}
+
+fn terminal_maintenance_interval(
+    startup_pending: bool,
+    drain_budget_exhausted: bool,
+    drain_boost_interval: Duration,
+    smooth_scroll_active: bool,
+    cursor_blink_remaining: Option<Duration>,
+    process_refresh_remaining: Option<Duration>,
+    pending_cwd_remaining: Option<Duration>,
+    editor_expiry_remaining: Option<Duration>,
+    pending_output_flush_delay: Option<Duration>,
+) -> Option<Duration> {
+    if drain_budget_exhausted {
+        return Some(drain_boost_interval);
+    }
+    [
+        startup_pending.then_some(TERMINAL_ANIMATION_INTERVAL),
+        smooth_scroll_active.then_some(TERMINAL_ANIMATION_INTERVAL),
+        cursor_blink_remaining,
+        process_refresh_remaining,
+        pending_cwd_remaining,
+        editor_expiry_remaining,
+        pending_output_flush_delay,
+    ]
+    .into_iter()
+    .flatten()
+    .min()
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TerminalSchedulerWake {
+    BackendActivity,
+    BackendClosed,
+    PaneActivity,
+    PaneClosed,
+    Maintenance,
+}
+
+fn terminal_output_coalescing_delay(
+    kind: TerminalSessionKind,
+    wake: TerminalSchedulerWake,
+    since_last_tick: Duration,
+) -> Duration {
+    if kind == TerminalSessionKind::Serial && wake == TerminalSchedulerWake::BackendActivity {
+        TERMINAL_ANIMATION_INTERVAL.saturating_sub(since_last_tick)
+    } else {
+        Duration::ZERO
+    }
+}
+
+fn viewport_needs_live_output_restore(
+    display_offset: usize,
+    smooth_scroll_offset_px: Pixels,
+    smooth_scroll_animation_active: bool,
+) -> bool {
+    display_offset > 0
+        || f32::from(smooth_scroll_offset_px).abs() > f32::EPSILON
+        || smooth_scroll_animation_active
+}
+
+fn populate_default_session_log_context(
+    context: &mut crate::session_log::TerminalSessionLogContext,
+    session_kind: TerminalSessionKind,
+) {
+    let protocol = match session_kind {
+        TerminalSessionKind::LocalPty => "local",
+        TerminalSessionKind::SshPty => "ssh",
+        TerminalSessionKind::Telnet => "telnet",
+        TerminalSessionKind::Mosh => "mosh",
+        TerminalSessionKind::Serial => "serial",
+    };
+    if context.protocol.is_empty() {
+        context.protocol = protocol.to_string();
+    }
+    if context.session.is_empty() {
+        context.session = protocol.to_string();
+    }
+    if context.host.is_empty() {
+        context.host = if session_kind == TerminalSessionKind::LocalPty {
+            "localhost".to_string()
+        } else {
+            "unknown".to_string()
+        };
+    }
+    if context.username.is_empty() {
+        // Environment-derived identity is metadata only and never includes authentication input.
+        context.username = if session_kind == TerminalSessionKind::LocalPty {
+            env::var("USER")
+                .or_else(|_| env::var("USERNAME"))
+                .unwrap_or_else(|_| "unknown".to_string())
+        } else {
+            "unknown".to_string()
+        };
+    }
+}
+
+fn terminal_latency_percentiles(samples: &VecDeque<u64>) -> (u64, u64, u64) {
+    if samples.is_empty() {
+        return (0, 0, 0);
+    }
+    let mut sorted = samples.iter().copied().collect::<Vec<_>>();
+    sorted.sort_unstable();
+    let percentile = |numerator: usize| {
+        let rank = (sorted.len() * numerator).div_ceil(100).max(1);
+        sorted[rank.saturating_sub(1).min(sorted.len() - 1)]
+    };
+    (percentile(50), percentile(95), percentile(99))
+}
+
+pub struct TerminalPane {
+    terminal: Arc<Mutex<TerminalSession>>,
+    // The backend kind is immutable for the pane's full lifetime.
+    session_kind: TerminalSessionKind,
+    serial_session_config: Option<SerialSessionConfig>,
+    serial_port_available: Option<bool>,
+    control_bar_expanded: bool,
+    focus_handle: FocusHandle,
+    preference_overrides: TerminalUiPreferenceOverrides,
+    // The pane owns only its live-session highlight choice. Saved connection
+    // defaults remain connection-store data and never affect node ownership.
+    session_highlight_override: Option<TerminalHighlightRuleSetOverride>,
+    // This optional override belongs only to the pane and never mutates the
+    // application setting or the lifetime of its backing terminal session.
+    session_semantic_coloring_override: Option<bool>,
+    // Command-derived query highlighting is session-only and never becomes a
+    // persisted keyword rule or shared backend state.
+    command_context_highlighting_enabled: bool,
+    session_selection_highlighting_override: Option<bool>,
+    selection_highlight_cache: Option<SelectionHighlightCache>,
+    preferences: TerminalUiPreferences,
+    settings: TerminalUiSettings,
+    theme: TerminalUiTheme,
+    snapshot: TerminalSnapshot,
+    render_mode: TermMode,
+    snapshot_dirty: bool,
+    snapshot_deferred_since: Option<Instant>,
+    snapshot_generation: u64,
+    next_snapshot_line_id: u64,
+    terminal_timestamps_enabled: bool,
+    // Visual-only metadata keyed by stable snapshot line identity; never write this
+    // into the PTY buffer, copied text, or search/indexed terminal content.
+    row_timestamps: Arc<TerminalRowTimestampStore>,
+    metrics: TerminalMetrics,
+    metrics_dirty: bool,
+    selection: Option<TerminalSelection>,
+    pending_paste: Option<Zeroizing<String>>,
+    pending_paste_prefix: Option<Zeroizing<Vec<u8>>>,
+    paste_editor: Option<paste::PasteEditor>,
+    // The pane observes only its session's capability and never stores the sandbox path.
+    kitty_file_transmission: Option<KittyFileTransmissionControl>,
+    kitty_file_transmission_confirm_open: bool,
+    // Control-mode prompts stay pane-owned so text never reaches the hosted shell.
+    tmux_prompt: Option<TmuxPromptState>,
+    dismissed_tmux_message_generation: u64,
+    context_menu: Option<TerminalContextMenu>,
+    context_menu_presence: oxide_ui::motion::ExitPresence,
+    context_action_requested: Option<TerminalContextAction>,
+    plugin_text_actions: Vec<TerminalPluginTextAction>,
+    pending_plugin_text: Option<(TerminalPluginTextAction, zeroize::Zeroizing<String>)>,
+    pending_trigger_matches: VecDeque<oxide_terminal_triggers::TriggerMatched>,
+    plugin_input_interceptor: Option<TerminalInputInterceptor>,
+    win32_pressed_keys: HashSet<String>,
+    input_broadcaster: Option<TerminalInputBroadcaster>,
+    #[cfg(test)]
+    test_accepts_input: bool,
+    input_locked: bool,
+    marked_text: Option<String>,
+    /// IME caret inside `marked_text`, in UTF-16 units; only read while composing.
+    marked_text_caret_utf16: Option<usize>,
+    privilege_prompt_inline_hint: Option<String>,
+    privilege_prompt_submit_requested: bool,
+    search_query: Option<String>,
+    terminal_content_revision: u64,
+    search_cache: Option<TerminalSearchCache>,
+    search_generation: Arc<AtomicU64>,
+    search_task: Option<gpui::Task<()>>,
+    selected_search_match: Option<usize>,
+    pending_search_reveal: bool,
+    hovered_link: Option<TerminalLinkRange>,
+    hovered_command_mark_id: Option<String>,
+    selecting: bool,
+    free_type_drag: Option<FreeTypeDragState>,
+    last_mouse_report_point: Option<TerminalPoint>,
+    title: SharedString,
+    cwd: Option<String>,
+    cwd_source: Option<TerminalWorkingDirectorySource>,
+    pending_cwd: Option<PendingTerminalCwd>,
+    cwd_host: Option<String>,
+    cwd_shell_integration_status: TerminalCwdShellIntegrationStatus,
+    shell_integration_status: ShellIntegrationStatus,
+    editor_integration: Option<ActiveTerminalEditorIntegration>,
+    pending_editor_clipboard: Option<PendingTerminalEditorClipboard>,
+    command_marks: Vec<TerminalCommandMark>,
+    command_marks_render_cache: Arc<[TerminalCommandMark]>,
+    command_marks_render_cache_dirty: bool,
+    selected_command_mark_id: Option<String>,
+    command_mark_id_aliases: HashMap<String, String>,
+    input_tracker: TerminalInputTracker,
+    command_history: SharedTerminalCommandHistory,
+    // Shell integration opens this boundary at a prompt and command submission closes it.
+    autosuggest_prompt_active: bool,
+    autosuggest_selected_index: Option<usize>,
+    autosuggest_scroll: gpui::ScrollHandle,
+    autosuggest_dismissed_query: Option<String>,
+    privilege_prompt_tracker: PrivilegePromptTracker,
+    privilege_prompt_expiry_generation: u64,
+    privilege_prompt_expiry_task: Option<gpui::Task<()>>,
+    command_fact_ledger: CommandFactLedger,
+    broadcast_parent_id: Option<String>,
+    last_broadcast_mark_id: Option<String>,
+    ai_command_prompt: Option<AiCommandPrompt>,
+    recorder: Option<TerminalRecorder>,
+    session_log: Option<TerminalSessionLog>,
+    last_session_log_path: Option<std::path::PathBuf>,
+    bell_flash: bool,
+    terminal_exited: bool,
+    scroll_input_remainder_px: Pixels,
+    smooth_scroll_offset_px: Pixels,
+    smooth_scroll_animation: Option<SmoothScrollAnimation>,
+    smooth_scroll_snapshot_cache: Option<SmoothScrollSnapshotCache>,
+    scrollbar_drag: Option<ScrollbarDrag>,
+    // Horizontal panning belongs to the visual timestamp overlay and never
+    // changes the backing PTY grid or remote window size.
+    horizontal_scroll_offset_px: Pixels,
+    horizontal_scrollbar_drag: Option<HorizontalScrollbarDrag>,
+    tmux_separator_drag: Option<TmuxSeparatorDrag>,
+    pending_tmux_mouse: std::collections::VecDeque<interactions::DeferredTmuxMouse>,
+    tmux_selection_pending: bool,
+    completed_tmux_selection: Option<bool>,
+    selection_autoscroll_position: Option<Point<Pixels>>,
+    selection_autoscroll_scheduled: bool,
+    copy_on_select_generation: u64,
+    focused: bool,
+    cursor_visible: bool,
+    cursor_blink_terminal_enabled: bool,
+    last_cursor_blink: Instant,
+    last_terminal_input: Instant,
+    last_terminal_activity: Instant,
+    last_drain_budget_exhausted: bool,
+    scheduler_wake_sender: Sender<()>,
+    process_info_refresh_in_flight: bool,
+    last_process_info_refresh_requested: Instant,
+    render_stats: TerminalRenderStats,
+    #[cfg(feature = "bench")]
+    benchmark_performance_metrics_enabled: bool,
+    #[cfg(feature = "bench")]
+    benchmark_backend_snapshot_micros: u64,
+    #[cfg(feature = "bench")]
+    benchmark_snapshot_state_micros: u64,
+    render_stats_window_start: Instant,
+    render_stats_window_writes: usize,
+    drain_duration_samples_micros: VecDeque<u64>,
+    input_latency_samples_micros: VecDeque<u64>,
+    last_latency_sampled_input: Option<Instant>,
+    image_cache: ImageRenderCache,
+    layout_cache: Arc<Mutex<TerminalLayoutCache>>,
+    background_image_cache: BackgroundImageRenderCache,
+    background_image_poll_active: bool,
+    bounds: Option<Bounds<Pixels>>,
+    viewport_scale_factor_bits: Option<u32>,
+    last_pty_resize: Option<(usize, usize, u16, u16)>,
+    pending_pty_resize: Option<(usize, usize, u16, u16)>,
+    pty_resize_generation: u64,
+    trzsz_state: Arc<TrzszState>,
+    trzsz_owner_id: String,
+    trzsz_audit_connection_lost: Arc<std::sync::atomic::AtomicBool>,
+    modem_audit_connection_lost: Arc<std::sync::atomic::AtomicBool>,
+    trzsz_audit_operation_id: Option<String>,
+    modem_audit_operation_id: Option<String>,
+    trzsz_prompt_active: bool,
+    trzsz_connection_lost: bool,
+    modem_prompt_active: bool,
+    modem_connection_lost: bool,
+    modem_progress: Option<ModemProgressState>,
+    modem_transfer: Option<oxide_modem_transfer::ModemTransfer>,
+    modem_worker: Option<std::thread::JoinHandle<()>>,
+    _subscriptions: Vec<Subscription>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TerminalContextMenu {
+    pub x: f32,
+    pub y: f32,
+    pub serial_transfer_menu: bool,
+    pub target: TerminalPoint,
+    pub has_selection: bool,
+    pub reference_line: usize,
+    pub command_mark_id: Option<String>,
+    pub has_previous_command: bool,
+    pub has_next_command: bool,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct FreeTypeDragState {
+    pub start_position: Point<Pixels>,
+    pub text: String,
+    pub source_selection: Option<TerminalSelection>,
+    pub action: FreeTypeDragAction,
+    pub active: bool,
+}
+
+/// Describes the remote editing intent chosen for a Free Type drag.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FreeTypeDragAction {
+    MoveSelection,
+    CopySelection,
+    ReplaceCommand,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TerminalContextAction {
+    PluginTextTool,
+    FillCommandBarFromSelection,
+    OpenSearch,
+    OpenSessionTriggers,
+}
+
+#[derive(Clone)]
+pub struct TerminalPluginTextAction {
+    pub plugin_id: String,
+    pub tab_id: String,
+    pub control_id: String,
+    pub label: String,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ModemProgressState {
+    pub file_name: Option<String>,
+    pub transferred_text: String,
+    pub total_text: Option<String>,
+    pub percent: Option<f32>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TerminalCommandNavigationDirection {
+    Previous,
+    Next,
+}
+
+#[derive(Clone, Debug)]
+struct PendingTerminalCwd {
+    path: String,
+    command: String,
+    created_at: Instant,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct TerminalRowTimestamp {
+    pub(crate) label: String,
+    signature: u64,
+    source_signature: u64,
+}
+
+/// Visual metadata follows the emulator row, independent of viewport coordinates.
+#[derive(Clone, Default)]
+pub(crate) struct TerminalRowTimestampStore {
+    pub(crate) entries: HashMap<u64, TerminalRowTimestamp>,
+}
+
+impl TerminalRowTimestampStore {
+    pub(crate) fn get(&self, identity: u64) -> Option<&TerminalRowTimestamp> {
+        self.entries.get(&identity)
+    }
+}
+
+#[derive(Clone)]
+struct TerminalSearchCache {
+    query: String,
+    content_revision: u64,
+    matches: Arc<[oxide_terminal_core::TerminalSearchMatch]>,
+}
+
+struct SelectionHighlightCache {
+    selection: TerminalSelection,
+    query: Option<Arc<Zeroizing<String>>>,
+}
+
+struct SmoothScrollSnapshotCache {
+    source_generation: u64,
+    display_offset: usize,
+    rows: usize,
+    snapshot: TerminalSnapshot,
+}
+
+#[derive(Clone, Copy)]
+struct SmoothScrollAnimation {
+    started_at: Instant,
+    start_offset_px: Pixels,
+}
+
+impl SmoothScrollAnimation {
+    fn offset_at(self, now: Instant) -> (Pixels, bool) {
+        let elapsed = now.saturating_duration_since(self.started_at);
+        if elapsed >= SMOOTH_SCROLL_ANIMATION_DURATION {
+            return (px(0.0), false);
+        }
+        let progress = elapsed.as_secs_f32() / SMOOTH_SCROLL_ANIMATION_DURATION.as_secs_f32();
+        let remaining = 1.0 - progress.clamp(0.0, 1.0);
+        // Ease out toward the target so delayed frames catch up without extending the animation.
+        let offset = f32::from(self.start_offset_px) * remaining * remaining * remaining;
+        (px(offset), true)
+    }
+}
+
+impl TerminalSearchCache {
+    fn is_current(&self, query: &str, content_revision: u64) -> bool {
+        self.query == query && self.content_revision == content_revision
+    }
+}
+
+const PTY_RESIZE_DEBOUNCE: Duration = Duration::from_millis(100);
+const PENDING_CWD_TIMEOUT: Duration = Duration::from_secs(8);
+const MAX_COMMAND_MARKS_PER_PANE: usize = 2000;
+const COMMAND_MARK_DEDUP_WINDOW_MS: u64 = 2000;
+const COMMAND_MARK_DEDUP_LINE_DISTANCE: usize = 2;
+static NEXT_TRZSZ_OWNER_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_COMMAND_MARK_ID: AtomicU64 = AtomicU64::new(1);
+
+fn command_mark_ui_available(enabled: bool, mode: TermMode) -> bool {
+    // Command marks describe normal-screen scrollback. A full-screen application or terminal
+    // mouse protocol owns the active grid, so stale shell ranges must not remain interactive.
+    enabled && !mode.contains(TermMode::ALT_SCREEN) && !mode.intersects(TermMode::MOUSE_MODE)
+}
+
+fn privilege_prompt_input_tracking_available(mode: TermMode) -> bool {
+    // Full-screen applications own input; their navigation is not shell history.
+    !mode.contains(TermMode::ALT_SCREEN)
+}
+
+fn shell_history_input_mode(mode: TermMode) -> bool {
+    !mode.intersects(TermMode::ALT_SCREEN | TermMode::MOUSE_MODE | TermMode::FOCUS_IN_OUT)
+}
+
+fn take_snapshot_line_id(next_line_id: &mut u64) -> u64 {
+    let line_id = (*next_line_id).max(1);
+    *next_line_id = line_id.wrapping_add(1).max(1);
+    line_id
+}
+
+fn assign_initial_snapshot_line_ids(snapshot: &mut TerminalSnapshot, next_line_id: &mut u64) {
+    for row in &mut snapshot.lines {
+        row.line_id = take_snapshot_line_id(next_line_id);
+    }
+}
+
+fn reconcile_snapshot_line_ids(
+    snapshot: &mut TerminalSnapshot,
+    previous: &TerminalSnapshot,
+    next_line_id: &mut u64,
+) {
+    if snapshot.lines.iter().all(|row| row.line_id != 0) {
+        return;
+    }
+
+    let previous_by_source = previous
+        .lines
+        .iter()
+        .filter(|row| row.source_id != 0 && row.line_id != 0)
+        .map(|row| (row.source_id, row))
+        .collect::<HashMap<_, _>>();
+    let previous_by_grid_line = previous
+        .lines
+        .iter()
+        .filter(|row| row.line_id != 0)
+        .map(|row| (row.absolute_line, row))
+        .collect::<HashMap<_, _>>();
+    let mut used_line_ids = snapshot
+        .lines
+        .iter()
+        .filter_map(|row| (row.line_id != 0).then_some(row.line_id))
+        .collect::<HashSet<_>>();
+
+    for row in &mut snapshot.lines {
+        if row.line_id != 0 {
+            continue;
+        }
+
+        // A backing row moving toward a lower grid line is retained output. Rows recycled into
+        // the bottom move in the opposite direction and therefore receive a new identity.
+        let moved_line_id = previous_by_source
+            .get(&row.source_id)
+            .filter(|previous_row| previous_row.absolute_line > row.absolute_line)
+            .map(|previous_row| previous_row.line_id);
+        let stationary_line_id = previous_by_grid_line
+            .get(&row.absolute_line)
+            .filter(|previous_row| previous_row.source_id == row.source_id)
+            .map(|previous_row| previous_row.line_id);
+        let inherited_line_id = moved_line_id
+            .or(stationary_line_id)
+            .filter(|line_id| !used_line_ids.contains(line_id));
+        row.line_id = inherited_line_id.unwrap_or_else(|| take_snapshot_line_id(next_line_id));
+        used_line_ids.insert(row.line_id);
+    }
+}
+
+include!("app_recording.rs");
+include!("app_session_log.rs");
+include!("app_command_marks.rs");
+include!("app_modem.rs");
+include!("app_trzsz.rs");
+
+impl TerminalPane {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Result<Self> {
+        Self::new_with_preferences(TerminalUiPreferences::default(), window, cx)
+    }
+
+    pub fn new_with_preferences(
+        preferences: TerminalUiPreferences,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<Self> {
+        let config = LocalPtyConfig {
+            current_directory_shell_integration: preferences.current_directory_awareness_enabled,
+            ..LocalPtyConfig::default()
+        };
+        let terminal = Arc::new(Mutex::new(
+            TerminalSession::local_with_config_graphics_and_encoding(
+                DEFAULT_COLS,
+                DEFAULT_ROWS,
+                config,
+                graphics_options_from_preferences(&preferences),
+                preferences.terminal_encoding,
+                preferences.scrollback_lines,
+            )?,
+        ));
+        Self::from_session(terminal, preferences, window, cx)
+    }
+
+    pub fn new_local_with_config_and_preferences(
+        config: LocalPtyConfig,
+        preferences: TerminalUiPreferences,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<Self> {
+        let terminal = Self::local_shared_session(config, &preferences)?;
+        Self::from_session(terminal, preferences, window, cx)
+    }
+
+    pub fn local_shared_session(
+        mut config: LocalPtyConfig,
+        preferences: &TerminalUiPreferences,
+    ) -> Result<SharedTerminalSession> {
+        config.current_directory_shell_integration =
+            preferences.current_directory_awareness_enabled;
+        Ok(Arc::new(Mutex::new(
+            TerminalSession::local_with_config_graphics_and_encoding(
+                DEFAULT_COLS,
+                DEFAULT_ROWS,
+                config,
+                graphics_options_from_preferences(preferences),
+                preferences.terminal_encoding,
+                preferences.scrollback_lines,
+            )?,
+        )))
+    }
+
+    pub fn new_ssh(
+        config: SshSessionConfig,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<Self> {
+        Self::new_ssh_with_preferences(config, TerminalUiPreferences::default(), window, cx)
+    }
+
+    pub fn new_ssh_with_preferences(
+        config: SshSessionConfig,
+        preferences: TerminalUiPreferences,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<Self> {
+        let terminal = Self::ssh_shared_session(config, &preferences);
+        Self::from_session(terminal, preferences, window, cx)
+    }
+
+    pub fn ssh_shared_session(
+        config: SshSessionConfig,
+        preferences: &TerminalUiPreferences,
+    ) -> SharedTerminalSession {
+        Arc::new(Mutex::new(TerminalSession::ssh_with_graphics_and_encoding(
+            config,
+            DEFAULT_COLS,
+            DEFAULT_ROWS,
+            graphics_options_from_preferences(preferences),
+            preferences.terminal_encoding,
+            preferences.scrollback_lines,
+        )))
+    }
+
+    pub fn new_telnet_with_preferences(
+        config: TelnetSessionConfig,
+        preferences: TerminalUiPreferences,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<Self> {
+        Self::new_telnet_with_login_preferences(config, None, None, preferences, window, cx)
+    }
+
+    pub fn new_telnet_with_login_preferences(
+        config: TelnetSessionConfig,
+        login: Option<oxide_terminal_core::TelnetLoginCredentials>,
+        upstream_proxy: Option<oxide_ssh::UpstreamProxyConfig>,
+        preferences: TerminalUiPreferences,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<Self> {
+        let terminal = Arc::new(Mutex::new(TerminalSession::telnet_with_login_and_encoding(
+            config,
+            login,
+            upstream_proxy,
+            DEFAULT_COLS,
+            DEFAULT_ROWS,
+            graphics_options_from_preferences(&preferences),
+            preferences.terminal_encoding,
+            preferences.scrollback_lines,
+        )));
+        Self::from_session(terminal, preferences, window, cx)
+    }
+
+    pub fn new_mosh_with_preferences(
+        config: oxide_terminal_core::MoshTerminalConfig,
+        mut preferences: TerminalUiPreferences,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<Self> {
+        // Mosh state is always UTF-8 regardless of the application default.
+        preferences.terminal_encoding = oxide_terminal_core::TerminalEncoding::Utf8;
+        let terminal = Arc::new(Mutex::new(TerminalSession::mosh_with_graphics(
+            config,
+            DEFAULT_COLS,
+            DEFAULT_ROWS,
+            graphics_options_from_preferences(&preferences),
+            preferences.scrollback_lines,
+        )));
+        Self::from_session(terminal, preferences, window, cx)
+    }
+
+    pub fn new_serial_with_preferences(
+        config: SerialSessionConfig,
+        preferences: TerminalUiPreferences,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<Self> {
+        let session_config = config.clone();
+        let terminal = Self::open_serial_session_with_preferences(config, &preferences)?;
+        let mut pane = Self::from_session(terminal, preferences, window, cx)?;
+        pane.serial_session_config = Some(session_config);
+        Ok(pane)
+    }
+
+    pub fn open_serial_session_with_preferences(
+        config: SerialSessionConfig,
+        preferences: &TerminalUiPreferences,
+    ) -> Result<SharedTerminalSession> {
+        // Opening the device is fallible and must happen before GPUI allocates
+        // the pane entity so callers can surface missing or busy ports.
+        Ok(Arc::new(Mutex::new(
+            TerminalSession::serial_with_graphics_and_encoding(
+                config,
+                DEFAULT_COLS,
+                DEFAULT_ROWS,
+                graphics_options_from_preferences(preferences),
+                preferences.terminal_encoding,
+                preferences.scrollback_lines,
+            )?,
+        )))
+    }
+
+    pub fn from_shared_session(
+        terminal: SharedTerminalSession,
+        preferences: TerminalUiPreferences,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<Self> {
+        Self::from_session(terminal, preferences, window, cx)
+    }
+
+    pub fn new_recording_playback(
+        cols: usize,
+        rows: usize,
+        mut preferences: TerminalUiPreferences,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<Self> {
+        // Playback is not a live terminal connection and must never create an automatic audit log.
+        preferences.session_log_automatic = false;
+        preferences.session_log_options = None;
+        let terminal = Arc::new(Mutex::new(TerminalSession::recording_playback(
+            cols,
+            rows,
+            graphics_options_from_preferences(&preferences),
+            preferences.scrollback_lines,
+        )));
+        let mut pane = Self::from_session(terminal, preferences, window, cx)?;
+        pane.command_fact_ledger.disable_audit();
+        Ok(pane)
+    }
+
+    fn from_session(
+        terminal: SharedTerminalSession,
+        mut preferences: TerminalUiPreferences,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<Self> {
+        let (mut snapshot, session_kind, cwd_integration_launch_state, render_mode) = {
+            let mut terminal = terminal.lock();
+            // The pane owns the visible theme; apply it before the first snapshot is taken.
+            terminal.set_palette(preferences.theme.palette());
+            (
+                terminal.snapshot().with_generation(1),
+                terminal.kind(),
+                terminal.cwd_integration_launch_state(),
+                terminal.mode(),
+            )
+        };
+
+        let kitty_file_transmission = terminal.lock().kitty_file_transmission_control();
+        let mut next_snapshot_line_id = 1;
+        assign_initial_snapshot_line_ids(&mut snapshot, &mut next_snapshot_line_id);
+        let cwd_shell_integration_status = initial_cwd_shell_integration_status(
+            preferences.current_directory_awareness_enabled,
+            session_kind,
+            cwd_integration_launch_state,
+        );
+        if let Some(options) = preferences.session_log_options.as_mut() {
+            populate_default_session_log_context(&mut options.context, session_kind);
+        }
+        let audit_context = terminal.lock().audit_context();
+        let focus_handle = cx.focus_handle();
+        let metrics = TerminalMetrics::measure_with_preferences(window, &preferences);
+        window.focus(&focus_handle, cx);
+        terminal.lock().set_focused(true)?;
+        let trzsz_owner_id = format!(
+            "gpui-terminal-{}",
+            NEXT_TRZSZ_OWNER_ID.fetch_add(1, Ordering::Relaxed)
+        );
+
+        let focus_in = cx.on_focus_in(&focus_handle, window, |this, _window, cx| {
+            this.handle_focus_change(true, cx);
+        });
+        let focus_out = cx.on_focus_out(&focus_handle, window, |this, _event, _window, cx| {
+            this.handle_focus_change(false, cx);
+        });
+
+        // GPUI unit tests use a deterministic single-thread scheduler, so real PTY threads must
+        // not wake its local executor directly. Production builds keep the activity-driven path.
+        let backend_activity_enabled = !cfg!(test);
+        let terminal_activity =
+            backend_activity_enabled.then(|| terminal.lock().activity_receiver());
+        let (scheduler_wake_sender, scheduler_wake_receiver) = async_channel::bounded(1);
+        // Backend output drives steady-state work. The startup deadline keeps GPUI layout and
+        // deferred PTY sizing moving before a remote session can emit its first activity edge.
+        cx.spawn(async move |weak, cx| {
+            let mut activity_receiver = terminal_activity;
+            let mut maintenance_interval = Some(TERMINAL_ANIMATION_INTERVAL);
+            let mut backend_activity_closed = false;
+            let mut last_tick = Instant::now();
+            loop {
+                let activity = Box::pin(async {
+                    match activity_receiver.as_ref() {
+                        Some(receiver) => receiver.notified().await,
+                        None => pending::<bool>().await,
+                    }
+                });
+                let pane_activity = Box::pin(scheduler_wake_receiver.recv());
+                let terminal_wake = Box::pin(async {
+                    match select(activity, pane_activity).await {
+                        Either::Left((true, _)) => TerminalSchedulerWake::BackendActivity,
+                        Either::Left((false, _)) => TerminalSchedulerWake::BackendClosed,
+                        Either::Right((Ok(()), _)) => TerminalSchedulerWake::PaneActivity,
+                        Either::Right((Err(_), _)) => TerminalSchedulerWake::PaneClosed,
+                    }
+                });
+                let maintenance = Box::pin(async {
+                    match maintenance_interval {
+                        Some(interval) => cx.background_executor().timer(interval).await,
+                        None => pending::<()>().await,
+                    }
+                });
+                let mut wake = match select(terminal_wake, maintenance).await {
+                    Either::Left((wake, _)) => wake,
+                    Either::Right(((), _)) => TerminalSchedulerWake::Maintenance,
+                };
+                let delay =
+                    terminal_output_coalescing_delay(session_kind, wake, last_tick.elapsed());
+                if !delay.is_zero() {
+                    // Keep serial bytes in the bounded backend queue until the next
+                    // frame. User input and pane closure interrupt this wait.
+                    wake = match select(
+                        Box::pin(scheduler_wake_receiver.recv()),
+                        Box::pin(cx.background_executor().timer(delay)),
+                    )
+                    .await
+                    {
+                        Either::Left((Ok(()), _)) => TerminalSchedulerWake::PaneActivity,
+                        Either::Left((Err(_), _)) => TerminalSchedulerWake::PaneClosed,
+                        Either::Right(((), _)) => wake,
+                    };
+                }
+                if wake == TerminalSchedulerWake::PaneClosed {
+                    break;
+                }
+                backend_activity_closed = match wake {
+                    TerminalSchedulerWake::BackendClosed => true,
+                    TerminalSchedulerWake::PaneActivity => false,
+                    _ => backend_activity_closed,
+                };
+
+                let Ok((next_maintenance_interval, next_activity_receiver)) =
+                    weak.update(cx, |this, cx| {
+                        this.tick(cx);
+                        let listen_for_backend = backend_activity_enabled
+                            && !backend_activity_closed
+                            && (!this.terminal_exited
+                                || this.session_kind == TerminalSessionKind::SshPty)
+                            && !this.last_drain_budget_exhausted;
+                        (
+                            this.next_maintenance_interval(),
+                            listen_for_backend.then(|| this.terminal.lock().activity_receiver()),
+                        )
+                    })
+                else {
+                    break;
+                };
+                last_tick = Instant::now();
+                maintenance_interval = next_maintenance_interval;
+                activity_receiver = next_activity_receiver;
+            }
+        })
+        .detach();
+
+        let session_log = if preferences.session_log_automatic {
+            preferences.session_log_options.clone().and_then(|options| {
+                match TerminalSessionLog::start(options) {
+                    Ok(log) => Some(log),
+                    Err(_) => {
+                        if let Some(sink) = &preferences.notice_sink
+                            && !preferences.session_log_labels.start_failed.is_empty()
+                        {
+                            sink(TerminalNotice {
+                                title: preferences.session_log_labels.start_failed.clone(),
+                                description: None,
+                                status_text: None,
+                                progress: None,
+                                variant: TerminalNoticeVariant::Error,
+                            });
+                        }
+                        None
+                    }
+                }
+            })
+        } else {
+            None
+        };
+
+        let mut pane = Self {
+            terminal,
+            session_kind,
+            serial_session_config: None,
+            serial_port_available: None,
+            control_bar_expanded: true,
+            focus_handle,
+            preference_overrides: TerminalUiPreferenceOverrides::default(),
+            session_highlight_override: None,
+            session_semantic_coloring_override: None,
+            command_context_highlighting_enabled: true,
+            session_selection_highlighting_override: None,
+            selection_highlight_cache: None,
+            preferences: preferences.clone(),
+            settings: TerminalUiSettings::from_preferences(&preferences),
+            theme: preferences.theme.clone(),
+            snapshot,
+            render_mode,
+            snapshot_dirty: false,
+            snapshot_deferred_since: None,
+            snapshot_generation: 1,
+            next_snapshot_line_id,
+            terminal_timestamps_enabled: false,
+            row_timestamps: Arc::new(TerminalRowTimestampStore::default()),
+            metrics,
+            metrics_dirty: false,
+            selection: None,
+            pending_paste: None,
+            pending_paste_prefix: None,
+            paste_editor: None,
+            kitty_file_transmission,
+            kitty_file_transmission_confirm_open: false,
+            tmux_prompt: None,
+            dismissed_tmux_message_generation: 0,
+            context_menu: None,
+            context_menu_presence: oxide_ui::motion::ExitPresence::visible(),
+            context_action_requested: None,
+            plugin_text_actions: Vec::new(),
+            pending_plugin_text: None,
+            pending_trigger_matches: VecDeque::new(),
+            plugin_input_interceptor: None,
+            win32_pressed_keys: HashSet::new(),
+            input_broadcaster: None,
+            #[cfg(test)]
+            test_accepts_input: false,
+            input_locked: false,
+            marked_text: None,
+            marked_text_caret_utf16: None,
+            privilege_prompt_inline_hint: None,
+            privilege_prompt_submit_requested: false,
+            search_query: None,
+            terminal_content_revision: 1,
+            search_cache: None,
+            search_generation: Arc::new(AtomicU64::new(0)),
+            search_task: None,
+            selected_search_match: None,
+            pending_search_reveal: false,
+            hovered_link: None,
+            hovered_command_mark_id: None,
+            selecting: false,
+            free_type_drag: None,
+            last_mouse_report_point: None,
+            title: SharedString::from("oxide"),
+            cwd: None,
+            cwd_source: None,
+            pending_cwd: None,
+            cwd_host: None,
+            cwd_shell_integration_status,
+            shell_integration_status: ShellIntegrationStatus {
+                detected: false,
+                state: ShellIntegrationLifecycleState::Idle,
+                integration_source: None,
+                last_seen_at: None,
+            },
+            editor_integration: None,
+            pending_editor_clipboard: None,
+            command_marks: Vec::new(),
+            command_marks_render_cache: Arc::from([]),
+            command_marks_render_cache_dirty: false,
+            selected_command_mark_id: None,
+            command_mark_id_aliases: HashMap::new(),
+            input_tracker: TerminalInputTracker::default(),
+            command_history: preferences.command_history.clone(),
+            autosuggest_prompt_active: false,
+            autosuggest_selected_index: None,
+            autosuggest_scroll: gpui::ScrollHandle::new(),
+            autosuggest_dismissed_query: None,
+            privilege_prompt_tracker: PrivilegePromptTracker::default(),
+            privilege_prompt_expiry_generation: 0,
+            privilege_prompt_expiry_task: None,
+            command_fact_ledger: CommandFactLedger::with_audit(audit_context),
+            broadcast_parent_id: None,
+            last_broadcast_mark_id: None,
+            ai_command_prompt: None,
+            recorder: None,
+            session_log,
+            last_session_log_path: None,
+            bell_flash: false,
+            terminal_exited: false,
+            scroll_input_remainder_px: px(0.0),
+            smooth_scroll_offset_px: px(0.0),
+            smooth_scroll_animation: None,
+            smooth_scroll_snapshot_cache: None,
+            scrollbar_drag: None,
+            horizontal_scroll_offset_px: px(0.0),
+            horizontal_scrollbar_drag: None,
+            tmux_separator_drag: None,
+            pending_tmux_mouse: Default::default(),
+            tmux_selection_pending: false,
+            completed_tmux_selection: None,
+            selection_autoscroll_position: None,
+            selection_autoscroll_scheduled: false,
+            copy_on_select_generation: 0,
+            focused: true,
+            cursor_visible: true,
+            cursor_blink_terminal_enabled: false,
+            last_cursor_blink: Instant::now(),
+            last_terminal_input: Instant::now(),
+            last_terminal_activity: Instant::now(),
+            last_drain_budget_exhausted: false,
+            scheduler_wake_sender,
+            process_info_refresh_in_flight: false,
+            last_process_info_refresh_requested: Instant::now()
+                .checked_sub(ACTIVE_PROCESS_INFO_REFRESH_INTERVAL)
+                .unwrap_or_else(Instant::now),
+            render_stats: TerminalRenderStats::default(),
+            #[cfg(feature = "bench")]
+            benchmark_performance_metrics_enabled: false,
+            #[cfg(feature = "bench")]
+            benchmark_backend_snapshot_micros: 0,
+            #[cfg(feature = "bench")]
+            benchmark_snapshot_state_micros: 0,
+            render_stats_window_start: Instant::now(),
+            render_stats_window_writes: 0,
+            drain_duration_samples_micros: VecDeque::with_capacity(
+                TERMINAL_PERFORMANCE_SAMPLE_CAPACITY,
+            ),
+            input_latency_samples_micros: VecDeque::with_capacity(
+                TERMINAL_PERFORMANCE_SAMPLE_CAPACITY,
+            ),
+            last_latency_sampled_input: None,
+            image_cache: {
+                let mut cache = ImageRenderCache::default();
+                cache.set_byte_limit(preferences.render_policy.image_cache_bytes);
+                cache
+            },
+            layout_cache: Arc::new(Mutex::new(TerminalLayoutCache::default())),
+            background_image_cache: {
+                let mut cache = BackgroundImageRenderCache::default();
+                cache.set_byte_limit(preferences.render_policy.image_cache_bytes);
+                cache
+            },
+            background_image_poll_active: false,
+            bounds: None,
+            viewport_scale_factor_bits: None,
+            last_pty_resize: None,
+            pending_pty_resize: None,
+            pty_resize_generation: 0,
+            trzsz_state: TrzszState::new(),
+            trzsz_owner_id,
+            trzsz_audit_connection_lost: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            modem_audit_connection_lost: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            trzsz_audit_operation_id: None,
+            modem_audit_operation_id: None,
+            trzsz_prompt_active: false,
+            trzsz_connection_lost: false,
+            modem_prompt_active: false,
+            modem_connection_lost: false,
+            modem_progress: None,
+            modem_transfer: None,
+            modem_worker: None,
+            _subscriptions: vec![focus_in, focus_out],
+        };
+        pane.sync_terminal_output_events_enabled();
+        Ok(pane)
+    }
+
+    pub fn title(&self) -> SharedString {
+        self.title.clone()
+    }
+
+    fn set_selection(&mut self, selection: Option<TerminalSelection>) {
+        let range = selection.map(|selection| {
+            let (start, end) = selection.normalized();
+            let is_block = selection.mode == TerminalSelectionMode::Block;
+            oxide_terminal_core::TerminalSelectionRange {
+                start_line: start.line,
+                end_line: end.line,
+                start_col: if is_block {
+                    start.col.min(end.col)
+                } else {
+                    start.col
+                },
+                end_col: if is_block {
+                    start.col.max(end.col)
+                } else {
+                    end.col
+                },
+                is_block,
+            }
+        });
+        self.terminal.lock().set_selection(range);
+        self.selection = selection;
+        self.selection_highlight_cache = None;
+    }
+
+    fn sync_selection_from_range(
+        &mut self,
+        range: Option<oxide_terminal_core::TerminalSelectionRange>,
+    ) {
+        let Some(previous) = self.selection else {
+            return;
+        };
+        self.selection = range.map(|range| {
+            let mut start = TerminalGridPoint {
+                line: range.start_line,
+                col: range.start_col,
+            };
+            let mut end = TerminalGridPoint {
+                line: range.end_line,
+                col: range.end_col,
+            };
+            let reversed = (previous.anchor.line, previous.anchor.col)
+                > (previous.head.line, previous.head.col);
+            if previous.mode == TerminalSelectionMode::Block
+                && ((previous.anchor.col > previous.head.col) != reversed)
+            {
+                std::mem::swap(&mut start.col, &mut end.col);
+            }
+            TerminalSelection {
+                anchor: if reversed { end } else { start },
+                head: if reversed { start } else { end },
+                mode: previous.mode,
+            }
+        });
+        if self.selection != Some(previous) {
+            self.selection_highlight_cache = None;
+            // A drag payload refers to its original range; do not apply it after
+            // output changes that range while the pointer gesture is in flight.
+            self.free_type_drag = None;
+        }
+        if self.selection.is_none() {
+            self.selecting = false;
+            self.selection_autoscroll_position = None;
+        }
+    }
+
+    fn stamp_snapshot(&mut self, snapshot: TerminalSnapshot) -> TerminalSnapshot {
+        let selection = {
+            let terminal = self.terminal.lock();
+            self.render_mode = terminal.mode();
+            self.selection.and_then(|_| terminal.selection())
+        };
+        self.stamp_snapshot_with_selection(snapshot, selection)
+    }
+
+    fn stamp_snapshot_with_selection(
+        &mut self,
+        mut snapshot: TerminalSnapshot,
+        selection: Option<oxide_terminal_core::TerminalSelectionRange>,
+    ) -> TerminalSnapshot {
+        self.snapshot_deferred_since = None;
+        self.sync_selection_from_range(selection);
+        let backend_reused_rows = snapshot.lines.iter().any(|row| row.line_id != 0);
+        reconcile_snapshot_line_ids(
+            &mut snapshot,
+            &self.snapshot,
+            &mut self.next_snapshot_line_id,
+        );
+        // Raw backend snapshots are stateless; the pane owns frame generation
+        // so future render caches can invalidate without changing backends.
+        if !backend_reused_rows {
+            // Incremental backends already carry shared cell buffers and line identities. Full
+            // snapshots still receive the equality fallback used by reset and resize paths.
+            snapshot.reuse_unchanged_rows_from(&self.snapshot);
+        }
+        self.record_snapshot_row_timestamps(&snapshot);
+        self.snapshot_generation = self.snapshot_generation.wrapping_add(1);
+        if self.snapshot_generation == 0 {
+            self.snapshot_generation = 1;
+        }
+        snapshot.with_generation(self.snapshot_generation)
+    }
+
+    fn record_snapshot_row_timestamps(&mut self, snapshot: &TerminalSnapshot) {
+        // Match iTerm-style semantics: a row label is the time that row was
+        // last modified, not the time it first became visible in the viewport.
+        let label = current_terminal_timestamp_label();
+        let store = Arc::make_mut(&mut self.row_timestamps);
+        record_timestampable_snapshot_rows(store, snapshot, &label);
+        self.trim_row_timestamps(snapshot);
+    }
+
+    fn trim_row_timestamps(&mut self, snapshot: &TerminalSnapshot) {
+        let store = Arc::make_mut(&mut self.row_timestamps);
+        if snapshot.lines.is_empty() {
+            store.entries.clear();
+            return;
+        }
+        let retained_rows = self
+            .preferences
+            .scrollback_lines
+            .saturating_add(snapshot.rows)
+            .saturating_add(1024)
+            .max(2048);
+        trim_row_timestamp_history(&mut store.entries, retained_rows);
+    }
+
+    pub fn terminal_timestamps_enabled(&self) -> bool {
+        self.terminal_timestamps_enabled
+    }
+
+    pub fn toggle_terminal_timestamps(&mut self, cx: &mut Context<Self>) {
+        self.terminal_timestamps_enabled = !self.terminal_timestamps_enabled;
+        self.horizontal_scroll_offset_px = px(0.0);
+        self.horizontal_scrollbar_drag = None;
+        // Timestamp visibility is paint-only. Do not restamp or resize here:
+        // both would make old scrollback look like it was modified at toggle time.
+        cx.notify();
+    }
+
+    pub fn shared_session(&self) -> SharedTerminalSession {
+        self.terminal.clone()
+    }
+
+    pub fn process_info(&self) -> TerminalProcessInfo {
+        self.terminal.lock().process_info()
+    }
+
+    fn active_editor_integration(&self, mode: TermMode) -> Option<TerminalEditorIntegrationEvent> {
+        let integration = self.editor_integration?;
+        let process_info = self.process_info();
+        editor_integration_is_usable(
+            self.settings.free_type_mode,
+            mode,
+            integration.state,
+            integration.last_seen.elapsed(),
+            process_info.command.as_deref(),
+        )
+        .then_some(integration.state)
+    }
+
+    pub fn process_info_probe(&self) -> Option<TerminalProcessProbe> {
+        self.terminal.lock().process_info_probe()
+    }
+
+    pub fn apply_process_info(&mut self, info: TerminalProcessInfo) -> bool {
+        self.terminal.lock().apply_process_info(info)
+    }
+
+    pub fn buffer_line_count(&self) -> usize {
+        self.terminal.lock().buffer_line_count()
+    }
+
+    pub fn shell_integration_status(&self) -> ShellIntegrationStatus {
+        self.shell_integration_status.clone()
+    }
+
+    pub fn current_working_directory(&self) -> Option<String> {
+        self.pending_cwd
+            .as_ref()
+            .map(|pending| pending.path.clone())
+            .or_else(|| self.cwd.clone())
+    }
+
+    pub fn current_working_directory_source(&self) -> Option<TerminalWorkingDirectorySource> {
+        self.pending_cwd
+            .as_ref()
+            .map(|_| TerminalWorkingDirectorySource::VisibleCommand)
+            .or(self.cwd_source)
+    }
+
+    pub fn current_working_directory_is_pending(&self) -> bool {
+        self.pending_cwd.is_some()
+    }
+
+    pub fn set_current_working_directory_from_terminal_action(
+        &mut self,
+        cwd: String,
+        cx: &mut Context<Self>,
+    ) {
+        let cwd = cwd.trim();
+        if cwd.is_empty() || cwd.chars().any(char::is_control) {
+            return;
+        }
+        // Workspace-owned directory actions only call this after selecting a
+        // path that was already resolved by the active pane's directory scope.
+        self.cwd = Some(cwd.to_string());
+        self.cwd_source = Some(TerminalWorkingDirectorySource::VisibleCommand);
+        self.pending_cwd = None;
+        cx.emit(TerminalPaneEvent::CurrentDirectoryChanged);
+        cx.notify();
+    }
+
+    pub fn set_current_working_directory_from_session_default(
+        &mut self,
+        cwd: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let cwd = cwd.trim();
+        if cwd.is_empty() || cwd.chars().any(char::is_control) || self.cwd.is_some() {
+            return;
+        }
+        // SSH does not expose the login shell cwd through the PTY protocol.
+        // Seed the standard login default without writing probe bytes into the
+        // shell; OSC 7 or a visible user `cd` will replace it when available.
+        self.cwd = Some(cwd.to_string());
+        self.cwd_source = Some(TerminalWorkingDirectorySource::SessionDefault);
+        cx.emit(TerminalPaneEvent::CurrentDirectoryChanged);
+        cx.notify();
+    }
+
+    pub fn set_pending_current_working_directory_from_terminal_action(
+        &mut self,
+        cwd: String,
+        command: String,
+        cx: &mut Context<Self>,
+    ) {
+        let cwd = cwd.trim();
+        let command = command.trim();
+        if cwd.is_empty()
+            || command.is_empty()
+            || cwd.chars().any(char::is_control)
+            || command.chars().any(char::is_control)
+        {
+            return;
+        }
+        // The UI may follow a user-selected, listed directory immediately,
+        // but the shell command mark remains the authority for success/failure.
+        self.pending_cwd = Some(PendingTerminalCwd {
+            path: cwd.to_string(),
+            command: command.to_string(),
+            created_at: Instant::now(),
+        });
+        self.wake_terminal_scheduler();
+        cx.emit(TerminalPaneEvent::CurrentDirectoryChanged);
+        cx.notify();
+    }
+
+    pub fn current_working_directory_host(&self) -> Option<String> {
+        self.cwd_host.clone()
+    }
+
+    pub fn cwd_shell_integration_status(&self) -> TerminalCwdShellIntegrationStatus {
+        if !self.settings.current_directory_awareness_enabled {
+            return TerminalCwdShellIntegrationStatus::Disabled;
+        }
+        self.cwd_shell_integration_status
+    }
+
+    pub fn can_switch_working_directory_from_chrome(&self) -> bool {
+        let mode = self.terminal.lock().mode();
+        !mode.contains(TermMode::ALT_SCREEN) && !mode.intersects(TermMode::MOUSE_MODE)
+    }
+
+    pub fn command_marks(&self) -> Vec<TerminalCommandMark> {
+        self.command_marks.clone()
+    }
+
+    pub fn command_facts(&self) -> Vec<TerminalCommandFact> {
+        self.command_fact_ledger.facts()
+    }
+
+    pub fn ai_command_records(&self) -> Vec<TerminalAiCommandRecord> {
+        self.command_fact_ledger.ai_records()
+    }
+
+    pub fn ai_command_status(&self, id: &str) -> Option<crate::TerminalCommandFactStatus> {
+        self.command_fact_ledger.ai_command_status(id)
+    }
+
+    pub fn autosuggest_command_records(&self) -> Vec<TerminalAutosuggestCommandRecord> {
+        self.command_fact_ledger.autosuggest_records()
+    }
+
+    pub fn autosuggest_input_state(&self) -> TerminalAutosuggestInputState {
+        self.input_tracker.state()
+    }
+
+    pub fn autosuggest_ghost_text(&self) -> Option<String> {
+        self.command_fact_ledger
+            .autosuggest_ghost_text(&self.input_tracker.state())
+    }
+
+    pub fn history_ghost_text_for_input(&self, input: &str) -> Option<String> {
+        self.command_history
+            .ghost_text(&TerminalAutosuggestInputState {
+                value: input.to_string(),
+                cursor_index: input.len(),
+                is_cursor_at_end: true,
+            })
+    }
+
+    pub fn history_command_records(&self) -> Vec<TerminalAutosuggestCommandRecord> {
+        self.command_history.records()
+    }
+
+    fn terminal_autosuggest_candidates(&self) -> Vec<TerminalAutosuggestCandidate> {
+        let cursor_row_is_active_input = self
+            .snapshot
+            .lines
+            .get(self.snapshot.cursor_row)
+            .is_some_and(|row| row.active_input);
+        if !self.preferences.autosuggest_enabled
+            || !self.autosuggest_prompt_active
+            || self.marked_text.is_some()
+            || self.tmux_prompt.is_some()
+            || self.pending_paste.is_some()
+            || self.context_menu.is_some()
+            || self.privilege_prompt_inline_hint.is_some()
+            || !cursor_row_is_active_input
+            || self.snapshot.display_offset != 0
+        {
+            return Vec::new();
+        }
+        // Most terminal frames have no active suggestion prompt. Defer both the terminal lock and
+        // input-state clone until the pane-local eligibility checks have passed.
+        let (mode, terminal_interactive) = {
+            let terminal = self.terminal.lock();
+            (terminal.mode(), terminal.is_interactive())
+        };
+        if !shell_history_input_mode(mode)
+            || !self.terminal_accepts_input_with_interactive_state(terminal_interactive)
+        {
+            return Vec::new();
+        }
+        let state = self.input_tracker.state();
+        if self.autosuggest_dismissed_query.as_deref() == Some(state.value.as_str()) {
+            return Vec::new();
+        }
+        self.command_history
+            .candidates(&state, TERMINAL_AUTOSUGGEST_MAX_CANDIDATES)
+    }
+
+    fn dismiss_terminal_autosuggest(&mut self, cx: &mut Context<Self>) {
+        self.autosuggest_dismissed_query = Some(self.input_tracker.state().value);
+        self.autosuggest_selected_index = None;
+        cx.notify();
+    }
+
+    fn fill_terminal_autosuggest_command(
+        &mut self,
+        command: &str,
+        append_enter: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(state) = self.input_tracker.tracked_state() else {
+            return false;
+        };
+        let mode = self.terminal.lock().mode();
+        let Some(bytes) =
+            interactions::terminal_autosuggest_edit_bytes(&state, command, append_enter, mode)
+        else {
+            return false;
+        };
+        self.autosuggest_selected_index = None;
+        self.autosuggest_dismissed_query = Some(command.to_string());
+        self.send_user_protocol_bytes(&bytes, cx);
+        true
+    }
+
+    fn remove_terminal_autosuggest_command(&mut self, command: &str, cx: &mut Context<Self>) {
+        self.command_history.remove(command);
+        self.command_fact_ledger.remove_autosuggest_command(command);
+        self.autosuggest_selected_index = None;
+        self.autosuggest_scroll.scroll_to_top_of_item(0);
+        cx.notify();
+    }
+
+    fn terminal_ghost_text(&self) -> Option<String> {
+        // Keep ordinary terminal suggestions in the pane-owned list instead of painting ghost text.
+        self.privilege_prompt_inline_hint.clone()
+    }
+
+    pub fn ai_waiting_for_secret(&self) -> bool {
+        self.privilege_prompt_tracker
+            .prompt_is_waiting_for_secret(Instant::now())
+    }
+
+    // A password answers the running command; it neither takes ownership nor belongs in broadcasts.
+    fn input_answers_privilege_prompt(&self, bytes: &[u8]) -> bool {
+        self.privilege_prompt_tracker
+            .input_answers_prompt(bytes, Instant::now())
+    }
+
+    pub fn privilege_prompt_snapshot(&self) -> Option<PrivilegePromptSnapshot> {
+        self.privilege_prompt_tracker.snapshot(Instant::now())
+    }
+
+    pub fn privilege_prompt_fallback_suppressed(&self) -> bool {
+        self.privilege_prompt_tracker
+            .suppresses_fallback_prompt_detection(Instant::now())
+    }
+
+    pub fn has_privilege_prompt_inline_hint(&self) -> bool {
+        self.privilege_prompt_inline_hint.is_some()
+    }
+
+    pub(crate) fn sync_terminal_output_events_enabled(&mut self) {
+        let recording_requires_output = self
+            .recorder
+            .as_ref()
+            .is_some_and(|recorder| recorder.status().state == TerminalRecordingState::Recording);
+        let session_log_requires_output = self.session_log.as_ref().is_some_and(|log| {
+            log.status().state == crate::session_log::TerminalSessionLogState::Logging
+        });
+        // Privilege prompts use compact semantic events at the session output
+        // boundary. Full decoded output is duplicated only for active file consumers.
+        self.terminal
+            .lock()
+            .set_output_events_enabled(recording_requires_output || session_log_requires_output);
+    }
+
+    fn finish_privilege_prompt_tracker_update(
+        &mut self,
+        previous_state_generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        if self.privilege_prompt_tracker.state_generation() == previous_state_generation {
+            return;
+        }
+        self.schedule_privilege_prompt_expiry(cx);
+        cx.emit(TerminalPaneEvent::PrivilegePromptStateChanged);
+    }
+
+    fn schedule_privilege_prompt_expiry(&mut self, cx: &mut Context<Self>) {
+        self.privilege_prompt_expiry_generation =
+            self.privilege_prompt_expiry_generation.wrapping_add(1);
+        self.privilege_prompt_expiry_task = None;
+        let Some(deadline) = self.privilege_prompt_tracker.next_expiry_deadline() else {
+            return;
+        };
+        let generation = self.privilege_prompt_expiry_generation;
+        let delay = deadline.saturating_duration_since(Instant::now());
+        self.privilege_prompt_expiry_task = Some(cx.spawn(async move |pane, cx| {
+            Timer::after(delay).await;
+            let _ = pane.update(cx, |pane, cx| {
+                if pane.privilege_prompt_expiry_generation != generation {
+                    return;
+                }
+                if !pane.privilege_prompt_tracker.expire_at(Instant::now()) {
+                    pane.schedule_privilege_prompt_expiry(cx);
+                    return;
+                }
+                // Expiry carries no prompt payload. Workspace reads only the
+                // active pane and clears any now-stale inline hint.
+                cx.emit(TerminalPaneEvent::PrivilegePromptStateChanged);
+                cx.notify();
+            });
+        }));
+    }
+
+    pub fn take_privilege_prompt_submit_request(&mut self) -> bool {
+        let requested = self.privilege_prompt_submit_requested;
+        self.privilege_prompt_submit_requested = false;
+        requested
+    }
+
+    pub fn take_context_action_request(&mut self) -> Option<TerminalContextAction> {
+        self.context_action_requested.take()
+    }
+
+    pub fn set_plugin_text_actions(&mut self, actions: Vec<TerminalPluginTextAction>) {
+        self.plugin_text_actions = actions;
+    }
+
+    pub fn take_plugin_text_request(
+        &mut self,
+    ) -> Option<(TerminalPluginTextAction, zeroize::Zeroizing<String>)> {
+        self.pending_plugin_text.take()
+    }
+
+    pub fn set_privilege_prompt_inline_hint(
+        &mut self,
+        hint: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.privilege_prompt_inline_hint == hint {
+            return false;
+        }
+        self.privilege_prompt_inline_hint = hint;
+        cx.notify();
+        true
+    }
+
+    fn clear_privilege_prompt_inline_hint(&mut self) -> bool {
+        self.privilege_prompt_inline_hint.take().is_some()
+    }
+
+    pub fn set_preferences(&mut self, preferences: TerminalUiPreferences, cx: &mut Context<Self>) {
+        let mut preferences = preferences;
+        self.preference_overrides.apply_to(&mut preferences);
+        if self.preferences.autosuggest_enabled != preferences.autosuggest_enabled {
+            self.autosuggest_selected_index = None;
+            self.autosuggest_dismissed_query = None;
+        }
+        if preferences.session_log_options.is_none() && self.session_log.is_some() {
+            // An explicit connection-level disable takes effect immediately for an active pane.
+            let _ = self.stop_session_log(cx);
+        }
+        if let Some(highlight_override) = &self.session_highlight_override {
+            preferences.highlight_rules = highlight_override.rules.clone();
+        }
+        if self.preferences.selection_highlighting != preferences.selection_highlighting {
+            self.selection_highlight_cache = None;
+        }
+        if self.session_semantic_coloring_override == Some(preferences.semantic_coloring) {
+            self.session_semantic_coloring_override = None;
+        }
+        if self.preferences.terminal_encoding != preferences.terminal_encoding {
+            self.terminal
+                .lock()
+                .set_encoding(preferences.terminal_encoding);
+        }
+        if self.preferences.trzsz_policy != preferences.trzsz_policy {
+            self.terminal
+                .lock()
+                .set_trzsz_policy(preferences.trzsz_policy.clone());
+        }
+        let palette = preferences.theme.palette();
+        if self.preferences.theme.palette() != palette {
+            self.terminal.lock().set_palette(palette);
+            // Rows resolved with the previous palette must be rebuilt even without new output.
+            self.snapshot_dirty = true;
+        }
+        let metrics_changed = self.preferences.font_family != preferences.font_family
+            || self.preferences.cjk_font_family != preferences.cjk_font_family
+            || self.preferences.font_ligatures != preferences.font_ligatures
+            || self.preferences.font_size.to_bits() != preferences.font_size.to_bits()
+            || self.preferences.font_weight.to_bits() != preferences.font_weight.to_bits()
+            || self.preferences.line_height.to_bits() != preferences.line_height.to_bits();
+        let next_settings = TerminalUiSettings::from_preferences(&preferences);
+        if !next_settings.command_marks_enabled {
+            // Hiding marks must not discard the completion facts or aliases of a running command.
+            self.command_marks_render_cache_dirty = true;
+            self.selected_command_mark_id = None;
+            self.hovered_command_mark_id = None;
+        }
+        if !next_settings.current_directory_awareness_enabled {
+            self.pending_cwd = None;
+            self.cwd_shell_integration_status = TerminalCwdShellIntegrationStatus::Disabled;
+        } else if !self.settings.current_directory_awareness_enabled {
+            self.cwd_shell_integration_status = TerminalCwdShellIntegrationStatus::NotAttempted;
+        }
+        if !next_settings.smooth_scroll {
+            self.clear_smooth_scroll_remainder();
+        }
+        self.settings = next_settings;
+        self.theme = preferences.theme.clone();
+        self.command_history = preferences.command_history.clone();
+        self.image_cache
+            .set_byte_limit(preferences.render_policy.image_cache_bytes);
+        self.background_image_cache
+            .set_byte_limit(preferences.render_policy.image_cache_bytes);
+        self.preferences = preferences;
+        self.refresh_paste_editor(cx);
+        // Font resolution is stable across output frames and changes only with typography
+        // preferences, so defer the next measurement until the pane is rendered again.
+        self.metrics_dirty |= metrics_changed;
+        self.last_pty_resize = None;
+        self.pending_pty_resize = None;
+        self.viewport_scale_factor_bits = None;
+        self.reset_cursor_blink();
+        self.wake_terminal_scheduler();
+        cx.notify();
+    }
+
+    pub fn set_appearance(
+        &mut self,
+        theme: TerminalUiTheme,
+        background: Option<TerminalBackgroundPreferences>,
+        transparent_background: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let palette = theme.palette();
+        if self.preferences.theme.palette() != palette {
+            self.terminal.lock().set_palette(palette);
+            self.snapshot_dirty = true;
+        }
+        self.theme = theme.clone();
+        self.preferences.theme = theme;
+        self.preferences.background = background;
+        self.preferences.transparent_background = transparent_background;
+        cx.notify();
+    }
+
+    pub fn with_preference_overrides(
+        mut self,
+        preference_overrides: TerminalUiPreferenceOverrides,
+    ) -> Self {
+        // Callers apply these overrides before constructing the backend. The
+        // pane retains them only to preserve host behavior on later refreshes.
+        self.preference_overrides = preference_overrides;
+        self
+    }
+
+    pub fn with_serial_session_config(mut self, config: SerialSessionConfig) -> Self {
+        // A pane built from a pre-opened session still owns the configuration
+        // required by serial status and device-presence controls.
+        self.serial_session_config = Some(config);
+        self
+    }
+
+    pub fn preference_overrides_snapshot(&self) -> TerminalUiPreferenceOverrides {
+        self.preference_overrides.clone()
+    }
+
+    pub fn session_highlight_rule_set_id(&self) -> Option<&str> {
+        self.session_highlight_override
+            .as_ref()
+            .map(|highlight_override| highlight_override.id.as_str())
+    }
+
+    pub fn semantic_coloring_enabled(&self) -> bool {
+        self.session_semantic_coloring_override
+            .unwrap_or(self.preferences.semantic_coloring)
+    }
+
+    pub fn session_semantic_coloring_overridden(&self) -> bool {
+        self.session_semantic_coloring_override.is_some()
+    }
+
+    pub fn set_session_semantic_coloring_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        let semantic_override = (enabled != self.preferences.semantic_coloring).then_some(enabled);
+        if self.session_semantic_coloring_override == semantic_override {
+            return;
+        }
+        self.session_semantic_coloring_override = semantic_override;
+        cx.notify();
+    }
+
+    pub fn command_context_highlighting_enabled(&self) -> bool {
+        self.command_context_highlighting_enabled
+    }
+
+    pub fn set_command_context_highlighting_enabled(
+        &mut self,
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.command_context_highlighting_enabled == enabled {
+            return;
+        }
+        self.command_context_highlighting_enabled = enabled;
+        cx.notify();
+    }
+
+    pub fn selection_highlighting_enabled(&self) -> bool {
+        self.session_selection_highlighting_override
+            .unwrap_or(self.preferences.selection_highlighting)
+    }
+
+    pub fn selection_highlighting_overridden(&self) -> bool {
+        self.session_selection_highlighting_override.is_some()
+    }
+
+    pub fn set_selection_highlighting_override(
+        &mut self,
+        enabled: Option<bool>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.session_selection_highlighting_override == enabled {
+            return;
+        }
+        self.session_selection_highlighting_override = enabled;
+        self.selection_highlight_cache = None;
+        cx.notify();
+    }
+
+    pub fn set_session_highlight_override(
+        &mut self,
+        highlight_override: Option<TerminalHighlightRuleSetOverride>,
+        application_preferences: TerminalUiPreferences,
+        cx: &mut Context<Self>,
+    ) {
+        // Session-only state is retained by this pane and is discarded with
+        // the pane without mutating the shared SSH node or saved connection.
+        self.session_highlight_override = highlight_override;
+        self.set_preferences(application_preferences, cx);
+    }
+
+    pub fn set_preference_overrides(
+        &mut self,
+        preference_overrides: TerminalUiPreferenceOverrides,
+        application_preferences: TerminalUiPreferences,
+        cx: &mut Context<Self>,
+    ) {
+        // A saved host edit changes only this session-owned protocol behavior;
+        // all unrelated visual preferences continue to come from the app.
+        self.preference_overrides = preference_overrides;
+        self.set_preferences(application_preferences, cx);
+    }
+
+    pub fn focus(&self, window: &mut Window, cx: &mut App) {
+        window.focus(&self.focus_handle, cx);
+    }
+
+    pub fn shutdown(&mut self) {
+        self.terminal.lock().shutdown();
+    }
+
+    pub fn lifecycle(&self) -> TerminalLifecycle {
+        self.terminal.lock().lifecycle()
+    }
+
+    pub fn session_kind(&self) -> TerminalSessionKind {
+        self.session_kind
+    }
+
+    pub fn audit_context(&self) -> Option<oxide_audit::AuditContext> {
+        self.terminal.lock().audit_context()
+    }
+
+    pub fn is_tmux_control_mode(&self) -> bool {
+        // Control mode changes the command target semantics while retaining the
+        // transport session kind, so callers need an explicit runtime signal.
+        self.terminal.lock().tmux_state().is_some()
+    }
+
+    pub fn is_serial_transport(&self) -> bool {
+        self.serial_session_config.is_some()
+    }
+
+    pub fn serial_status(&self) -> Option<TerminalSerialStatus> {
+        let config = self.serial_session_config.clone()?;
+        let terminal = self.terminal.lock();
+        Some(TerminalSerialStatus {
+            config,
+            lifecycle: terminal.lifecycle(),
+            control_state: terminal.serial_control_state().unwrap_or_default(),
+            runtime_options: terminal.serial_runtime_options().unwrap_or_default(),
+            port_available: self.serial_port_available,
+            // Reconnect is workspace-owned because it must allocate a fresh tab and pane.
+            can_reconnect: false,
+        })
+    }
+
+    pub fn apply_serial_action(
+        &mut self,
+        action: TerminalSerialAction,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if !self.is_serial_transport() {
+            return Err("The selected terminal is not a serial session.".to_string());
+        }
+        match action {
+            TerminalSerialAction::RefreshPortPresence => {
+                self.refresh_serial_port_presence(cx);
+            }
+            TerminalSerialAction::SendBreak => {
+                self.terminal
+                    .lock()
+                    .send_serial_break()
+                    .map_err(|error| error.to_string())?;
+                cx.notify();
+            }
+            TerminalSerialAction::SetDataTerminalReady(asserted) => {
+                self.terminal
+                    .lock()
+                    .set_serial_control_line(SerialControlLine::DataTerminalReady, asserted)
+                    .map_err(|error| error.to_string())?;
+                cx.notify();
+            }
+            TerminalSerialAction::SetRequestToSend(asserted) => {
+                self.terminal
+                    .lock()
+                    .set_serial_control_line(SerialControlLine::RequestToSend, asserted)
+                    .map_err(|error| error.to_string())?;
+                cx.notify();
+            }
+            TerminalSerialAction::SetLocalEcho(enabled) => {
+                let mut options = self
+                    .terminal
+                    .lock()
+                    .serial_runtime_options()
+                    .ok_or_else(|| "Serial runtime options are unavailable.".to_string())?;
+                options.local_echo = enabled;
+                self.update_serial_runtime_options(options, cx)?;
+            }
+            TerminalSerialAction::SetLineEnding(line_ending) => {
+                let mut options = self
+                    .terminal
+                    .lock()
+                    .serial_runtime_options()
+                    .ok_or_else(|| "Serial runtime options are unavailable.".to_string())?;
+                options.line_ending = line_ending;
+                self.update_serial_runtime_options(options, cx)?;
+            }
+            TerminalSerialAction::SetOutputLineEnding(line_ending) => {
+                let mut options = self
+                    .terminal
+                    .lock()
+                    .serial_runtime_options()
+                    .ok_or_else(|| "Serial runtime options are unavailable.".to_string())?;
+                options.output_line_ending = line_ending;
+                self.update_serial_runtime_options(options, cx)?;
+            }
+            TerminalSerialAction::SetDisplayMode(display_mode) => {
+                let mut options = self
+                    .terminal
+                    .lock()
+                    .serial_runtime_options()
+                    .ok_or_else(|| "Serial runtime options are unavailable.".to_string())?;
+                options.display_mode = display_mode;
+                self.update_serial_runtime_options(options, cx)?;
+            }
+            TerminalSerialAction::SetSendMode(send_mode) => {
+                let mut options = self
+                    .terminal
+                    .lock()
+                    .serial_runtime_options()
+                    .ok_or_else(|| "Serial runtime options are unavailable.".to_string())?;
+                options.send_mode = send_mode;
+                self.update_serial_runtime_options(options, cx)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn apply_telnet_action(
+        &mut self,
+        action: TerminalTelnetAction,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        // Reuse the pane-owned backend so AI control cannot create a parallel socket.
+        if self.session_kind() != TerminalSessionKind::Telnet {
+            return Err("The selected terminal is not a Telnet session.".to_string());
+        }
+        match action {
+            TerminalTelnetAction::SendControl(command) => {
+                self.terminal
+                    .lock()
+                    .send_telnet_control(command)
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        cx.notify();
+        Ok(())
+    }
+
+    fn refresh_serial_port_presence(&mut self, cx: &mut Context<Self>) {
+        let Some(config) = self.serial_session_config.as_ref() else {
+            return;
+        };
+        let expected = config.port_path.trim().to_ascii_lowercase();
+        self.serial_port_available = serial_list_ports().ok().map(|ports| {
+            ports
+                .iter()
+                .any(|port| port.port_path.trim().to_ascii_lowercase() == expected)
+        });
+        cx.notify();
+    }
+
+    fn set_serial_control_line(
+        &mut self,
+        line: SerialControlLine,
+        asserted: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self
+            .terminal
+            .lock()
+            .set_serial_control_line(line, asserted)
+            .is_ok()
+        {
+            cx.notify();
+        }
+    }
+
+    fn send_serial_break(&mut self, cx: &mut Context<Self>) {
+        if self.terminal.lock().send_serial_break().is_ok() {
+            cx.notify();
+        }
+    }
+
+    fn set_serial_runtime_options(
+        &mut self,
+        options: SerialRuntimeOptions,
+        cx: &mut Context<Self>,
+    ) {
+        let _ = self.update_serial_runtime_options(options, cx);
+    }
+
+    fn update_serial_runtime_options(
+        &mut self,
+        options: SerialRuntimeOptions,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let previous_options = {
+            let mut terminal = self.terminal.lock();
+            let previous_options = terminal.serial_runtime_options();
+            terminal
+                .set_serial_runtime_options(options)
+                .map_err(|error| error.to_string())?;
+            previous_options
+        };
+        let changed_input = previous_options
+            .filter(|previous| previous.line_ending != options.line_ending)
+            .map(|_| options.line_ending);
+        let changed_output = previous_options
+            .filter(|previous| previous.output_line_ending != options.output_line_ending)
+            .map(|_| options.output_line_ending);
+        if changed_input.is_some() || changed_output.is_some() {
+            cx.emit(TerminalPaneEvent::SerialLineEndingsChanged {
+                input: changed_input,
+                output: changed_output,
+            });
+        }
+        cx.notify();
+        Ok(())
+    }
+
+    fn cycle_serial_send_mode(&mut self, cx: &mut Context<Self>) {
+        let Some(mut options) = self.terminal.lock().serial_runtime_options() else {
+            return;
+        };
+        options.send_mode = match options.send_mode {
+            SerialSendMode::Text => SerialSendMode::Hex,
+            SerialSendMode::Hex => SerialSendMode::Text,
+        };
+        self.set_serial_runtime_options(options, cx);
+    }
+
+    fn cycle_serial_display_mode(&mut self, cx: &mut Context<Self>) {
+        let Some(mut options) = self.terminal.lock().serial_runtime_options() else {
+            return;
+        };
+        options.display_mode = match options.display_mode {
+            SerialDisplayMode::Text => SerialDisplayMode::Hex,
+            SerialDisplayMode::Hex => SerialDisplayMode::Mixed,
+            SerialDisplayMode::Mixed => SerialDisplayMode::Text,
+        };
+        self.set_serial_runtime_options(options, cx);
+    }
+
+    fn cycle_serial_line_ending(&mut self, cx: &mut Context<Self>) {
+        let Some(mut options) = self.terminal.lock().serial_runtime_options() else {
+            return;
+        };
+        options.line_ending = match options.line_ending {
+            SerialLineEnding::None => SerialLineEnding::Lf,
+            SerialLineEnding::Lf => SerialLineEnding::CrLf,
+            SerialLineEnding::CrLf => SerialLineEnding::Cr,
+            SerialLineEnding::Cr => SerialLineEnding::None,
+        };
+        self.set_serial_runtime_options(options, cx);
+    }
+
+    fn cycle_serial_output_line_ending(&mut self, cx: &mut Context<Self>) {
+        let Some(mut options) = self.terminal.lock().serial_runtime_options() else {
+            return;
+        };
+        options.output_line_ending = match options.output_line_ending {
+            SerialLineEnding::None => SerialLineEnding::Lf,
+            SerialLineEnding::Lf => SerialLineEnding::CrLf,
+            SerialLineEnding::CrLf => SerialLineEnding::Cr,
+            SerialLineEnding::Cr => SerialLineEnding::None,
+        };
+        self.set_serial_runtime_options(options, cx);
+    }
+
+    fn toggle_serial_local_echo(&mut self, cx: &mut Context<Self>) {
+        let Some(mut options) = self.terminal.lock().serial_runtime_options() else {
+            return;
+        };
+        options.local_echo = !options.local_echo;
+        self.set_serial_runtime_options(options, cx);
+    }
+
+    pub fn ssh_connection_handle(&self) -> Option<SshConnectionHandle> {
+        self.terminal.lock().ssh_connection_handle()
+    }
+
+    pub fn set_search_query(
+        &mut self,
+        query: Option<String>,
+        selected_match: Option<usize>,
+        cx: &mut Context<Self>,
+    ) -> TerminalSearchStatus {
+        self.search_query = query;
+        self.search_cache = None;
+        self.selected_search_match = selected_match.or(Some(0));
+        self.pending_search_reveal = true;
+        self.schedule_search_refresh(cx);
+        cx.notify();
+        self.search_status()
+    }
+
+    pub fn select_next_search_result(
+        &mut self,
+        forward: bool,
+        cx: &mut Context<Self>,
+    ) -> TerminalSearchStatus {
+        self.select_next_search_match(forward, cx);
+        self.search_status()
+    }
+
+    pub fn search_status(&self) -> TerminalSearchStatus {
+        let match_count = self.search_match_count();
+        TerminalSearchStatus {
+            query: self.search_query.clone(),
+            active_match: self
+                .selected_search_match
+                .filter(|index| *index < match_count),
+            match_count,
+        }
+    }
+
+    fn search_match_count(&self) -> usize {
+        self.search_cache
+            .as_ref()
+            .filter(|cache| {
+                self.search_query
+                    .as_deref()
+                    .is_some_and(|query| cache.is_current(query, self.terminal_content_revision))
+            })
+            .map(|cache| cache.matches.len())
+            .unwrap_or_default()
+    }
+
+    fn mark_terminal_content_changed(&mut self, cx: &mut Context<Self>) {
+        self.selection_highlight_cache = None;
+        self.terminal_content_revision = self.terminal_content_revision.wrapping_add(1).max(1);
+        self.search_cache = None;
+        self.schedule_search_refresh(cx);
+    }
+
+    fn schedule_search_refresh(&mut self, cx: &mut Context<Self>) {
+        let generation = self
+            .search_generation
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1);
+        self.search_task = None;
+        let Some(query) = self
+            .search_query
+            .as_deref()
+            .filter(|query| !query.is_empty())
+            .map(str::to_owned)
+        else {
+            self.search_cache = None;
+            self.selected_search_match = None;
+            self.pending_search_reveal = false;
+            return;
+        };
+        let Some(search_source) = self.terminal.lock().search_source() else {
+            return;
+        };
+        let cancellation = self.search_generation.clone();
+        let content_revision = self.terminal_content_revision;
+        self.search_task = Some(cx.spawn(async move |weak, cx| {
+            cx.background_executor()
+                .timer(TERMINAL_SEARCH_DEBOUNCE)
+                .await;
+            if cancellation.load(Ordering::Acquire) != generation {
+                return;
+            }
+            let worker_cancellation = cancellation.clone();
+            let worker_query = query.clone();
+            let search_task = cx.background_executor().spawn(async move {
+                let started = Instant::now();
+                let is_cancelled = || worker_cancellation.load(Ordering::Acquire) != generation;
+                let matches = search_source.search_matches(&worker_query, &is_cancelled);
+                (matches, started.elapsed())
+            });
+            let (matches, elapsed) = search_task.await;
+            let _ = weak.update(cx, |this, cx| {
+                if this.search_generation.load(Ordering::Acquire) != generation
+                    || this.terminal_content_revision != content_revision
+                    || this.search_query.as_deref() != Some(query.as_str())
+                {
+                    return;
+                }
+                let matches: Arc<[TerminalSearchMatch]> = matches.into();
+                this.search_cache = Some(TerminalSearchCache {
+                    query,
+                    content_revision,
+                    matches: matches.clone(),
+                });
+                this.render_stats.search_micros =
+                    elapsed.as_micros().min(u128::from(u64::MAX)) as u64;
+                this.selected_search_match = if matches.is_empty() {
+                    None
+                } else {
+                    this.selected_search_match
+                        .or(Some(0))
+                        .filter(|index| *index < matches.len())
+                };
+                // Refreshing highlights must not override a user's viewport. Only a new
+                // query requests a reveal, and manual scrolling cancels that request.
+                if std::mem::take(&mut this.pending_search_reveal) {
+                    this.scroll_to_selected_search_match(cx);
+                }
+                cx.emit(TerminalPaneEvent::SearchStatusChanged);
+                cx.notify();
+            });
+        }));
+    }
+
+    fn current_search_matches(&self) -> Arc<[TerminalSearchMatch]> {
+        self.search_cache
+            .as_ref()
+            .filter(|cache| {
+                self.search_query
+                    .as_deref()
+                    .is_some_and(|query| cache.is_current(query, self.terminal_content_revision))
+            })
+            .map(|cache| cache.matches.clone())
+            .unwrap_or_else(|| Arc::from([]))
+    }
+
+    pub fn copy_to_clipboard(&mut self, cx: &mut Context<Self>) {
+        self.copy_from_platform_shortcut(cx);
+    }
+
+    pub fn has_selection(&self) -> bool {
+        self.selection
+            .is_some_and(|selection| !selection.is_empty())
+    }
+
+    pub fn paste_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        let secret_entry = self.input_answers_privilege_prompt(text.as_bytes());
+        if self.paste_text_without_broadcast(text, cx) && !secret_entry {
+            self.broadcast_user_input(TerminalBroadcastInputKind::Paste, text.as_bytes(), cx);
+        }
+    }
+
+    fn paste_text_without_broadcast(&mut self, text: &str, cx: &mut Context<Self>) -> bool {
+        if !self.terminal_accepts_input() {
+            return false;
+        }
+        let Some(bytes) = self.apply_plugin_input_interceptor(text.as_bytes()) else {
+            return false;
+        };
+        let bytes = Zeroizing::new(bytes);
+        let mode = self.terminal.lock().mode();
+        self.delete_free_type_selection_if_active(mode, cx);
+        let now = Instant::now();
+        // Privilege input classification runs before command tracking so a password answer never
+        // becomes a command merely because it arrived through the clipboard path.
+        let privilege_observation = self.observe_privilege_input("paste", &bytes, now, cx);
+        let trackable_single_line_paste = std::str::from_utf8(&bytes)
+            .ok()
+            .filter(|text| !text.contains(['\r', '\n']));
+        // Preserve bracketed paste encoding when hook output is still text;
+        // binary hook output falls back to raw protocol bytes.
+        let result = match std::str::from_utf8(&bytes) {
+            Ok(text) => self.terminal.lock().paste_text(text),
+            Err(_) => self.terminal.lock().write_protocol_bytes(&bytes),
+        };
+        if result.is_ok() {
+            self.restore_live_output_after_user_input();
+            cx.emit(TerminalPaneEvent::InputActivity);
+            if privilege_observation == PrivilegeInputObservation::SecretEntry {
+                self.input_tracker.reset();
+            } else if let Some(text) = trackable_single_line_paste {
+                self.observe_autosuggest_input_bytes(text.as_bytes(), cx);
+            } else {
+                // Multi-line and binary pastes do not have one reliable shell submission boundary.
+                self.input_tracker.reset();
+            }
+            self.last_terminal_input = Instant::now();
+            self.reset_cursor_blink();
+            cx.notify();
+            return true;
+        }
+        false
+    }
+
+    pub fn send_command_line(&mut self, command: &str, cx: &mut Context<Self>) -> bool {
+        if command.trim().is_empty() {
+            return false;
+        }
+        let mut input = command.replace("\r\n", "\r").replace('\n', "\r");
+        input.push('\r');
+        self.observe_privilege_input("command-line", input.as_bytes(), Instant::now(), cx);
+        self.observe_autosuggest_input_bytes(input.as_bytes(), cx);
+        self.send_text(&input, cx)
+    }
+
+    pub fn send_command_line_with_mark(
+        &mut self,
+        command: &str,
+        source: TerminalCommandMarkDetectionSource,
+        parent_id: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let audit_source = match source {
+            TerminalCommandMarkDetectionSource::QuickCommand => {
+                oxide_audit::AuditSource::QuickCommand
+            }
+            TerminalCommandMarkDetectionSource::Broadcast => oxide_audit::AuditSource::Broadcast,
+            TerminalCommandMarkDetectionSource::CommandBar => oxide_audit::AuditSource::CommandBar,
+            TerminalCommandMarkDetectionSource::Ai => oxide_audit::AuditSource::Ai,
+            _ => oxide_audit::AuditSource::User,
+        };
+        let secret_reply = self.input_answers_privilege_prompt(command.as_bytes());
+        if !self.send_command_line(command, cx) {
+            self.command_fact_ledger
+                .set_audit_context(self.terminal.lock().audit_context());
+            self.command_fact_ledger
+                .record_dispatch(None, parent_id, audit_source, false);
+            return false;
+        }
+        if secret_reply {
+            return true;
+        }
+        let command_id = self.begin_command_mark_with_parent(command, source, parent_id, cx);
+        if command_id.is_none() {
+            let mut audit = self.terminal.lock().audit_context();
+            if let (Some(context), Some(parent_id)) = (&mut audit, parent_id) {
+                context.parent_id = Some(parent_id.to_string());
+            }
+            self.command_fact_ledger.set_audit_context(audit);
+        }
+        self.command_fact_ledger.record_dispatch(
+            command_id.as_deref(),
+            parent_id,
+            audit_source,
+            true,
+        );
+        true
+    }
+
+    pub fn send_command_sender_line(&mut self, line: &str, cx: &mut Context<Self>) -> bool {
+        let mut input = zeroize::Zeroizing::new(line.replace("\r\n", "\r").replace('\n', "\r"));
+        input.push('\r');
+        self.send_command_sender_text(&input, true, cx)
+    }
+
+    pub fn send_command_sender_text_chunk(&mut self, text: &str, cx: &mut Context<Self>) -> bool {
+        if text.is_empty() {
+            return false;
+        }
+        self.send_command_sender_text(text, false, cx)
+    }
+
+    pub fn send_trigger_text(
+        &mut self,
+        text: &str,
+        append_enter: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(input) = terminal_trigger_input(text, append_enter) else {
+            return false;
+        };
+        if !self.terminal_accepts_input() {
+            return false;
+        }
+
+        // Trigger captures bypass plugin interception, broadcast, recording, and command
+        // history so remote output cannot escape through an unrelated observer.
+        let write_result = {
+            let mut terminal = self.terminal.lock();
+            if self.input_locked || self.terminal_exited || !terminal.is_interactive() {
+                return false;
+            }
+            terminal.write_text(&input)
+        };
+        if write_result.is_err() {
+            return false;
+        }
+
+        self.last_terminal_input = Instant::now();
+        self.reset_cursor_blink();
+        self.restore_live_output_after_user_input();
+        cx.notify();
+        true
+    }
+
+    pub fn set_trigger_rules(
+        &mut self,
+        rules: Option<Arc<oxide_terminal_triggers::CompiledTriggerSet>>,
+    ) {
+        self.pending_trigger_matches.clear();
+        self.terminal.lock().set_trigger_rules(rules);
+    }
+
+    pub fn take_trigger_matches(&mut self) -> Vec<oxide_terminal_triggers::TriggerMatched> {
+        self.pending_trigger_matches.drain(..).collect()
+    }
+
+    pub fn send_command_sender_raw_bytes(&mut self, bytes: &[u8], cx: &mut Context<Self>) -> bool {
+        if bytes.is_empty() || !self.terminal_accepts_input() {
+            return false;
+        }
+        let Some(bytes) = self.apply_plugin_input_interceptor(bytes) else {
+            return false;
+        };
+        let bytes = zeroize::Zeroizing::new(bytes);
+        let secret_reply = self.input_answers_privilege_prompt(&bytes);
+        // Hex input is an opaque protocol payload. Recheck lifecycle after the
+        // plugin hook, then bypass text recording and command observation.
+        let write_result = {
+            let mut terminal = self.terminal.lock();
+            if self.input_locked || self.terminal_exited || !terminal.is_interactive() {
+                return false;
+            }
+            if terminal.kind() == TerminalSessionKind::Serial {
+                terminal.send_serial_bytes(&bytes)
+            } else {
+                terminal.write_protocol_bytes(&bytes)
+            }
+        };
+        if write_result.is_err() {
+            if !secret_reply {
+                self.audit_terminal_data_send("binary", bytes.len(), false);
+            }
+            return false;
+        }
+        if !secret_reply {
+            self.audit_terminal_data_send("binary", bytes.len(), true);
+        }
+        self.last_terminal_input = Instant::now();
+        self.reset_cursor_blink();
+        self.restore_live_output_after_user_input();
+        cx.notify();
+        true
+    }
+
+    fn send_command_sender_text(
+        &mut self,
+        text: &str,
+        whole_line: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if text.is_empty() || !self.terminal_accepts_input() {
+            return false;
+        }
+        let Some(bytes) = self.apply_plugin_input_interceptor(text.as_bytes()) else {
+            return false;
+        };
+        let bytes = zeroize::Zeroizing::new(bytes);
+        // The plugin can run arbitrary code, so the lifecycle check and write
+        // must share the same terminal-session lock after interception.
+        let write_result = {
+            let mut terminal = self.terminal.lock();
+            if self.input_locked || self.terminal_exited || !terminal.is_interactive() {
+                return false;
+            }
+            match std::str::from_utf8(&bytes) {
+                Ok(text) if terminal.kind() == TerminalSessionKind::Serial => {
+                    terminal.send_serial_text(text)
+                }
+                Ok(text) => terminal.write_text(text),
+                Err(_) if terminal.kind() == TerminalSessionKind::Serial => {
+                    terminal.send_serial_bytes(&bytes)
+                }
+                Err(_) => terminal.write_protocol_bytes(&bytes),
+            }
+        };
+        if write_result.is_err() {
+            if whole_line {
+                self.command_fact_ledger
+                    .set_audit_context(self.terminal.lock().audit_context());
+                self.command_fact_ledger.record_dispatch(
+                    None,
+                    None,
+                    oxide_audit::AuditSource::CommandBar,
+                    false,
+                );
+            } else {
+                self.audit_terminal_data_send("text_chunk", bytes.len(), false);
+            }
+            return false;
+        }
+
+        // Only a complete, non-secret line gets a tentative command mark;
+        // partial and opaque sends remain dispatch records until the shell reports more.
+        let privilege =
+            self.observe_privilege_input("command-sender-text", &bytes, Instant::now(), cx);
+        let at_shell_prompt = self.shell_integration_status.detected
+            && self.shell_integration_status.state == ShellIntegrationLifecycleState::Prompt;
+        if whole_line && privilege != PrivilegeInputObservation::SecretEntry && at_shell_prompt {
+            let command = std::str::from_utf8(&bytes)
+                .ok()
+                .map(|text| text.trim_end_matches(['\r', '\n']))
+                .filter(|text| !text.trim().is_empty());
+            if let Some(command) = command {
+                let command_id = self.begin_command_mark(
+                    command,
+                    TerminalCommandMarkDetectionSource::CommandBar,
+                    cx,
+                );
+                self.command_fact_ledger
+                    .set_audit_context(self.terminal.lock().audit_context());
+                self.command_fact_ledger.record_dispatch(
+                    command_id.as_deref(),
+                    None,
+                    oxide_audit::AuditSource::CommandBar,
+                    true,
+                );
+            } else {
+                self.audit_terminal_data_send("text_line", bytes.len(), true);
+            }
+        } else if privilege != PrivilegeInputObservation::SecretEntry {
+            self.audit_terminal_data_send(
+                if whole_line {
+                    "text_line"
+                } else {
+                    "text_chunk"
+                },
+                bytes.len(),
+                true,
+            );
+        }
+        self.last_terminal_input = Instant::now();
+        self.reset_cursor_blink();
+        self.restore_live_output_after_user_input();
+        cx.notify();
+        true
+    }
+
+    fn audit_terminal_data_send(&self, mode: &str, input_bytes: usize, sent: bool) {
+        let context = self.terminal.lock().audit_context();
+        oxide_audit::AuditOperation::in_request(
+            context.as_ref(),
+            oxide_audit::AuditCategory::Automation,
+            "terminal_data_send",
+            Some(&format!("mode={mode}; input_bytes={input_bytes}")),
+        )
+        .finish(
+            if sent {
+                oxide_audit::AuditOutcome::Sent
+            } else {
+                oxide_audit::AuditOutcome::Failed
+            },
+            oxide_audit::AuditEvidence::Dispatch,
+            None,
+            None,
+        );
+    }
+
+    pub fn send_internal_control_command_line(
+        &mut self,
+        command: &str,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if command.trim().is_empty() || !self.terminal_accepts_input() {
+            return false;
+        }
+
+        let mut input = command.replace("\r\n", "\r").replace('\n', "\r");
+        input.push('\r');
+        // Internal control commands are terminal-owned probes. They must not be
+        // learned as user history, autosuggest input, privilege commands, or AI
+        // context, even though the shell may still echo the bytes visibly.
+        if self.terminal.lock().write_text(&input).is_ok() {
+            self.last_terminal_input = Instant::now();
+            self.reset_cursor_blink();
+            cx.notify();
+            return true;
+        }
+        false
+    }
+
+    pub fn send_ai_input_bytes(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
+        if bytes.is_empty() || !self.terminal_accepts_input() {
+            return;
+        }
+        // AI input remains scoped to its selected pane even while the user has
+        // interactive terminal broadcasting enabled.
+        self.send_user_protocol_bytes_without_broadcast(bytes, cx);
+    }
+
+    pub fn send_privilege_secret_input_bytes(
+        &mut self,
+        bytes: &[u8],
+        confirmed_prompt: PrivilegePromptMatch,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if bytes.is_empty() || !self.terminal_accepts_input() {
+            return false;
+        }
+
+        // Privilege Prompt Helper writes an explicitly user-confirmed secret
+        // directly to the PTY. It must not pass through plugin interception,
+        // autosuggest/history observation, AI context, or terminal recording.
+        if self.terminal.lock().write_protocol_bytes(bytes).is_ok() {
+            let previous_state_generation = self.privilege_prompt_tracker.state_generation();
+            self.privilege_prompt_tracker
+                .mark_confirmed_secret_filled(confirmed_prompt, Instant::now());
+            self.finish_privilege_prompt_tracker_update(previous_state_generation, cx);
+            self.clear_privilege_prompt_inline_hint();
+            self.last_terminal_input = Instant::now();
+            self.reset_cursor_blink();
+            cx.notify();
+            return true;
+        }
+        false
+    }
+
+    pub fn ai_accepts_input(&self) -> bool {
+        // AI terminal tools mirror Tauri's readiness gate before reporting a
+        // successful send, instead of letting a closed/non-interactive pane
+        // silently drop input.
+        self.terminal_accepts_input()
+    }
+
+    pub fn set_plugin_input_interceptor(&mut self, interceptor: Option<TerminalInputInterceptor>) {
+        self.plugin_input_interceptor = interceptor;
+    }
+
+    pub fn set_input_broadcaster(&mut self, broadcaster: Option<TerminalInputBroadcaster>) {
+        self.input_broadcaster = broadcaster;
+    }
+
+    pub fn send_broadcast_input(
+        &mut self,
+        kind: TerminalBroadcastInputKind,
+        bytes: &[u8],
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.send_broadcast_input_with_parent(kind, bytes, None, cx)
+    }
+
+    pub fn send_broadcast_input_with_parent(
+        &mut self,
+        kind: TerminalBroadcastInputKind,
+        bytes: &[u8],
+        parent_id: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        // Mirrored input uses the target pane's normal interception and PTY
+        // path, but never re-enters the broadcaster and creates a loop.
+        self.broadcast_parent_id = Some(parent_id.unwrap_or_default().to_string());
+        self.last_broadcast_mark_id = None;
+        let sent = match kind {
+            TerminalBroadcastInputKind::Protocol => {
+                self.send_user_protocol_bytes_without_broadcast(bytes, cx)
+            }
+            TerminalBroadcastInputKind::Text => std::str::from_utf8(bytes)
+                .is_ok_and(|text| self.commit_text_without_broadcast(text, cx)),
+            TerminalBroadcastInputKind::Paste => std::str::from_utf8(bytes)
+                .is_ok_and(|text| self.paste_text_without_broadcast(text, cx)),
+        };
+        let command_id = self.last_broadcast_mark_id.take();
+        self.broadcast_parent_id = None;
+        if parent_id.is_some() {
+            self.command_fact_ledger
+                .set_audit_context(self.terminal.lock().audit_context());
+            self.command_fact_ledger.record_dispatch(
+                command_id.as_deref(),
+                parent_id,
+                oxide_audit::AuditSource::Broadcast,
+                sent,
+            );
+        }
+        sent
+    }
+
+    pub fn set_input_locked(&mut self, locked: bool, cx: &mut Context<Self>) {
+        if self.input_locked == locked {
+            return;
+        }
+        // Tauri TerminalView drops user input while a node is link-down or
+        // reconnecting. Keep that readiness gate before plugin hooks so plugins
+        // cannot accidentally send input into a standby SSH transport.
+        self.input_locked = locked;
+        cx.notify();
+    }
+
+    pub fn set_plugin_output_processor(&mut self, processor: Option<TerminalOutputProcessor>) {
+        self.terminal.lock().set_output_processor(processor);
+    }
+
+    pub fn clear_buffer(&mut self, cx: &mut Context<Self>) {
+        // Plugin clearBuffer mirrors Tauri's host-side buffer reset: it must not
+        // send Ctrl-L or other bytes to the running shell. The emulator and the
+        // command fact ledger are both owned by this pane, so keep the mutation
+        // on the GPUI entity thread.
+        let snapshot = {
+            let mut terminal = self.terminal.lock();
+            terminal.clear_buffer();
+            terminal.snapshot()
+        };
+        self.clear_smooth_scroll_remainder();
+        self.snapshot = self.stamp_snapshot(snapshot);
+        self.mark_terminal_content_changed(cx);
+        self.set_selection(None);
+        self.search_query = None;
+        self.selected_search_match = None;
+        self.reset_command_marks_for_terminal_reset();
+        cx.notify();
+    }
+
+    pub fn paste_from_clipboard(&mut self, cx: &mut Context<Self>) {
+        if let Some(prompt) = self.tmux_prompt.as_mut() {
+            if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                prompt
+                    .value
+                    .extend(text.chars().filter(|character| !character.is_control()));
+                cx.notify();
+            }
+            return;
+        }
+        self.paste_from_clipboard_after(&[], cx);
+    }
+
+    fn paste_from_clipboard_after(&mut self, prefix: &[u8], cx: &mut Context<Self>) {
+        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+            return;
+        };
+        if text.is_empty() {
+            return;
+        }
+        if !self.terminal_accepts_input() {
+            return;
+        }
+        if self.settings.paste_protection && paste_needs_confirmation(&text) {
+            self.pending_paste = Some(Zeroizing::new(text));
+            self.pending_paste_prefix =
+                (!prefix.is_empty()).then(|| Zeroizing::new(prefix.to_vec()));
+            cx.notify();
+            return;
+        }
+        if !prefix.is_empty() {
+            self.send_user_protocol_bytes(prefix, cx);
+        }
+        self.paste_text(&text, cx);
+    }
+
+    pub(crate) fn confirm_pending_paste(&mut self, cx: &mut Context<Self>) {
+        let Some(text) = self.pending_paste.take() else {
+            return;
+        };
+        if let Some(prefix) = self.pending_paste_prefix.take() {
+            self.send_user_protocol_bytes(&prefix, cx);
+        }
+        self.paste_text(&text, cx);
+        cx.notify();
+    }
+
+    pub(crate) fn cancel_pending_paste(&mut self, cx: &mut Context<Self>) {
+        self.pending_paste_prefix = None;
+        if self.pending_paste.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn confirm_kitty_file_transmission(&mut self, cx: &mut Context<Self>) {
+        self.kitty_file_transmission_confirm_open = false;
+        let labels = &self.preferences.kitty_file_transmission_labels;
+        let result = self
+            .kitty_file_transmission
+            .as_ref()
+            .ok_or_else(|| std::io::Error::other("Kitty file transmission is unavailable"))
+            .and_then(KittyFileTransmissionControl::authorize_for_session);
+        match result {
+            Ok(sandbox_path) => {
+                // Clipboard export is the explicit user-authorized capability boundary;
+                // the path is never retained by pane state, logs, or persistence.
+                cx.write_to_clipboard(ClipboardItem::new_string(
+                    sandbox_path.to_string_lossy().into_owned(),
+                ));
+                self.emit_kitty_file_transmission_notice(
+                    labels.allowed_title.clone(),
+                    labels.allowed_description.clone(),
+                    TerminalNoticeVariant::Success,
+                );
+            }
+            Err(_) => self.emit_kitty_file_transmission_notice(
+                labels.failed_title.clone(),
+                labels.failed_description.clone(),
+                TerminalNoticeVariant::Error,
+            ),
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn deny_kitty_file_transmission(&mut self, cx: &mut Context<Self>) {
+        self.kitty_file_transmission_confirm_open = false;
+        if let Some(control) = &self.kitty_file_transmission {
+            control.deny_for_session();
+        }
+        cx.notify();
+    }
+
+    fn emit_kitty_file_transmission_notice(
+        &self,
+        title: String,
+        description: String,
+        variant: TerminalNoticeVariant,
+    ) {
+        if let Some(sink) = &self.preferences.notice_sink {
+            sink(TerminalNotice {
+                title,
+                description: Some(description),
+                status_text: None,
+                progress: None,
+                variant,
+            });
+        }
+    }
+
+    fn apply_terminal_drain_activity(
+        &mut self,
+        report: &TerminalDrainReport,
+        now: Instant,
+        cx: &mut Context<Self>,
+    ) {
+        if report.changed {
+            self.last_terminal_activity = now;
+            self.snapshot_dirty = true;
+            self.mark_terminal_content_changed(cx);
+        }
+        // Focus, resize, and cursor changes invalidate rendering without receiving output.
+        if report.drained_bytes > 0 && !report.output_presented {
+            cx.emit(TerminalPaneEvent::OutputActivity);
+        }
+    }
+
+    fn tick(&mut self, cx: &mut Context<Self>) {
+        let now = Instant::now();
+        let budget = self.next_drain_budget();
+        let (report, events, mode) = {
+            let mut terminal = self.terminal.lock();
+            let report = terminal.read_pending_with_budget(budget);
+            let events = terminal.take_events();
+            let mode = terminal.mode();
+            (report, events, mode)
+        };
+        self.last_drain_budget_exhausted = report.budget_exhausted;
+        self.apply_terminal_drain_activity(&report, now, cx);
+        let render_stats_changed = self.update_render_stats(&report, now);
+
+        let mut event_effect = TerminalEventEffect::default();
+        for event in events {
+            event_effect.combine(self.handle_terminal_event(event, cx));
+        }
+
+        let cleared_command_mark_selection = self.clear_command_mark_selection_for_tui_mode(mode);
+        let cleared_privilege_prompt_hint = if mode.contains(TermMode::ALT_SCREEN) {
+            // Full-screen applications own the alternate screen and Enter.
+            // Clear terminal-local ghost text even when no tracker event fires
+            // during the mode transition.
+            self.clear_privilege_prompt_inline_hint()
+        } else {
+            false
+        };
+        let mut needs_notify = event_effect.needs_notify || report.changed;
+        if self
+            .kitty_file_transmission
+            .as_ref()
+            .is_some_and(KittyFileTransmissionControl::take_authorization_request)
+            && !self.kitty_file_transmission_confirm_open
+        {
+            self.kitty_file_transmission_confirm_open = true;
+            needs_notify = true;
+        }
+        if (self.preferences.show_performance_overlay && render_stats_changed)
+            || cleared_command_mark_selection
+            || cleared_privilege_prompt_hint
+        {
+            needs_notify = true;
+        }
+        if self.advance_smooth_scroll_animation(now) {
+            needs_notify = true;
+        }
+        if self.expire_pending_terminal_cwd(now) {
+            cx.emit(TerminalPaneEvent::CurrentDirectoryChanged);
+            needs_notify = true;
+        }
+        if needs_notify {
+            cx.notify();
+        }
+
+        self.update_cursor_blink(cx);
+        self.request_active_process_info_refresh(cx);
+        if self.expire_editor_integration(mode, now) {
+            cx.notify();
+        }
+    }
+
+    fn next_maintenance_interval(&self) -> Option<Duration> {
+        let now = Instant::now();
+        let cursor_blink_remaining = self.should_blink_cursor().then(|| {
+            CURSOR_BLINK_INTERVAL
+                .saturating_sub(now.saturating_duration_since(self.last_cursor_blink))
+        });
+        let (mode, ssh_still_connecting, process_refresh_supported, pending_output_flush_delay) = {
+            let terminal = self.terminal.lock();
+            (
+                terminal.mode(),
+                terminal.kind() == TerminalSessionKind::SshPty && !terminal.is_interactive(),
+                terminal.process_info_probe().is_some(),
+                terminal.pending_output_flush_delay(),
+            )
+        };
+        let needs_process_refresh = (self.settings.free_type_mode
+            && mode.contains(TermMode::ALT_SCREEN))
+            || (self.settings.current_directory_awareness_enabled
+                && self.cwd_shell_integration_status != TerminalCwdShellIntegrationStatus::Active);
+        let process_refresh_remaining = (self.focused
+            && needs_process_refresh
+            && process_refresh_supported
+            && !self.process_info_refresh_in_flight)
+            .then(|| {
+                ACTIVE_PROCESS_INFO_REFRESH_INTERVAL.saturating_sub(
+                    now.saturating_duration_since(self.last_process_info_refresh_requested),
+                )
+            });
+        let pending_cwd_remaining = self.pending_cwd.as_ref().map(|pending| {
+            PENDING_CWD_TIMEOUT.saturating_sub(now.saturating_duration_since(pending.created_at))
+        });
+        let editor_expiry_remaining = self.editor_integration.map(|integration| {
+            EDITOR_INTEGRATION_HEARTBEAT_TIMEOUT
+                .saturating_sub(now.saturating_duration_since(integration.last_seen))
+        });
+        terminal_maintenance_interval(
+            !self.terminal_exited && (self.last_pty_resize.is_none() || ssh_still_connecting),
+            self.last_drain_budget_exhausted,
+            if self.session_kind == TerminalSessionKind::SshPty {
+                SSH_DRAIN_BOOST_POLL_INTERVAL
+            } else {
+                DRAIN_BOOST_POLL_INTERVAL
+            },
+            self.smooth_scroll_animation.is_some(),
+            cursor_blink_remaining,
+            process_refresh_remaining,
+            pending_cwd_remaining,
+            editor_expiry_remaining,
+            pending_output_flush_delay,
+        )
+    }
+
+    pub(super) fn wake_terminal_scheduler(&self) {
+        // One queued edge is enough because every wake recomputes all maintenance deadlines.
+        let _ = self.scheduler_wake_sender.try_send(());
+    }
+
+    fn request_active_process_info_refresh(&mut self, cx: &mut Context<Self>) {
+        if !self.focused {
+            return;
+        }
+        let mode = self.terminal.lock().mode();
+        let needs_editor_process =
+            self.settings.free_type_mode && mode.contains(TermMode::ALT_SCREEN);
+        let needs_current_directory = self.settings.current_directory_awareness_enabled
+            && self.cwd_shell_integration_status != TerminalCwdShellIntegrationStatus::Active;
+        if (!needs_editor_process && !needs_current_directory)
+            || self.process_info_refresh_in_flight
+            || self.last_process_info_refresh_requested.elapsed()
+                < ACTIVE_PROCESS_INFO_REFRESH_INTERVAL
+        {
+            return;
+        }
+        let Some(probe) = self.process_info_probe() else {
+            return;
+        };
+
+        self.process_info_refresh_in_flight = true;
+        self.last_process_info_refresh_requested = Instant::now();
+        let probe_task = cx.background_executor().spawn(async move {
+            if needs_editor_process {
+                // Full-screen editor routing needs the current foreground
+                // executable; cwd-only probes deliberately preserve the
+                // previous command and cannot establish that identity.
+                probe.collect()
+            } else {
+                probe.collect_current_directory()
+            }
+        });
+        cx.spawn(async move |weak, cx| {
+            let info = probe_task.await;
+            let _ = weak.update(cx, |this, cx| {
+                this.process_info_refresh_in_flight = false;
+                if this.apply_process_info(info) {
+                    cx.notify();
+                }
+                this.wake_terminal_scheduler();
+            });
+        })
+        .detach();
+    }
+
+    fn expire_editor_integration(&mut self, mode: TermMode, now: Instant) -> bool {
+        let stale = self.editor_integration.is_some_and(|integration| {
+            !mode.contains(TermMode::ALT_SCREEN)
+                || now.saturating_duration_since(integration.last_seen)
+                    > EDITOR_INTEGRATION_HEARTBEAT_TIMEOUT
+        });
+        if !stale {
+            return false;
+        }
+        self.editor_integration = None;
+        self.pending_editor_clipboard = None;
+        true
+    }
+
+    fn expire_pending_terminal_cwd(&mut self, now: Instant) -> bool {
+        let Some(pending) = self.pending_cwd.as_ref() else {
+            return false;
+        };
+        if self.settings.current_directory_awareness_enabled
+            && now.duration_since(pending.created_at) < PENDING_CWD_TIMEOUT
+        {
+            return false;
+        }
+        self.pending_cwd = None;
+        true
+    }
+
+    fn advance_smooth_scroll_animation(&mut self, now: Instant) -> bool {
+        let Some(animation) = self.smooth_scroll_animation else {
+            return false;
+        };
+        let previous_offset = self.smooth_scroll_offset_px;
+        let (next_offset, active) = animation.offset_at(now);
+        self.smooth_scroll_offset_px = next_offset;
+        if !active {
+            self.smooth_scroll_animation = None;
+        }
+        self.smooth_scroll_offset_px != previous_offset
+    }
+
+    fn clear_command_mark_selection_for_tui_mode(&mut self, mode: TermMode) -> bool {
+        if self.selected_command_mark_id.is_none() && self.hovered_command_mark_id.is_none()
+            || command_mark_ui_available(self.settings.command_marks_enabled, mode)
+        {
+            return false;
+        }
+
+        // Command mark selection overlays belong to the normal scrollback UI.
+        // TUI applications own the active screen and mouse surface instead.
+        self.selected_command_mark_id = None;
+        self.hovered_command_mark_id = None;
+        true
+    }
+
+    fn smooth_scroll_display_offset(&self) -> f32 {
+        if !self.settings.smooth_scroll {
+            return self.snapshot.display_offset as f32;
+        }
+
+        let line_height = self.metrics.line_height_f32();
+        if line_height <= f32::EPSILON {
+            return self.snapshot.display_offset as f32;
+        }
+
+        // The terminal state still scrolls in whole rows. The paint layer keeps
+        // the remaining wheel distance in pixels, so the scrollbar must use the
+        // same fractional row offset to move with smooth-scrolling content.
+        let display_offset = self.snapshot.display_offset as f32
+            + f32::from(self.smooth_scroll_offset_px) / line_height;
+        display_offset.clamp(0.0, self.snapshot.scrollback_lines as f32)
+    }
+
+    fn next_drain_budget(&self) -> TerminalDrainBudget {
+        let drain = self.preferences.render_policy.drain;
+        if self.last_drain_budget_exhausted {
+            TerminalDrainBudget::new(drain.throughput_bytes, drain.max_events)
+        } else if self.last_terminal_input.elapsed() <= RECENT_TERMINAL_INPUT_WINDOW {
+            TerminalDrainBudget::new(drain.interactive_bytes, drain.max_events)
+        } else {
+            TerminalDrainBudget::new(drain.normal_bytes, drain.max_events)
+        }
+        .with_max_duration(MAX_UI_TERMINAL_DRAIN_DURATION)
+        .with_performance_metrics(self.preferences.show_performance_overlay)
+    }
+
+    fn current_render_tier(&self) -> TerminalRenderTier {
+        if self.last_drain_budget_exhausted {
+            TerminalRenderTier::Boost
+        } else if self.last_terminal_input.elapsed() <= RECENT_TERMINAL_INPUT_WINDOW
+            || self.last_terminal_activity.elapsed() <= RECENT_TERMINAL_ACTIVITY_WINDOW
+        {
+            TerminalRenderTier::Normal
+        } else {
+            TerminalRenderTier::Idle
+        }
+    }
+
+    fn update_render_stats(&mut self, report: &TerminalDrainReport, now: Instant) -> bool {
+        let drain_micros = report.drain_duration.as_micros().min(u128::from(u64::MAX)) as u64;
+        if self.preferences.show_performance_overlay
+            && (report.events_drained > 0 || report.changed || report.pending_bytes > 0)
+        {
+            if self.drain_duration_samples_micros.len() == TERMINAL_PERFORMANCE_SAMPLE_CAPACITY {
+                self.drain_duration_samples_micros.pop_front();
+            }
+            self.drain_duration_samples_micros.push_back(drain_micros);
+        }
+        let writes = report
+            .events_drained
+            .max(usize::from(report.changed && report.drained_bytes > 0));
+        self.render_stats_window_writes = self.render_stats_window_writes.saturating_add(writes);
+        let elapsed = now.saturating_duration_since(self.render_stats_window_start);
+        let tier = self.current_render_tier();
+        let published_writes_per_sec = if elapsed >= Duration::from_millis(500) {
+            let seconds = elapsed.as_secs_f64().max(0.001);
+            let writes_per_sec = (self.render_stats_window_writes as f64 / seconds).round() as u32;
+            self.render_stats_window_start = now;
+            self.render_stats_window_writes = 0;
+            Some(writes_per_sec)
+        } else {
+            None
+        };
+        if report.changed
+            && now.saturating_duration_since(self.last_terminal_input)
+                <= RECENT_TERMINAL_ACTIVITY_WINDOW
+            && self.last_latency_sampled_input != Some(self.last_terminal_input)
+        {
+            if self.input_latency_samples_micros.len() == TERMINAL_PERFORMANCE_SAMPLE_CAPACITY {
+                self.input_latency_samples_micros.pop_front();
+            }
+            self.input_latency_samples_micros.push_back(
+                now.saturating_duration_since(self.last_terminal_input)
+                    .as_micros()
+                    .min(u128::from(u64::MAX)) as u64,
+            );
+            self.last_latency_sampled_input = Some(self.last_terminal_input);
+        }
+        let drain_p95_micros = if self.preferences.show_performance_overlay {
+            terminal_latency_percentiles(&self.drain_duration_samples_micros).1
+        } else {
+            self.render_stats.drain_p95_micros
+        };
+        let latency_percentiles = terminal_latency_percentiles(&self.input_latency_samples_micros);
+        Self::apply_render_stats_sample(
+            &mut self.render_stats,
+            tier,
+            report,
+            drain_p95_micros,
+            latency_percentiles,
+            published_writes_per_sec,
+        )
+    }
+
+    fn apply_render_stats_sample(
+        stats: &mut TerminalRenderStats,
+        tier: TerminalRenderTier,
+        report: &TerminalDrainReport,
+        drain_p95_micros: u64,
+        latency_percentiles: (u64, u64, u64),
+        published_writes_per_sec: Option<u32>,
+    ) -> bool {
+        let previous_stats = *stats;
+        stats.tier = tier;
+        stats.pending_bytes = report.pending_bytes;
+        stats.drain_micros = report.drain_duration.as_micros().min(u128::from(u64::MAX)) as u64;
+        stats.drain_p95_micros = drain_p95_micros;
+        stats.drained_bytes = report.drained_bytes;
+        stats.max_data_chunk_bytes = report.max_data_chunk_bytes;
+        stats.output_processing_micros = report
+            .output_processing_duration
+            .as_micros()
+            .min(u128::from(u64::MAX)) as u64;
+        stats.terminal_lock_wait_micros = report
+            .terminal_lock_wait_duration
+            .as_micros()
+            .min(u128::from(u64::MAX)) as u64;
+        stats.input_latency_p50_micros = latency_percentiles.0;
+        stats.input_latency_p95_micros = latency_percentiles.1;
+        stats.input_latency_p99_micros = latency_percentiles.2;
+        if let Some(writes_per_sec) = published_writes_per_sec {
+            stats.writes_per_sec = writes_per_sec;
+        }
+        // The diagnostics overlay must never create a redraw loop merely to observe itself.
+        *stats != previous_stats
+    }
+
+    fn handle_terminal_event(
+        &mut self,
+        event: TerminalEvent,
+        cx: &mut Context<Self>,
+    ) -> TerminalEventEffect {
+        match event {
+            TerminalEvent::Output(bytes) => {
+                if let Some(recorder) = self.recorder.as_mut() {
+                    recorder.record_output(&bytes);
+                }
+                let session_log_failed = self
+                    .session_log
+                    .as_mut()
+                    .is_some_and(|log| log.write_output(bytes).is_err());
+                if session_log_failed {
+                    // Failure drops only this pane's file sink and leaves the terminal session alive.
+                    self.last_session_log_path =
+                        self.session_log.as_ref().and_then(|log| log.status().path);
+                    self.session_log.take();
+                    self.sync_terminal_output_events_enabled();
+                    cx.emit(TerminalPaneEvent::SessionLogStatusChanged);
+                    if let Some(sink) = &self.preferences.notice_sink
+                        && !self.preferences.session_log_labels.write_failed.is_empty()
+                    {
+                        sink(TerminalNotice {
+                            title: self.preferences.session_log_labels.write_failed.clone(),
+                            description: None,
+                            status_text: None,
+                            progress: None,
+                            variant: TerminalNoticeVariant::Error,
+                        });
+                    }
+                }
+                TerminalEventEffect::default()
+            }
+            TerminalEvent::TriggerMatched(matched) => {
+                const MAX_PENDING_TRIGGER_MATCHES: usize = 128;
+                let should_emit = self.pending_trigger_matches.is_empty();
+                if self.pending_trigger_matches.len() < MAX_PENDING_TRIGGER_MATCHES {
+                    self.pending_trigger_matches.push_back(matched);
+                    if should_emit {
+                        cx.emit(TerminalPaneEvent::TriggerMatchesAvailable);
+                    }
+                }
+                TerminalEventEffect::default()
+            }
+            TerminalEvent::PrivilegePrompt(event) => {
+                let previous_state_generation = self.privilege_prompt_tracker.state_generation();
+                self.privilege_prompt_tracker
+                    .observe_terminal_prompt_event(event, Instant::now());
+                self.finish_privilege_prompt_tracker_update(previous_state_generation, cx);
+                TerminalEventEffect::default()
+            }
+            TerminalEvent::TitleChanged(title) => {
+                self.title = title.into();
+                TerminalEventEffect::notify()
+            }
+            TerminalEvent::TitleReset => {
+                self.title = SharedString::from("oxide");
+                TerminalEventEffect::notify()
+            }
+            TerminalEvent::Bell => {
+                self.bell_flash = true;
+                cx.spawn(async move |weak, cx| {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(180))
+                        .await;
+                    let _ = weak.update(cx, |this, cx| {
+                        this.bell_flash = false;
+                        cx.notify();
+                    });
+                })
+                .detach();
+                TerminalEventEffect::notify()
+            }
+            TerminalEvent::Wakeup => TerminalEventEffect::notify(),
+            TerminalEvent::BlinkChanged(blinking) => {
+                self.cursor_blink_terminal_enabled = blinking;
+                self.reset_cursor_blink();
+                TerminalEventEffect::notify()
+            }
+            TerminalEvent::TmuxPaneSelected { selected } => {
+                self.finish_tmux_mouse_selection(selected, cx);
+                TerminalEventEffect::notify()
+            }
+            TerminalEvent::ProcessingFailed => {
+                self.cancel_pending_tmux_mouse();
+                self.notify_trzsz_connection_lost_if_active();
+                self.notify_modem_connection_lost_if_active();
+                self.terminal_exited = true;
+                self.emit_trzsz_notice(
+                    self.preferences.processing_failed_message.clone(),
+                    None,
+                    TerminalNoticeVariant::Error,
+                );
+                TerminalEventEffect::notify()
+            }
+            TerminalEvent::StartupFailed => {
+                self.command_fact_ledger.interrupt_audit_commands();
+                self.cancel_pending_tmux_mouse();
+                self.notify_trzsz_connection_lost_if_active();
+                self.notify_modem_connection_lost_if_active();
+                self.terminal_exited = true;
+                TerminalEventEffect::notify()
+            }
+            TerminalEvent::ChildExited(code) => {
+                self.command_fact_ledger.interrupt_audit_commands();
+                self.cancel_pending_tmux_mouse();
+                self.notify_trzsz_connection_lost_if_active();
+                self.notify_modem_connection_lost_if_active();
+                let should_emit_exit = !self.terminal_exited;
+                self.terminal_exited = true;
+                self.title = match code {
+                    Some(code) => format!("Process exited ({code})").into(),
+                    None => "Process exited".into(),
+                };
+                if should_emit_exit {
+                    cx.emit(TerminalPaneEvent::Exited { exit_code: code });
+                }
+                TerminalEventEffect::notify()
+            }
+            TerminalEvent::MagicDetected(kind) => {
+                let _ = kind;
+                TerminalEventEffect::default()
+            }
+            TerminalEvent::TrzszTransferPrompt {
+                direction,
+                selection,
+                remote_is_windows,
+            } => {
+                self.handle_trzsz_transfer_prompt(
+                    TrzszPromptRequest {
+                        direction,
+                        selection,
+                        remote_is_windows,
+                    },
+                    cx,
+                );
+                TerminalEventEffect::notify()
+            }
+            TerminalEvent::ModemTransferStartFailed => {
+                self.manual_modem_transfer_failed(cx);
+                TerminalEventEffect::notify()
+            }
+            TerminalEvent::ModemTransferPrompt { request, transfer } => {
+                self.handle_modem_transfer_prompt(
+                    request,
+                    transfer,
+                    oxide_audit::AuditSource::System,
+                    cx,
+                );
+                TerminalEventEffect::notify()
+            }
+            TerminalEvent::EncodingHint(hint) => {
+                let _ = hint;
+                TerminalEventEffect::default()
+            }
+            TerminalEvent::EditorIntegration(event) => {
+                if event.active {
+                    if self
+                        .editor_integration
+                        .is_some_and(|current| current.state.application != event.application)
+                    {
+                        self.pending_editor_clipboard = None;
+                    }
+                    self.editor_integration = Some(ActiveTerminalEditorIntegration {
+                        state: event,
+                        last_seen: Instant::now(),
+                    });
+                } else if self
+                    .editor_integration
+                    .is_some_and(|current| current.state.application == event.application)
+                {
+                    self.editor_integration = None;
+                    self.pending_editor_clipboard = None;
+                }
+                TerminalEventEffect::notify()
+            }
+            TerminalEvent::EditorClipboard(event) => {
+                let Some(request) = self.pending_editor_clipboard.take() else {
+                    return TerminalEventEffect::default();
+                };
+                let mode = self.terminal.lock().mode();
+                let request_matches = request.requested_at.elapsed()
+                    <= EDITOR_CLIPBOARD_REQUEST_TIMEOUT
+                    && request.application == event.application
+                    && request.operation == event.operation
+                    && self
+                        .active_editor_integration(mode)
+                        .is_some_and(|state| state.application == event.application);
+                if !request_matches {
+                    return TerminalEventEffect::default();
+                }
+
+                // The editor payload is accepted only after a matching user
+                // shortcut. GPUI owns the clipboard copy after this boundary;
+                // the zeroizing event buffer is dropped immediately afterward.
+                cx.write_to_clipboard(ClipboardItem::new_string(event.text.to_string()));
+                TerminalEventEffect::default()
+            }
+            TerminalEvent::ShellIntegration(event) => {
+                if event.kind == oxide_terminal_core::ShellIntegrationEventKind::PromptStart {
+                    self.input_tracker.reset();
+                    self.autosuggest_selected_index = None;
+                    self.autosuggest_dismissed_query = None;
+                }
+                self.autosuggest_prompt_active = matches!(
+                    event.kind,
+                    oxide_terminal_core::ShellIntegrationEventKind::PromptStart
+                        | oxide_terminal_core::ShellIntegrationEventKind::CommandStart
+                );
+                self.shell_integration_status = ShellIntegrationStatus {
+                    detected: true,
+                    state: match event.kind {
+                        oxide_terminal_core::ShellIntegrationEventKind::PromptStart => {
+                            ShellIntegrationLifecycleState::Prompt
+                        }
+                        oxide_terminal_core::ShellIntegrationEventKind::CommandStart => {
+                            ShellIntegrationLifecycleState::Command
+                        }
+                        oxide_terminal_core::ShellIntegrationEventKind::OutputStart => {
+                            ShellIntegrationLifecycleState::Output
+                        }
+                        oxide_terminal_core::ShellIntegrationEventKind::CommandEnd => {
+                            ShellIntegrationLifecycleState::Closed
+                        }
+                    },
+                    integration_source: Some(event.source),
+                    last_seen_at: Some(
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|duration| duration.as_millis() as u64)
+                            .unwrap_or_default(),
+                    ),
+                };
+                TerminalEventEffect::notify()
+            }
+            TerminalEvent::CommandMark(event) => {
+                if let TerminalCommandMarkEvent::Closed(mark) = &event {
+                    self.observe_terminal_cwd_action_from_closed_command_mark(mark, cx);
+                }
+                // Command boundaries drive AI ownership even when their visual marks are hidden.
+                match event {
+                    TerminalCommandMarkEvent::Created(mut mark) => {
+                        if mark.detection_source
+                            == TerminalCommandMarkDetectionSource::ShellIntegration
+                            && let Some((index, submitted_by)) =
+                                self.shell_integration_dedup_candidate(&mark)
+                        {
+                            let shell_command_id = mark.command_id.clone();
+                            let frontend_command_id = self.command_marks[index].command_id.clone();
+                            mark.command_id = frontend_command_id.clone();
+                            mark.submitted_by = Some(submitted_by);
+                            self.command_marks.remove(index);
+                            self.command_mark_id_aliases
+                                .insert(shell_command_id, frontend_command_id);
+                        }
+                        if let Some(command) = mark.command.as_deref() {
+                            // Shell integration is the terminal-owned
+                            // submitted-command source. Feed it to the
+                            // privilege tracker so bare sudo prompts do not
+                            // depend on lossy key/IME reconstruction.
+                            let previous_state_generation =
+                                self.privilege_prompt_tracker.state_generation();
+                            self.privilege_prompt_tracker
+                                .observe_submitted_command(command, Instant::now());
+                            self.finish_privilege_prompt_tracker_update(
+                                previous_state_generation,
+                                cx,
+                            );
+                        }
+                        self.command_fact_ledger
+                            .set_audit_context(self.terminal.lock().audit_context());
+                        self.command_fact_ledger.create_from_mark(&mark);
+                        self.command_marks.push(mark);
+                        self.trim_command_marks();
+                    }
+                    TerminalCommandMarkEvent::Closed(mut mark) => {
+                        if let Some(frontend_command_id) =
+                            self.command_mark_id_aliases.remove(&mark.command_id)
+                        {
+                            mark.command_id = frontend_command_id;
+                        }
+                        self.command_fact_ledger.close_from_mark(&mark);
+                        if let Some(existing) = self
+                            .command_marks
+                            .iter_mut()
+                            .find(|candidate| candidate.command_id == mark.command_id)
+                        {
+                            *existing = mark;
+                        } else {
+                            self.command_marks.push(mark);
+                        }
+                    }
+                    TerminalCommandMarkEvent::Reset => {
+                        self.clear_visual_command_marks();
+                    }
+                    TerminalCommandMarkEvent::HistoryTrimmed { lines } => {
+                        self.command_marks
+                            .retain_mut(|mark| mark.trim_history(lines));
+                        self.command_fact_ledger.trim_history(lines);
+                    }
+                }
+                if let Some(selected_id) = &self.selected_command_mark_id
+                    && !self
+                        .command_marks
+                        .iter()
+                        .any(|mark| mark.command_id == *selected_id)
+                {
+                    self.selected_command_mark_id = None;
+                }
+                if let Some(hovered_id) = &self.hovered_command_mark_id
+                    && !self
+                        .command_marks
+                        .iter()
+                        .any(|mark| mark.command_id == *hovered_id)
+                {
+                    self.hovered_command_mark_id = None;
+                }
+                self.command_marks_render_cache_dirty = true;
+                TerminalEventEffect::notify()
+            }
+            TerminalEvent::CwdChanged { cwd, host } => {
+                self.cwd = Some(cwd);
+                self.cwd_source = Some(TerminalWorkingDirectorySource::ShellIntegration);
+                // OSC 7 is also emitted by inline TUIs. It must not override a known
+                // command lifecycle or enable shell suggestions in application input modes.
+                if !self.shell_integration_status.detected
+                    && shell_history_input_mode(self.terminal.lock().mode())
+                {
+                    if !self.autosuggest_prompt_active {
+                        self.input_tracker.reset();
+                        self.autosuggest_selected_index = None;
+                        self.autosuggest_dismissed_query = None;
+                    }
+                    self.autosuggest_prompt_active = true;
+                }
+                // A prepared startup profile becomes active only after the
+                // terminal parser receives a valid directory report.
+                self.cwd_shell_integration_status = TerminalCwdShellIntegrationStatus::Active;
+                self.pending_cwd = None;
+                self.cwd_host = host;
+                cx.emit(TerminalPaneEvent::CurrentDirectoryChanged);
+                TerminalEventEffect::notify()
+            }
+            TerminalEvent::ClipboardStore(text) => {
+                if self.settings.osc52_clipboard {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                }
+                TerminalEventEffect::default()
+            }
+            TerminalEvent::ClipboardLoad(formatter) => {
+                if let Some(response) = build_osc52_clipboard_response(
+                    self.settings.osc52_clipboard_read,
+                    || cx.read_from_clipboard().and_then(|item| item.text()),
+                    formatter.as_ref(),
+                ) {
+                    self.send_protocol_bytes(response.as_bytes(), cx);
+                }
+                TerminalEventEffect::default()
+            }
+        }
+    }
+
+    fn handle_focus_change(&mut self, focused: bool, cx: &mut Context<Self>) {
+        self.focused = focused;
+        if !focused {
+            self.win32_pressed_keys.clear();
+        }
+        if !focused && self.context_menu.take().is_some() {
+            // Menu actions refer to this pane's selection and command snapshot. Drop them
+            // immediately on focus transfer and invalidate any pending exit animation.
+            self.context_menu_presence.reopen();
+        }
+        let _ = self.terminal.lock().set_focused(focused);
+        self.reset_cursor_blink();
+        // Focus changes must consume already queued output instead of waiting for an old deadline.
+        self.tick(cx);
+        self.wake_terminal_scheduler();
+        cx.notify();
+    }
+
+    fn send_protocol_bytes(&mut self, bytes: &[u8], cx: &mut Context<Self>) -> bool {
+        if !self.terminal_accepts_input() {
+            return false;
+        }
+
+        if self.terminal.lock().write_protocol_bytes(bytes).is_ok() {
+            if let Some(recorder) = self.recorder.as_mut() {
+                recorder.record_input(&String::from_utf8_lossy(bytes));
+            }
+            self.last_terminal_input = Instant::now();
+            self.reset_cursor_blink();
+            cx.notify();
+            return true;
+        }
+        false
+    }
+
+    pub(crate) fn send_user_protocol_bytes(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
+        let secret_entry = self.input_answers_privilege_prompt(bytes);
+        if self.send_user_protocol_bytes_without_broadcast(bytes, cx) && !secret_entry {
+            self.broadcast_user_input(TerminalBroadcastInputKind::Protocol, bytes, cx);
+        }
+    }
+
+    fn send_user_protocol_bytes_without_broadcast(
+        &mut self,
+        bytes: &[u8],
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.send_user_encoded_key_without_broadcast(bytes, None, cx)
+    }
+
+    fn send_user_encoded_key_without_broadcast(
+        &mut self,
+        semantic_bytes: &[u8],
+        encoded_key: Option<(&str, &[u8])>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.terminal_accepts_input() {
+            return false;
+        }
+        let Some(bytes) = self.apply_plugin_input_interceptor(semantic_bytes) else {
+            return false;
+        };
+        let bytes = Zeroizing::new(bytes);
+        // Command/secret tracking and plugins consume the logical input. Only
+        // the PTY sees the negotiated Windows envelope; plugin replacements
+        // remain literal input, matching the existing hook contract.
+        let wire_bytes = if bytes.as_slice() == semantic_bytes {
+            encoded_key.map_or(bytes.as_slice(), |(_, encoded)| encoded)
+        } else {
+            &bytes
+        };
+        if self.send_protocol_bytes(wire_bytes, cx) {
+            if bytes.as_slice() == semantic_bytes
+                && let Some((key, _)) = encoded_key
+            {
+                // Only delivered Win32 presses own a future release, including repeats.
+                self.win32_pressed_keys.insert(key.to_owned());
+            }
+            self.observe_user_input("protocol", &bytes, cx);
+            self.restore_live_output_after_user_input();
+            return true;
+        }
+        false
+    }
+
+    fn broadcast_user_input(
+        &self,
+        kind: TerminalBroadcastInputKind,
+        bytes: &[u8],
+        cx: &mut Context<Self>,
+    ) {
+        let Some(broadcaster) = self.input_broadcaster.clone() else {
+            return;
+        };
+        // The callback is synchronous and receives borrowed input so commands
+        // are never retained in pane events, logs, or background tasks.
+        broadcaster(kind, bytes, cx);
+    }
+
+    fn send_text(&mut self, text: &str, cx: &mut Context<Self>) -> bool {
+        if !self.terminal_accepts_input() {
+            return false;
+        }
+
+        if self.terminal.lock().write_text(text).is_ok() {
+            self.restore_live_output_after_user_input();
+            if let Some(recorder) = self.recorder.as_mut() {
+                recorder.record_input(text);
+            }
+            self.last_terminal_input = Instant::now();
+            self.reset_cursor_blink();
+            cx.notify();
+            return true;
+        }
+        false
+    }
+
+    fn restore_live_output_after_user_input(&mut self) {
+        if !viewport_needs_live_output_restore(
+            self.snapshot.display_offset,
+            self.smooth_scroll_offset_px,
+            self.smooth_scroll_animation.is_some(),
+        ) {
+            return;
+        }
+
+        // User-originated input should reveal the live prompt without changing
+        // the viewport for mouse reports or terminal-owned protocol responses.
+        let snapshot = {
+            let mut terminal = self.terminal.lock();
+            terminal.scroll_to_bottom();
+            terminal.snapshot()
+        };
+        self.clear_smooth_scroll_remainder();
+        self.snapshot = self.stamp_snapshot(snapshot);
+    }
+
+    fn apply_plugin_input_interceptor(&self, bytes: &[u8]) -> Option<Vec<u8>> {
+        let Some(interceptor) = &self.plugin_input_interceptor else {
+            return Some(bytes.to_vec());
+        };
+        // Plugin input hooks run before command tracking and shell writes so a
+        // transformed or suppressed payload has the same boundary as Tauri.
+        match interceptor(bytes) {
+            TerminalInputInterceptorResult::Continue(bytes) => Some(bytes),
+            TerminalInputInterceptorResult::Suppress => None,
+        }
+    }
+
+    fn observe_user_input(&mut self, source: &'static str, bytes: &[u8], cx: &mut Context<Self>) {
+        // Only activity crosses into background rendering; input contents stay pane-owned.
+        cx.emit(TerminalPaneEvent::InputActivity);
+        let now = Instant::now();
+        if self.observe_privilege_input(source, bytes, now, cx)
+            == PrivilegeInputObservation::SecretEntry
+        {
+            return;
+        }
+        let Some(command) = self.observe_autosuggest_input_bytes(bytes, cx) else {
+            return;
+        };
+        self.observe_current_directory_submitted_command(&command, cx);
+        if self.shell_integration_status.detected
+            || (!self.settings.command_marks_user_input_observed
+                && !self.command_fact_ledger.audit_enabled())
+        {
+            return;
+        }
+        let broadcast = self.broadcast_parent_id.is_some();
+        let parent_id = self
+            .broadcast_parent_id
+            .as_deref()
+            .filter(|id| !id.is_empty())
+            .map(str::to_string);
+        let source = if broadcast {
+            TerminalCommandMarkDetectionSource::Broadcast
+        } else {
+            TerminalCommandMarkDetectionSource::UserInputObserved
+        };
+        let mark_id =
+            self.begin_command_mark_with_parent(&command, source, parent_id.as_deref(), cx);
+        if broadcast {
+            self.last_broadcast_mark_id = mark_id;
+        }
+    }
+
+    fn observe_privilege_input(
+        &mut self,
+        source: &'static str,
+        bytes: &[u8],
+        now: Instant,
+        cx: &mut Context<Self>,
+    ) -> PrivilegeInputObservation {
+        if !privilege_prompt_input_tracking_available(self.terminal.lock().mode()) {
+            return PrivilegeInputObservation::Normal;
+        }
+        let previous_state_generation = self.privilege_prompt_tracker.state_generation();
+        let observation = self
+            .privilege_prompt_tracker
+            .observe_user_input_bytes(bytes, now);
+        self.finish_privilege_prompt_tracker_update(previous_state_generation, cx);
+        log_privilege_prompt_terminal_pane(format_args!(
+            "input observed: source={} has_cr={} has_lf={} observation={}",
+            source,
+            bytes.contains(&b'\r'),
+            bytes.contains(&b'\n'),
+            privilege_input_observation_name(observation)
+        ));
+        if observation == PrivilegeInputObservation::SecretEntry
+            && self.clear_privilege_prompt_inline_hint()
+        {
+            cx.notify();
+        }
+        observation
+    }
+
+    fn observe_autosuggest_input_bytes(
+        &mut self,
+        bytes: &[u8],
+        _cx: &mut Context<Self>,
+    ) -> Option<String> {
+        if !self.autosuggest_prompt_active || !shell_history_input_mode(self.terminal.lock().mode())
+        {
+            self.input_tracker.reset();
+            self.autosuggest_prompt_active = false;
+            self.autosuggest_selected_index = None;
+            self.autosuggest_dismissed_query = None;
+            return None;
+        }
+        let previous_state = self.input_tracker.state();
+        let command = self.input_tracker.apply_bytes(bytes);
+        // History navigation and completion invalidate the reconstructed command,
+        // but Enter still transfers input ownership away from the shell prompt.
+        if bytes.contains(&b'\r') || bytes.contains(&b'\n') {
+            self.autosuggest_prompt_active = false;
+        }
+        let next_state = self.input_tracker.state();
+        if next_state != previous_state {
+            self.autosuggest_scroll.scroll_to_top_of_item(0);
+            self.autosuggest_selected_index = None;
+            self.autosuggest_dismissed_query = None;
+        }
+        let command = command?;
+        self.autosuggest_prompt_active = false;
+        self.command_fact_ledger
+            .record_runtime_autosuggest_command(&command);
+        self.command_history.record(&command);
+        Some(command)
+    }
+
+    fn observe_current_directory_submitted_command(
+        &mut self,
+        command: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.settings.current_directory_awareness_enabled || self.cwd_is_shell_integrated() {
+            return;
+        }
+        let cwd = self
+            .pending_cwd
+            .as_ref()
+            .map(|pending| pending.path.as_str())
+            .or(self.cwd.as_deref());
+        if let Some(next_cwd) = cwd_after_simple_cd_command(command, cwd) {
+            // The pending state lets the UI follow a submitted simple `cd`
+            // immediately without treating terminal viewport text as evidence.
+            self.set_pending_current_working_directory_from_terminal_action(
+                next_cwd,
+                command.to_string(),
+                cx,
+            );
+        }
+    }
+
+    fn cwd_is_shell_integrated(&self) -> bool {
+        self.cwd_source == Some(TerminalWorkingDirectorySource::ShellIntegration)
+    }
+
+    fn terminal_accepts_input(&self) -> bool {
+        #[cfg(test)]
+        if self.test_accepts_input {
+            return !self.input_locked;
+        }
+        let terminal_interactive = self.terminal.lock().is_interactive();
+        self.terminal_accepts_input_with_interactive_state(terminal_interactive)
+    }
+
+    fn terminal_accepts_input_with_interactive_state(&self, terminal_interactive: bool) -> bool {
+        #[cfg(test)]
+        if self.test_accepts_input {
+            // Unit tests can exercise input routing without creating a live PTY.
+            return !self.input_locked;
+        }
+        !self.input_locked && !self.terminal_exited && terminal_interactive
+    }
+
+    fn commit_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        self.marked_text = None;
+        if let Some(prompt) = self.tmux_prompt.as_mut() {
+            prompt
+                .value
+                .extend(text.chars().filter(|character| !character.is_control()));
+            cx.notify();
+            return;
+        }
+        let secret_entry = self.input_answers_privilege_prompt(text.as_bytes());
+        if self.commit_text_without_broadcast(text, cx) && !secret_entry {
+            self.broadcast_user_input(TerminalBroadcastInputKind::Text, text.as_bytes(), cx);
+        }
+    }
+
+    fn commit_text_without_broadcast(&mut self, text: &str, cx: &mut Context<Self>) -> bool {
+        if !self.terminal_accepts_input() {
+            return false;
+        }
+        let Some(bytes) = self.apply_plugin_input_interceptor(text.as_bytes()) else {
+            return false;
+        };
+        let bytes = Zeroizing::new(bytes);
+        let mode = self.terminal.lock().mode();
+        self.delete_free_type_selection_if_active(mode, cx);
+        if self.send_protocol_bytes(&bytes, cx) {
+            self.observe_user_input("text", &bytes, cx);
+            self.restore_live_output_after_user_input();
+            return true;
+        }
+        false
+    }
+
+    fn set_marked_text(
+        &mut self,
+        text: &str,
+        selected_range_utf16: Option<Range<usize>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.marked_text = (!text.is_empty()).then(|| text.to_string());
+        cx.emit(TerminalPaneEvent::InputActivity);
+        self.marked_text_caret_utf16 = selected_range_utf16.map(|range| range.end);
+        // Composition edits are typing; keep the caret solid like other key input.
+        self.reset_cursor_blink();
+        cx.notify();
+    }
+
+    fn marked_text_cells_before_utf16(&self, utf16_offset: usize) -> usize {
+        self.marked_text
+            .as_deref()
+            .map_or(0, |text| marked_text_cells_before_utf16(text, utf16_offset))
+    }
+
+    fn clear_marked_text(&mut self, cx: &mut Context<Self>) {
+        if self.marked_text.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    fn marked_text_range(&self) -> Option<Range<usize>> {
+        self.marked_text
+            .as_ref()
+            .map(|text| 0..text.encode_utf16().count())
+    }
+
+    fn should_blink_cursor(&self) -> bool {
+        let alt_screen = self.terminal.lock().mode().contains(TermMode::ALT_SCREEN);
+        should_blink_cursor_for_mode(
+            self.settings.blink_mode,
+            self.focused,
+            self.cursor_blink_terminal_enabled,
+            alt_screen,
+            self.preferences.cursor_shape,
+        )
+    }
+
+    fn reset_cursor_blink(&mut self) {
+        self.cursor_visible = true;
+        self.last_cursor_blink = Instant::now();
+    }
+
+    fn update_cursor_blink(&mut self, cx: &mut Context<Self>) {
+        if !self.should_blink_cursor() {
+            if !self.cursor_visible {
+                self.cursor_visible = true;
+                cx.notify();
+            }
+            self.last_cursor_blink = Instant::now();
+            return;
+        }
+
+        if self.last_cursor_blink.elapsed() >= CURSOR_BLINK_INTERVAL {
+            self.cursor_visible = !self.cursor_visible;
+            self.last_cursor_blink = Instant::now();
+            cx.notify();
+        }
+    }
+
+    pub fn apply_viewport_bounds(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        scale_factor: f32,
+        cx: &mut Context<Self>,
+    ) {
+        self.bounds = Some(bounds);
+        self.viewport_scale_factor_bits = Some(scale_factor.to_bits());
+        let cell_width = self.metrics.cell_width_f32();
+        let line_height = self.metrics.line_height_f32();
+        let width = terminal_grid_span_for_viewport(
+            bounds.size.width,
+            cell_width,
+            self.command_mark_gutter_width(),
+        );
+        let height =
+            (f32::from(bounds.size.height) - TERMINAL_CONTENT_PADDING * 2.0).max(line_height * 2.0);
+        let cols = whole_cells_in_span(width, cell_width).max(2);
+        let rows = whole_cells_in_span(height, line_height).max(2);
+        let cell_width_px = (cell_width * scale_factor).ceil().max(1.0) as u16;
+        let cell_height_px = (line_height * scale_factor).ceil().max(1.0) as u16;
+        let resize = (cols, rows, cell_width_px, cell_height_px);
+
+        if self.last_pty_resize == Some(resize) {
+            // Returning to the settled viewport must discard any intermediate animation size.
+            self.pending_pty_resize = None;
+            return;
+        }
+        if self.pending_pty_resize == Some(resize) {
+            return;
+        }
+
+        self.pending_pty_resize = Some(resize);
+        self.pty_resize_generation = self.pty_resize_generation.wrapping_add(1);
+        let generation = self.pty_resize_generation;
+        cx.spawn(async move |weak, cx| {
+            cx.background_executor().timer(PTY_RESIZE_DEBOUNCE).await;
+            let _ = weak.update(cx, |view, cx| {
+                view.flush_pending_pty_resize(generation, cx);
+            });
+        })
+        .detach();
+    }
+
+    pub fn resize_grid(
+        &mut self,
+        cols: usize,
+        rows: usize,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        // Preserve the pane's measured cell size while changing only the requested grid.
+        let (_, _, cell_width_px, cell_height_px) = self.last_pty_resize.unwrap_or_else(|| {
+            (
+                self.snapshot.cols,
+                self.snapshot.rows,
+                self.metrics.cell_width_f32().ceil().max(1.0) as u16,
+                self.metrics.line_height_f32().ceil().max(1.0) as u16,
+            )
+        });
+        let requested = (cols, rows, cell_width_px, cell_height_px);
+        self.pending_pty_resize = Some(requested);
+        self.pty_resize_generation = self.pty_resize_generation.wrapping_add(1);
+        self.flush_pending_pty_resize(self.pty_resize_generation, cx);
+        (self.last_pty_resize == Some(requested))
+            .then_some(())
+            .ok_or_else(|| "The terminal backend rejected the requested grid size.".to_string())
+    }
+
+    fn flush_pending_pty_resize(&mut self, generation: u64, cx: &mut Context<Self>) {
+        if generation != self.pty_resize_generation {
+            return;
+        }
+        let Some((cols, rows, cell_width_px, cell_height_px)) = self.pending_pty_resize.take()
+        else {
+            return;
+        };
+        let resize = (cols, rows, cell_width_px, cell_height_px);
+        if self.last_pty_resize == Some(resize) {
+            return;
+        }
+        let grid_changed = self.snapshot.cols != cols || self.snapshot.rows != rows;
+
+        let next_snapshot = {
+            let mut terminal = self.terminal.lock();
+            terminal
+                .resize_with_cell_size(cols, rows, cell_width_px, cell_height_px)
+                .is_ok()
+                .then(|| terminal.snapshot())
+        };
+        if let Some(snapshot) = next_snapshot {
+            self.last_pty_resize = Some(resize);
+            if let Some(recorder) = self.recorder.as_mut() {
+                recorder.record_resize(cols, rows);
+            }
+            self.clear_smooth_scroll_remainder();
+            self.snapshot = self.stamp_snapshot(snapshot);
+            self.mark_terminal_content_changed(cx);
+            if grid_changed {
+                // The backend also resets its shell-integration state. Clear
+                // immediately so stale hit regions cannot survive one UI frame.
+                self.reset_command_marks_while_awaiting_backend_reset();
+            }
+            cx.notify();
+        }
+    }
+
+    fn content_origin(&self) -> gpui::Point<Pixels> {
+        self.bounds
+            .map(|bounds| bounds.origin)
+            .unwrap_or_else(|| gpui::point(px(0.0), px(0.0)))
+    }
+
+    fn timestamp_gutter_width(&self) -> f32 {
+        terminal_timestamp_gutter_width(&self.metrics, self.terminal_timestamps_enabled)
+    }
+
+    fn terminal_content_padding_x(&self) -> f32 {
+        TERMINAL_CONTENT_PADDING + self.timestamp_gutter_width() + self.command_mark_gutter_width()
+    }
+
+    fn terminal_horizontal_scroll_limit(&self) -> Pixels {
+        px(self.timestamp_gutter_width())
+    }
+
+    fn command_mark_gutter_width(&self) -> f32 {
+        if self.settings.command_marks_enabled {
+            TERMINAL_COMMAND_MARK_GUTTER_WIDTH
+        } else {
+            0.0
+        }
+    }
+
+    pub fn cursor_anchor(&self) -> Option<TerminalCursorAnchor> {
+        let bounds = self.bounds?;
+        let cursor_bounds = ime_cursor_bounds_for_snapshot(&self.snapshot, &self.metrics)?;
+        // The app layer owns overlays such as inline AI chat, but only the
+        // terminal pane knows the bidi-aware cursor visual column and measured
+        // cell metrics. Expose pane-local facts rather than making workspace
+        // code duplicate terminal layout math.
+        Some(TerminalCursorAnchor {
+            x: self.preferences.padding_horizontal
+                + f32::from(cursor_bounds.origin.x)
+                + self.terminal_content_padding_x()
+                - f32::from(self.horizontal_scroll_offset_px),
+            y: self.preferences.padding_vertical
+                + f32::from(cursor_bounds.origin.y)
+                + TERMINAL_CONTENT_PADDING,
+            line_height: self.metrics.line_height_f32(),
+            char_width: self.metrics.cell_width_f32(),
+            container_width: f32::from(bounds.size.width)
+                + self.preferences.padding_horizontal * 2.0,
+            container_height: f32::from(bounds.size.height)
+                + self.preferences.padding_vertical * 2.0,
+        })
+    }
+}
+
+impl EventEmitter<TerminalPaneEvent> for TerminalPane {}
+
+pub fn paste_needs_confirmation(text: &str) -> bool {
+    const PASTE_LINE_THRESHOLD: usize = 1;
+    const PASTE_CHAR_THRESHOLD: usize = 50;
+
+    text.contains('\n')
+        && (text.split('\n').count() > PASTE_LINE_THRESHOLD || text.len() > PASTE_CHAR_THRESHOLD)
+}
+
+fn terminal_trigger_input(text: &str, append_enter: bool) -> Option<Zeroizing<String>> {
+    if text.is_empty() && !append_enter {
+        return None;
+    }
+    let mut input = Zeroizing::new(text.to_string());
+    if append_enter {
+        input.push('\r');
+    }
+    Some(input)
+}
+
+fn graphics_options_from_preferences(preferences: &TerminalUiPreferences) -> GraphicsOptions {
+    let graphics = preferences.render_policy.terminal_graphics;
+    let storage_limit_mb = graphics.storage_limit_bytes.div_ceil(1024 * 1024);
+    GraphicsOptions {
+        enabled: true,
+        sixel: true,
+        iterm2_inline: true,
+        kitty: true,
+        pixel_limit: graphics.pixel_limit.min(u32::MAX as usize) as u32,
+        storage_limit_mb: storage_limit_mb.min(u32::MAX as usize) as u32,
+        show_placeholder: graphics.show_placeholders,
+        kitty_file_transmission: KittyFileTransmissionControl::new(),
+    }
+}
+
+fn current_terminal_timestamp_label() -> String {
+    let now = chrono::Local::now();
+    terminal_timestamp_label(
+        now.hour(),
+        now.minute(),
+        now.second(),
+        now.timestamp_subsec_millis(),
+    )
+}
+
+fn terminal_timestamp_label(hour: u32, minute: u32, second: u32, millis: u32) -> String {
+    // Bracketed fixed-width labels separate timestamp metadata from terminal
+    // output while keeping the paint-only gutter stable.
+    format!("[{hour:02}:{minute:02}:{second:02}.{millis:03}]")
+}
+
+fn record_timestampable_snapshot_rows(
+    store: &mut TerminalRowTimestampStore,
+    snapshot: &TerminalSnapshot,
+    label: &str,
+) {
+    for row in &snapshot.lines {
+        let key = terminal_row_timestamp_identity(row);
+        if key == 0 {
+            continue;
+        }
+        // The snapshot signature is a cheap invalidation key. Cursor-only changes
+        // still fall through to the content signature comparison below.
+        if store
+            .entries
+            .get(&key)
+            .is_some_and(|timestamp| timestamp.source_signature == row.signature)
+        {
+            continue;
+        }
+
+        if terminal_row_has_timestamp_content(row) {
+            let timestamp_signature = terminal_row_timestamp_signature(row);
+            if let Some(timestamp) = store.entries.get_mut(&key) {
+                if timestamp.signature != timestamp_signature {
+                    timestamp.label = label.to_string();
+                    timestamp.signature = timestamp_signature;
+                }
+                timestamp.source_signature = row.signature;
+            } else {
+                store.entries.insert(
+                    key,
+                    TerminalRowTimestamp {
+                        label: label.to_string(),
+                        signature: timestamp_signature,
+                        source_signature: row.signature,
+                    },
+                );
+            }
+        } else {
+            // Blank viewport rows are recycled later. Removing their metadata
+            // prevents new output from inheriting a stale line-modification time.
+            store.entries.remove(&key);
+        }
+    }
+}
+
+fn trim_row_timestamp_history(
+    row_timestamps: &mut HashMap<u64, TerminalRowTimestamp>,
+    retained_rows: usize,
+) {
+    // IDs are process-wide; other terminals can make them arbitrarily sparse.
+    // Batch pruning bounds memory without scanning the cache on every frame.
+    if row_timestamps.len() <= retained_rows.saturating_add(1024) {
+        return;
+    }
+    let mut identities: Vec<_> = row_timestamps.keys().copied().collect();
+    let remove_count = identities.len() - retained_rows;
+    identities.select_nth_unstable(remove_count);
+    let min_identity = identities[remove_count];
+    row_timestamps.retain(|identity, _| *identity >= min_identity);
+}
+
+fn terminal_row_timestamp_signature(row: &TerminalRow) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    row.wrapped.hash(&mut hasher);
+    // Ignore unstyled trailing padding so a grid resize does not restamp output.
+    // Styled blanks and links remain part of the content signature.
+    let content_end = row.cells.iter().rposition(terminal_cell_has_content);
+    let Some(content_end) = content_end else {
+        return hasher.finish();
+    };
+    for cell in &row.cells[..=content_end] {
+        cell.ch.hash(&mut hasher);
+        cell.zerowidth().hash(&mut hasher);
+        cell.wide.hash(&mut hasher);
+        cell.fg.hash(&mut hasher);
+        cell.bg.hash(&mut hasher);
+        cell.attrs.hash(&mut hasher);
+        cell.hyperlink().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+fn terminal_row_has_timestamp_content(row: &TerminalRow) -> bool {
+    row.cells.iter().any(terminal_cell_has_content)
+}
+
+/// Explicit styling and links distinguish meaningful blanks from grid padding.
+fn terminal_cell_has_content(cell: &TerminalCell) -> bool {
+    !cell.ch.is_whitespace()
+        || !cell.zerowidth().is_empty()
+        || cell.style_origin.foreground_explicit()
+        || cell.style_origin.background_explicit()
+        || cell.attrs != Default::default()
+        || cell.hyperlink().is_some()
+}
+
+fn hex_color(color: u32) -> String {
+    format!("#{:06x}", color & 0x00ff_ffff)
+}
+
+fn build_osc52_clipboard_response(
+    allowed: bool,
+    read_clipboard: impl FnOnce() -> Option<String>,
+    formatter: &(dyn Fn(&str) -> String + Send + Sync),
+) -> Option<Zeroizing<String>> {
+    if !allowed {
+        return None;
+    }
+    // OSC 52 reads can expose arbitrary clipboard data, so clear both temporary UI and wire
+    // copies immediately after the protocol response is submitted.
+    let text = Zeroizing::new(read_clipboard()?);
+    Some(Zeroizing::new(formatter(&text)))
+}
+
+fn whole_cells_in_span(span: f32, cell_span: f32) -> usize {
+    let cells = span / cell_span;
+    let nearest_integer = cells.round();
+    if (cells - nearest_integer).abs() <= 0.0001 {
+        nearest_integer.max(0.0) as usize
+    } else {
+        cells.floor().max(0.0) as usize
+    }
+}
+
+fn terminal_grid_span_for_viewport(
+    viewport_width: Pixels,
+    cell_width: f32,
+    left_gutter_width: f32,
+) -> f32 {
+    // Browser terminals reserve right-side scrollbar chrome outside the grid.
+    // Keep that gutter stable even before scrollback exists so history growth
+    // does not resize the PTY and push the scrollbar outside the viewport.
+    // Timestamp labels are a visual overlay and must not change PTY columns;
+    // toggling them should never reflow scrollback or restamp old rows.
+    (f32::from(viewport_width)
+        - TERMINAL_CONTENT_PADDING * 2.0
+        - left_gutter_width
+        - SCROLLBAR_RESERVED_WIDTH)
+        .max(cell_width * 2.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{cell::Cell, collections::HashMap, sync::Arc};
+
+    use gpui::{AppContext, IntoElement, Render, TestAppContext, div};
+    use oxide_terminal_core::{TerminalAttrs, TerminalCell, TerminalColor, TerminalCursorShape};
+
+    #[gpui::test]
+    fn plugin_text_action_captures_selection_before_focus_or_output_changes(
+        cx: &mut TestAppContext,
+    ) {
+        let (pane, cx) = cx.add_window_view(|window, cx| {
+            TerminalPane::new_recording_playback(80, 24, Default::default(), window, cx).unwrap()
+        });
+        pane.update(cx, |pane, cx| {
+            pane.terminal.lock().feed_recording_output(b"captured text");
+            let snapshot = pane.terminal.lock().snapshot();
+            pane.snapshot = pane.stamp_snapshot(snapshot);
+            pane.set_selection(Some(TerminalSelection {
+                anchor: TerminalGridPoint { line: 0, col: 0 },
+                head: TerminalGridPoint { line: 0, col: 7 },
+                mode: TerminalSelectionMode::Simple,
+            }));
+            pane.request_plugin_text_action(
+                TerminalPluginTextAction {
+                    plugin_id: "test.tools".into(),
+                    tab_id: "tools".into(),
+                    control_id: "text".into(),
+                    label: "Process".into(),
+                },
+                cx,
+            );
+            pane.set_selection(None);
+            pane.terminal.lock().feed_recording_output(b"\rreplaced");
+            assert_eq!(
+                pane.take_context_action_request(),
+                Some(TerminalContextAction::PluginTextTool)
+            );
+            let (target, text) = pane.take_plugin_text_request().unwrap();
+            assert_eq!(
+                (
+                    target.plugin_id.as_str(),
+                    target.tab_id.as_str(),
+                    target.control_id.as_str()
+                ),
+                ("test.tools", "tools", "text")
+            );
+            assert_eq!(text.as_str(), "captured");
+            assert!(pane.take_plugin_text_request().is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn modem_failure_notice_includes_localized_reason(cx: &mut TestAppContext) {
+        let notices = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured = notices.clone();
+        let mut preferences = TerminalUiPreferences::default();
+        preferences.modem_labels.timeout = "等待对端响应超时".into();
+        preferences.modem_labels.file_error = "无法读写传输文件".into();
+        preferences.notice_sink = Some(Arc::new(move |notice| {
+            captured.lock().unwrap().push(notice.description);
+        }));
+        let (pane, cx) = cx.add_window_view(|window, cx| {
+            TerminalPane::new_recording_playback(80, 24, preferences, window, cx).unwrap()
+        });
+        pane.update(cx, |pane, cx| {
+            pane.handle_modem_worker_event(ModemWorkerEvent::Failed(ModemFailure::Timeout), cx);
+            pane.handle_modem_worker_event(ModemWorkerEvent::Failed(ModemFailure::FileIo), cx);
+        });
+        assert_eq!(
+            *notices.lock().unwrap(),
+            vec![
+                Some("等待对端响应超时".to_string()),
+                Some("无法读写传输文件".to_string())
+            ]
+        );
+    }
+
+    #[gpui::test]
+    fn context_menu_is_discarded_when_keyboard_focus_leaves_the_pane(cx: &mut TestAppContext) {
+        let (pane, cx) = cx.add_window_view(|window, cx| {
+            TerminalPane::new_recording_playback(80, 24, Default::default(), window, cx).unwrap()
+        });
+        cx.simulate_resize(gpui::size(px(800.0), px(600.0)));
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let other_focus = cx.update(|_, cx| cx.focus_handle());
+        for serial_transfer_menu in [false, true] {
+            cx.update(|window, cx| {
+                pane.update(cx, |pane, cx| pane.focus(window, cx));
+            });
+            cx.run_until_parked();
+            pane.update(cx, |pane, cx| {
+                pane.bounds = Some(gpui::Bounds::new(
+                    gpui::point(px(0.0), px(0.0)),
+                    gpui::size(px(800.0), px(600.0)),
+                ));
+                pane.open_terminal_context_menu(
+                    &gpui::MouseDownEvent {
+                        position: gpui::point(px(100.0), px(100.0)),
+                        button: gpui::MouseButton::Right,
+                        ..Default::default()
+                    },
+                    cx,
+                );
+                pane.context_menu.as_mut().unwrap().serial_transfer_menu = serial_transfer_menu;
+            });
+            cx.update(|window, cx| {
+                window.draw(cx).clear(cx);
+                window.focus(&other_focus, cx);
+                window.draw(cx).clear(cx);
+            });
+            cx.run_until_parked();
+            pane.read_with(cx, |pane, _| {
+                assert!(
+                    pane.context_menu.is_none(),
+                    "a background pane must not retain its menu"
+                );
+            });
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_launch_returns_missing_directory_error_before_creating_a_view() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = LocalPtyConfig {
+            shell: Some(oxide_terminal_core::ShellInfo::new("sh", "sh", "/bin/sh")),
+            cwd: Some(directory.path().join("missing-project")),
+            ..Default::default()
+        };
+        assert!(
+            TerminalPane::local_shared_session(config, &TerminalUiPreferences::default()).is_err()
+        );
+    }
+
+    #[test]
+    fn serial_output_is_coalesced_without_delaying_input_or_other_backends() {
+        let elapsed = Duration::from_millis(5);
+        assert_eq!(
+            terminal_output_coalescing_delay(
+                TerminalSessionKind::Serial,
+                TerminalSchedulerWake::BackendActivity,
+                elapsed
+            ),
+            Duration::from_millis(11)
+        );
+        assert_eq!(
+            terminal_output_coalescing_delay(
+                TerminalSessionKind::Serial,
+                TerminalSchedulerWake::BackendActivity,
+                Duration::from_millis(20)
+            ),
+            Duration::ZERO
+        );
+        for wake in [
+            TerminalSchedulerWake::PaneActivity,
+            TerminalSchedulerWake::PaneClosed,
+            TerminalSchedulerWake::BackendClosed,
+            TerminalSchedulerWake::Maintenance,
+        ] {
+            assert_eq!(
+                terminal_output_coalescing_delay(TerminalSessionKind::Serial, wake, elapsed),
+                Duration::ZERO
+            );
+        }
+        assert_eq!(
+            terminal_output_coalescing_delay(
+                TerminalSessionKind::SshPty,
+                TerminalSchedulerWake::BackendActivity,
+                elapsed
+            ),
+            Duration::ZERO
+        );
+    }
+
+    #[test]
+    fn idle_terminal_has_no_maintenance_deadline() {
+        assert_eq!(
+            terminal_maintenance_interval(
+                false,
+                false,
+                Duration::from_millis(8),
+                false,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+            None
+        );
+    }
+
+    struct TerminalTestRoot;
+
+    struct TerminalBroadcastRecorder {
+        delivered: Vec<(TerminalBroadcastInputKind, Vec<u8>)>,
+    }
+
+    impl Render for TerminalTestRoot {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    #[test]
+    fn missing_serial_port_is_reported_before_pane_construction() {
+        const MISSING_SERIAL_PORT_PATH: &str = "oxide-test-missing-serial-port";
+        let config = SerialSessionConfig {
+            port_path: MISSING_SERIAL_PORT_PATH.to_string(),
+            baud_rate: 115_200,
+            data_bits: 8,
+            stop_bits: 1,
+            parity: oxide_terminal_core::SerialParity::None,
+            flow_control: oxide_terminal_core::SerialFlowControl::None,
+            runtime_options: SerialRuntimeOptions::default(),
+        };
+
+        let result = TerminalPane::open_serial_session_with_preferences(
+            config,
+            &TerminalUiPreferences::default(),
+        );
+        let error = match result {
+            Ok(_) => panic!("missing serial port must not open"),
+            Err(error) => error,
+        };
+        let serial_error = error
+            .downcast_ref::<oxide_terminal_core::SerialError>()
+            .expect("serial backend error");
+        assert_eq!(
+            serial_error.code,
+            oxide_terminal_core::SerialErrorCode::PortNotFound
+        );
+        assert_eq!(
+            serial_error.port_path.as_deref(),
+            Some(MISSING_SERIAL_PORT_PATH)
+        );
+    }
+
+    #[test]
+    fn trigger_input_appends_only_the_explicit_enter() {
+        assert!(terminal_trigger_input("", false).is_none());
+        assert_eq!(
+            terminal_trigger_input("value", false)
+                .as_ref()
+                .map(|input| input.as_str()),
+            Some("value")
+        );
+        assert_eq!(
+            terminal_trigger_input("value\nnext", true)
+                .as_ref()
+                .map(|input| input.as_str()),
+            Some("value\nnext\r")
+        );
+        assert_eq!(
+            terminal_trigger_input("", true)
+                .as_ref()
+                .map(|input| input.as_str()),
+            Some("\r")
+        );
+    }
+
+    #[test]
+    fn command_mark_ui_is_hidden_while_a_tui_owns_the_terminal_surface() {
+        assert!(command_mark_ui_available(true, TermMode::empty()));
+        assert!(!command_mark_ui_available(false, TermMode::empty()));
+        assert!(!command_mark_ui_available(true, TermMode::ALT_SCREEN));
+        assert!(!command_mark_ui_available(
+            true,
+            TermMode::MOUSE_REPORT_CLICK
+        ));
+    }
+
+    #[test]
+    fn privilege_prompt_input_tracking_ignores_full_screen_application_keys() {
+        assert!(privilege_prompt_input_tracking_available(TermMode::empty()));
+        assert!(!privilege_prompt_input_tracking_available(
+            TermMode::ALT_SCREEN
+        ));
+    }
+
+    #[test]
+    fn local_cwd_integration_waits_for_first_report_before_becoming_active() {
+        assert_eq!(
+            initial_cwd_shell_integration_status(
+                true,
+                TerminalSessionKind::LocalPty,
+                TerminalCwdIntegrationLaunchState::Prepared,
+            ),
+            TerminalCwdShellIntegrationStatus::Installing
+        );
+        assert_eq!(
+            initial_cwd_shell_integration_status(
+                true,
+                TerminalSessionKind::LocalPty,
+                TerminalCwdIntegrationLaunchState::Unavailable,
+            ),
+            TerminalCwdShellIntegrationStatus::Failed
+        );
+        assert_eq!(
+            initial_cwd_shell_integration_status(
+                false,
+                TerminalSessionKind::LocalPty,
+                TerminalCwdIntegrationLaunchState::Prepared,
+            ),
+            TerminalCwdShellIntegrationStatus::Disabled
+        );
+    }
+
+    #[test]
+    fn user_input_restores_only_non_live_viewports() {
+        for (display_offset, smooth_offset, animation_active, expected) in [
+            (3, px(0.0), false, true),
+            (0, px(2.0), true, true),
+            (0, px(0.0), false, false),
+        ] {
+            assert_eq!(
+                viewport_needs_live_output_restore(display_offset, smooth_offset, animation_active),
+                expected
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn viewport_returning_to_committed_size_cancels_pending_resize(cx: &mut TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_window, _cx| TerminalTestRoot);
+        let pane = cx.update(|window, cx| {
+            cx.new(|cx| {
+                TerminalPane::new_recording_playback(
+                    DEFAULT_COLS,
+                    DEFAULT_ROWS,
+                    TerminalUiPreferences::default(),
+                    window,
+                    cx,
+                )
+                .expect("test terminal pane")
+            })
+        });
+        let bounds = gpui::Bounds::new(
+            gpui::point(px(0.0), px(0.0)),
+            gpui::size(px(640.0), px(320.0)),
+        );
+        pane.update(cx, |pane, cx| pane.apply_viewport_bounds(bounds, 1.0, cx));
+        cx.run_until_parked();
+        cx.executor().advance_clock(PTY_RESIZE_DEBOUNCE);
+        cx.run_until_parked();
+        let original_grid = pane.read_with(cx, |pane, _| (pane.snapshot.cols, pane.snapshot.rows));
+
+        pane.update(cx, |pane, cx| {
+            let mut expanded = bounds;
+            expanded.size.height += px(80.0);
+            pane.apply_viewport_bounds(expanded, 1.0, cx);
+        });
+        cx.run_until_parked();
+        cx.executor().advance_clock(PTY_RESIZE_DEBOUNCE / 2);
+        pane.update(cx, |pane, cx| pane.apply_viewport_bounds(bounds, 1.0, cx));
+        cx.run_until_parked();
+        cx.executor().advance_clock(PTY_RESIZE_DEBOUNCE);
+        cx.run_until_parked();
+
+        pane.read_with(cx, |pane, _| {
+            assert_eq!((pane.snapshot.cols, pane.snapshot.rows), original_grid);
+            let backend = pane.terminal.lock().snapshot();
+            assert_eq!((backend.cols, backend.rows), original_grid);
+            assert!(
+                pane.snapshot.rows as f32 * pane.metrics.line_height_f32()
+                    <= f32::from(bounds.size.height) - TERMINAL_CONTENT_PADDING * 2.0
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn terminal_padding_updates_layout_grid_and_input_coordinates(cx: &mut TestAppContext) {
+        let (pane, cx) = cx.add_window_view(|window, cx| {
+            TerminalPane::new_recording_playback(
+                DEFAULT_COLS,
+                DEFAULT_ROWS,
+                TerminalUiPreferences::default(),
+                window,
+                cx,
+            )
+            .expect("test terminal pane")
+        });
+        cx.simulate_resize(gpui::size(px(640.0), px(320.0)));
+
+        for (horizontal, vertical) in [(1.0, 1.0), (24.0, 12.0), (0.0, 0.0)] {
+            pane.update(cx, |pane, cx| {
+                let mut preferences = pane.preferences.clone();
+                preferences.padding_horizontal = horizontal;
+                preferences.padding_vertical = vertical;
+                pane.set_preferences(preferences, cx);
+            });
+            cx.update(|window, cx| {
+                window.draw(cx).clear(cx);
+            });
+            cx.update(|window, cx| {
+                window.simulate_next_frame(cx);
+            });
+            cx.run_until_parked();
+
+            pane.update(cx, |pane, cx| {
+                let bounds = pane.bounds.expect("rendered terminal viewport");
+                assert_eq!(bounds.origin, gpui::point(px(horizontal), px(vertical)));
+                assert_eq!(
+                    bounds.size,
+                    gpui::size(px(640.0 - horizontal * 2.0), px(320.0 - vertical * 2.0))
+                );
+                pane.flush_pending_pty_resize(pane.pty_resize_generation, cx);
+                let cell_width = pane.metrics.cell_width_f32();
+                let line_height = pane.metrics.line_height_f32();
+                // Font advances may round just below an integer cell count.
+                // The resized grid must fit, with less than one cell left over.
+                let available_width = 640.0 - horizontal * 2.0 - SCROLLBAR_RESERVED_WIDTH;
+                let available_height = 320.0 - vertical * 2.0;
+                let remaining_width = available_width - pane.snapshot.cols as f32 * cell_width;
+                let remaining_height = available_height - pane.snapshot.rows as f32 * line_height;
+                assert!(remaining_width >= -0.001 && remaining_width < cell_width - 0.001);
+                assert!(remaining_height >= -0.001 && remaining_height < line_height - 0.001);
+
+                let position =
+                    bounds.origin + gpui::point(px(cell_width * 3.5), px(line_height * 2.5));
+                assert_eq!(
+                    pane.terminal_point_for_position(position),
+                    TerminalPoint { row: 2, col: 3 }
+                );
+                // Selection beginning in the left padding must include column zero.
+                let padding_position = gpui::point(px(0.0), position.y);
+                pane.handle_mouse_down(
+                    &gpui::MouseDownEvent {
+                        position: padding_position,
+                        button: gpui::MouseButton::Left,
+                        modifiers: gpui::Modifiers {
+                            shift: true,
+                            ..Default::default()
+                        },
+                        click_count: 1,
+                        first_mouse: false,
+                    },
+                    cx,
+                );
+                assert_eq!(
+                    pane.selection.expect("padding starts selection").anchor.col,
+                    0
+                );
+                let anchor = pane.cursor_anchor().expect("cursor anchor");
+                assert_eq!(
+                    anchor.x,
+                    horizontal + pane.snapshot.cursor_col as f32 * cell_width
+                );
+                assert_eq!(
+                    anchor.y,
+                    vertical + pane.snapshot.cursor_row as f32 * line_height
+                );
+                assert_eq!(
+                    (anchor.container_width, anchor.container_height),
+                    (640.0, 320.0)
+                );
+            });
+        }
+    }
+
+    #[gpui::test]
+    fn win32_input_releases_only_delivered_keys_after_modifiers_change(cx: &mut TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_window, _cx| TerminalTestRoot);
+        let pane = cx.update(|window, cx| {
+            cx.new(|cx| {
+                TerminalPane::new_recording_playback(
+                    DEFAULT_COLS,
+                    DEFAULT_ROWS,
+                    TerminalUiPreferences::default(),
+                    window,
+                    cx,
+                )
+                .unwrap()
+            })
+        });
+        pane.update(cx, |pane, cx| {
+            pane.test_accepts_input = true;
+            pane.terminal.lock().feed_recording_output(b"\x1b[?9001h");
+            pane.recorder = Some(TerminalRecorder::start(
+                DEFAULT_COLS,
+                DEFAULT_ROWS,
+                TerminalRecordingOptions {
+                    capture_input: true,
+                    title: None,
+                    theme: None,
+                },
+            ));
+            for (pressed, released) in [("ctrl-j", "j"), ("alt-j", "j"), ("ctrl-space", "space")] {
+                assert!(pane.handle_key(
+                    &gpui::KeyDownEvent {
+                        keystroke: gpui::Keystroke::parse(pressed).unwrap(),
+                        is_held: false,
+                        prefer_character_input: false,
+                    },
+                    cx
+                ));
+                pane.handle_key_up(
+                    &gpui::KeyUpEvent {
+                        keystroke: gpui::Keystroke::parse(released).unwrap(),
+                    },
+                    cx,
+                );
+            }
+            // Platform text commits and plugin replacements own their own input delivery.
+            assert!(!pane.handle_key(
+                &gpui::KeyDownEvent {
+                    keystroke: gpui::Keystroke::parse("j").unwrap(),
+                    is_held: false,
+                    prefer_character_input: false,
+                },
+                cx
+            ));
+            pane.handle_key_up(
+                &gpui::KeyUpEvent {
+                    keystroke: gpui::Keystroke::parse("j").unwrap(),
+                },
+                cx,
+            );
+            for replacement in [None, Some(b"replacement".to_vec())] {
+                pane.set_plugin_input_interceptor(Some(Arc::new(move |_| match &replacement {
+                    Some(bytes) => TerminalInputInterceptorResult::Continue(bytes.clone()),
+                    None => TerminalInputInterceptorResult::Suppress,
+                })));
+                pane.handle_key(
+                    &gpui::KeyDownEvent {
+                        keystroke: gpui::Keystroke::parse("ctrl-j").unwrap(),
+                        is_held: false,
+                        prefer_character_input: false,
+                    },
+                    cx,
+                );
+                pane.handle_key_up(
+                    &gpui::KeyUpEvent {
+                        keystroke: gpui::Keystroke::parse("ctrl-j").unwrap(),
+                    },
+                    cx,
+                );
+            }
+            let recording = pane.recorder.take().unwrap().stop();
+            let input = recording
+                .lines()
+                .skip(1)
+                .map(|line| {
+                    serde_json::from_str::<serde_json::Value>(line).unwrap()[2]
+                        .as_str()
+                        .unwrap()
+                        .to_owned()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                input,
+                [
+                    "\x1b[74;0;10;1;8;1_",
+                    "\x1b[74;0;106;0;0;1_",
+                    "\x1b[74;0;106;1;2;1_",
+                    "\x1b[74;0;106;0;0;1_",
+                    "\x1b[32;0;0;1;8;1_",
+                    "\x1b[32;0;32;0;0;1_",
+                    "replacement",
+                ]
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn direct_user_input_broadcasts_once_for_each_input_path(cx: &mut TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_window, _cx| TerminalTestRoot);
+        let pane = cx.update(|window, cx| {
+            cx.new(|cx| {
+                TerminalPane::new_recording_playback(
+                    DEFAULT_COLS,
+                    DEFAULT_ROWS,
+                    TerminalUiPreferences::default(),
+                    window,
+                    cx,
+                )
+                .expect("test terminal pane")
+            })
+        });
+        let recorder = cx.new(|_| TerminalBroadcastRecorder {
+            delivered: Vec::new(),
+        });
+        let recorder_for_broadcaster = recorder.downgrade();
+        pane.update(cx, |pane, _cx| {
+            pane.test_accepts_input = true;
+            pane.set_input_broadcaster(Some(Rc::new(move |kind, bytes, cx| {
+                let _ = recorder_for_broadcaster.update(cx, |recorder, _cx| {
+                    recorder.delivered.push((kind, bytes.to_vec()));
+                });
+            })));
+        });
+
+        pane.update(cx, |pane, cx| {
+            pane.commit_text("x", cx);
+            pane.send_user_protocol_bytes(b"\x1b[D", cx);
+            pane.paste_text("y", cx);
+            pane.terminal.lock().feed_recording_output(b"\x1b[?9001h");
+            assert!(pane.handle_key(
+                &gpui::KeyDownEvent {
+                    keystroke: gpui::Keystroke::parse("ctrl-j").unwrap(),
+                    is_held: false,
+                    prefer_character_input: false,
+                },
+                cx
+            ));
+            pane.handle_key_up(
+                &gpui::KeyUpEvent {
+                    keystroke: gpui::Keystroke::parse("ctrl-j").unwrap(),
+                },
+                cx,
+            );
+        });
+        let delivered = recorder.read_with(cx, |recorder, _cx| recorder.delivered.clone());
+        assert_eq!(
+            delivered.as_slice(),
+            [
+                (TerminalBroadcastInputKind::Text, b"x".to_vec()),
+                (TerminalBroadcastInputKind::Protocol, b"\x1b[D".to_vec()),
+                (TerminalBroadcastInputKind::Paste, b"y".to_vec()),
+                (TerminalBroadcastInputKind::Protocol, b"\n".to_vec()),
+            ]
+        );
+
+        pane.update(cx, |pane, cx| {
+            assert!(pane.send_broadcast_input(TerminalBroadcastInputKind::Text, b"z", cx));
+        });
+        assert_eq!(
+            recorder.read_with(cx, |recorder, _cx| recorder.delivered.len()),
+            4
+        );
+    }
+
+    #[gpui::test]
+    fn theme_change_repaints_existing_rows_with_the_new_palette(cx: &mut TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_window, _cx| TerminalTestRoot);
+        let pane = cx.update(|window, cx| {
+            cx.new(|cx| {
+                TerminalPane::new_recording_playback(
+                    DEFAULT_COLS,
+                    DEFAULT_ROWS,
+                    TerminalUiPreferences::default(),
+                    window,
+                    cx,
+                )
+                .unwrap()
+            })
+        });
+        for appearance_only in [false, true] {
+            let light = TerminalUiTheme::from_tokens(oxide_theme::ThemeTokens::from_builtin(
+                oxide_theme::theme_by_id("solarized-light"),
+            ));
+            pane.update(cx, |pane, cx| {
+                pane.set_appearance(TerminalUiTheme::default(), None, false, cx);
+                let settled = {
+                    let mut terminal = pane.terminal.lock();
+                    // The cursor row is always damaged, so leave it below the colored row.
+                    terminal.feed_recording_output(b"\x1b[41mAB\x1b[0m\r\n");
+                    let first = terminal.snapshot_incremental(&terminal.snapshot());
+                    terminal.snapshot_incremental(&first)
+                };
+                pane.snapshot = settled;
+                pane.snapshot_dirty = false;
+
+                let mut preferences = pane.preferences.clone();
+                preferences.theme = light.clone();
+                if appearance_only {
+                    pane.set_appearance(light.clone(), None, false, cx);
+                } else {
+                    pane.set_preferences(preferences, cx);
+                }
+
+                assert!(pane.snapshot_dirty);
+                let (next, _, _) = pane
+                    .terminal
+                    .lock()
+                    .try_render_snapshot(&pane.snapshot, false)
+                    .unwrap();
+                let row = &next.lines[0].cells;
+                assert_eq!(
+                    (row[0].bg, row[2].bg),
+                    (
+                        terminal_color_from_hex(light.tokens.terminal.red),
+                        terminal_color_from_hex(light.background),
+                    )
+                );
+            });
+        }
+    }
+
+    #[gpui::test]
+    fn redraw_only_reports_do_not_emit_unread_output_activity(cx: &mut TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_window, _cx| TerminalTestRoot);
+        let pane = cx.update(|window, cx| {
+            cx.new(|cx| {
+                TerminalPane::new_recording_playback(
+                    DEFAULT_COLS,
+                    DEFAULT_ROWS,
+                    TerminalUiPreferences::default(),
+                    window,
+                    cx,
+                )
+                .unwrap()
+            })
+        });
+        let events = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let received = events.clone();
+        let _subscription = cx.update(|_, cx| {
+            cx.subscribe(&pane, move |_, event, _| {
+                received.borrow_mut().push(*event);
+            })
+        });
+        pane.update(cx, |pane, cx| {
+            pane.apply_terminal_drain_activity(
+                &TerminalDrainReport {
+                    changed: true,
+                    ..Default::default()
+                },
+                Instant::now(),
+                cx,
+            );
+            assert!(pane.snapshot_dirty);
+        });
+        cx.run_until_parked();
+        assert!(!events.borrow().contains(&TerminalPaneEvent::OutputActivity));
+        pane.update(cx, |pane, cx| {
+            pane.apply_terminal_drain_activity(
+                &TerminalDrainReport {
+                    changed: true,
+                    drained_bytes: 12,
+                    output_presented: true,
+                    ..Default::default()
+                },
+                Instant::now(),
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        assert!(!events.borrow().contains(&TerminalPaneEvent::OutputActivity));
+        pane.update(cx, |pane, cx| {
+            pane.apply_terminal_drain_activity(
+                &TerminalDrainReport {
+                    changed: true,
+                    drained_bytes: 12,
+                    ..Default::default()
+                },
+                Instant::now(),
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            events
+                .borrow()
+                .iter()
+                .filter(|event| **event == TerminalPaneEvent::OutputActivity)
+                .count(),
+            1
+        );
+    }
+
+    #[gpui::test]
+    fn hidden_command_marks_still_report_ai_command_completion(cx: &mut TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_window, _cx| TerminalTestRoot);
+        let pane = cx.update(|window, cx| {
+            cx.new(|cx| {
+                TerminalPane::new_recording_playback(
+                    DEFAULT_COLS,
+                    DEFAULT_ROWS,
+                    TerminalUiPreferences {
+                        command_marks_enabled: false,
+                        ..Default::default()
+                    },
+                    window,
+                    cx,
+                )
+                .unwrap()
+            })
+        });
+        pane.update(cx, |pane, cx| {
+            let id = pane
+                .begin_command_mark("printf done", TerminalCommandMarkDetectionSource::Ai, cx)
+                .expect("AI completion tracking must not depend on visual marks");
+            assert_eq!(
+                pane.ai_command_status(&id),
+                Some(crate::TerminalCommandFactStatus::Open)
+            );
+            assert_eq!(pane.command_mark_gutter_width(), 0.0);
+            let mut shell = pane.command_marks.last().unwrap().clone();
+            shell.command_id = "shell-command".into();
+            shell.detection_source = TerminalCommandMarkDetectionSource::ShellIntegration;
+            pane.handle_terminal_event(
+                TerminalEvent::CommandMark(TerminalCommandMarkEvent::Created(shell.clone())),
+                cx,
+            );
+            // Reapplying hidden-mark preferences must keep the shell/frontend ID association.
+            pane.set_preferences(pane.preferences.clone(), cx);
+            shell.is_closed = true;
+            shell.closed_by = Some(TerminalCommandMarkClosedBy::ShellIntegration);
+            shell.end_line = Some(shell.start_line + 1);
+            shell.exit_code = Some(0);
+            shell.finished_at = Some(shell.started_at + 10);
+            pane.handle_terminal_event(
+                TerminalEvent::CommandMark(TerminalCommandMarkEvent::Closed(shell)),
+                cx,
+            );
+            assert_eq!(
+                pane.ai_command_status(&id),
+                Some(crate::TerminalCommandFactStatus::Closed)
+            );
+            let records = pane.ai_command_records();
+            let record = records
+                .iter()
+                .find(|record| record.command_id == id)
+                .unwrap();
+            assert_eq!(
+                (&*record.command, record.exit_code),
+                ("printf done", Some(0))
+            );
+            assert_eq!(pane.command_mark_gutter_width(), 0.0);
+        });
+    }
+
+    #[gpui::test]
+    fn privilege_answers_stay_local_but_interrupts_still_take_over(cx: &mut TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_window, _cx| TerminalTestRoot);
+        let pane = cx.update(|window, cx| {
+            cx.new(|cx| {
+                TerminalPane::new_recording_playback(
+                    DEFAULT_COLS,
+                    DEFAULT_ROWS,
+                    TerminalUiPreferences::default(),
+                    window,
+                    cx,
+                )
+                .unwrap()
+            })
+        });
+        let recorder = cx.new(|_| TerminalBroadcastRecorder {
+            delivered: Vec::new(),
+        });
+        let sink = recorder.downgrade();
+        pane.update(cx, |pane, cx| {
+            pane.test_accepts_input = true;
+            pane.set_input_broadcaster(Some(Rc::new(move |kind, bytes, cx| {
+                sink.update(cx, |sink, _| sink.delivered.push((kind, bytes.to_vec())))
+                    .unwrap();
+            })));
+            let prompt = oxide_terminal_core::detect_terminal_privilege_prompt(
+                "[sudo] password for deploy:",
+            )
+            .unwrap();
+            pane.privilege_prompt_tracker.observe_terminal_prompt_event(
+                oxide_terminal_core::TerminalPrivilegePromptEvent::Visible {
+                    prompt: prompt.clone(),
+                    retry: false,
+                },
+                Instant::now(),
+            );
+            assert!(pane.ai_waiting_for_secret());
+            pane.commit_text("secret", cx);
+            pane.paste_text("-suffix", cx);
+            assert!(pane.ai_waiting_for_secret());
+            pane.send_user_protocol_bytes(b"\r", cx);
+            assert!(!pane.ai_waiting_for_secret());
+            pane.privilege_prompt_tracker.observe_terminal_prompt_event(
+                oxide_terminal_core::TerminalPrivilegePromptEvent::Visible {
+                    prompt,
+                    retry: true,
+                },
+                Instant::now(),
+            );
+            pane.send_user_protocol_bytes(b"\x03", cx);
+            assert!(!pane.ai_waiting_for_secret());
+        });
+        assert_eq!(
+            recorder.read_with(cx, |sink, _| sink.delivered.clone()),
+            vec![(TerminalBroadcastInputKind::Protocol, vec![3])]
+        );
+    }
+
+    #[gpui::test]
+    fn broadcast_submit_marks_only_the_completed_target_command(cx: &mut TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_window, _cx| TerminalTestRoot);
+        let pane = cx.update(|window, cx| {
+            cx.new(|cx| {
+                TerminalPane::new_recording_playback(
+                    DEFAULT_COLS,
+                    DEFAULT_ROWS,
+                    TerminalUiPreferences::default(),
+                    window,
+                    cx,
+                )
+                .unwrap()
+            })
+        });
+        pane.update(cx, |pane, cx| {
+            pane.test_accepts_input = true;
+            pane.settings.command_marks_enabled = true;
+            pane.settings.command_marks_user_input_observed = true;
+            pane.autosuggest_prompt_active = true;
+            assert!(pane.send_broadcast_input(TerminalBroadcastInputKind::Text, b"l", cx));
+            assert!(pane.send_broadcast_input(TerminalBroadcastInputKind::Text, b"s", cx));
+            assert_eq!(pane.input_tracker.state().value, "ls");
+            assert!(pane.command_marks.is_empty());
+            assert!(pane.send_broadcast_input_with_parent(
+                TerminalBroadcastInputKind::Protocol,
+                b"\r",
+                Some("broadcast-batch-1"),
+                cx
+            ));
+            assert_eq!(pane.command_marks.len(), 1);
+            assert_eq!(pane.command_marks[0].command.as_deref(), Some("ls"));
+            assert_eq!(
+                pane.command_marks[0].detection_source,
+                TerminalCommandMarkDetectionSource::Broadcast
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn history_suggestions_follow_prompt_capability_without_requiring_direct_focus(
+        cx: &mut TestAppContext,
+    ) {
+        let (_, cx) = cx.add_window_view(|_window, _cx| TerminalTestRoot);
+        let pane = cx.update(|window, cx| {
+            let mut preferences = TerminalUiPreferences::default();
+            preferences.command_history =
+                SharedTerminalCommandHistory::from_commands(vec!["docker ps".to_string()]);
+            cx.new(|cx| {
+                TerminalPane::new_recording_playback(
+                    DEFAULT_COLS,
+                    DEFAULT_ROWS,
+                    preferences,
+                    window,
+                    cx,
+                )
+                .expect("test terminal pane")
+            })
+        });
+
+        pane.update(cx, |pane, cx| {
+            pane.test_accepts_input = true;
+            pane.focused = false;
+            pane.snapshot.lines[pane.snapshot.cursor_row].active_input = true;
+            pane.observe_autosuggest_input_bytes(b"dock", cx);
+
+            assert!(pane.terminal_autosuggest_candidates().is_empty());
+            pane.autosuggest_prompt_active = true;
+            pane.observe_autosuggest_input_bytes(b"dock", cx);
+            assert_eq!(
+                pane.terminal_autosuggest_candidates()
+                    .into_iter()
+                    .map(|candidate| candidate.command)
+                    .collect::<Vec<_>>(),
+                ["docker ps"]
+            );
+
+            let mut preferences = pane.preferences.clone();
+            preferences.autosuggest_enabled = false;
+            pane.set_preferences(preferences.clone(), cx);
+            assert!(
+                pane.terminal_autosuggest_candidates().is_empty(),
+                "disabled suggestions remained visible"
+            );
+            preferences.autosuggest_enabled = true;
+            pane.set_preferences(preferences, cx);
+            assert_eq!(
+                pane.terminal_autosuggest_candidates()
+                    .into_iter()
+                    .map(|candidate| candidate.command)
+                    .collect::<Vec<_>>(),
+                ["docker ps"],
+                "toggling suggestions must preserve the draft and history"
+            );
+
+            pane.observe_autosuggest_input_bytes(b"\r", cx);
+            assert!(!pane.autosuggest_prompt_active);
+            assert!(pane.terminal_autosuggest_candidates().is_empty());
+        });
+    }
+
+    #[gpui::test]
+    fn tui_input_does_not_reopen_or_populate_shell_history(cx: &mut TestAppContext) {
+        let (_, cx) = cx.add_window_view(|_, _| TerminalTestRoot);
+        for launch_input in [b"\x1b[A\r".as_slice(), b"co\t\r", b"codex\r"] {
+            let pane = cx.update(|window, cx| {
+                let mut preferences = TerminalUiPreferences::default();
+                preferences.command_history =
+                    SharedTerminalCommandHistory::from_commands(vec!["docker ps".into()]);
+                cx.new(|cx| {
+                    TerminalPane::new_recording_playback(
+                        DEFAULT_COLS,
+                        DEFAULT_ROWS,
+                        preferences,
+                        window,
+                        cx,
+                    )
+                    .unwrap()
+                })
+            });
+            pane.update(cx, |pane, cx| {
+                pane.test_accepts_input = true;
+                pane.handle_terminal_event(
+                    TerminalEvent::CwdChanged {
+                        cwd: "/work".into(),
+                        host: None,
+                    },
+                    cx,
+                );
+                pane.observe_autosuggest_input_bytes(launch_input, cx);
+                assert!(
+                    !pane.autosuggest_prompt_active,
+                    "every submission leaves the shell prompt"
+                );
+                pane.observe_autosuggest_input_bytes(b"docker explain this\r", cx);
+                let commands: Vec<_> = pane
+                    .history_command_records()
+                    .into_iter()
+                    .map(|record| record.command)
+                    .collect();
+                if launch_input == b"codex\r" {
+                    assert_eq!(commands, ["docker ps", "codex"]);
+                } else {
+                    assert_eq!(commands, ["docker ps"]);
+                }
+
+                // Inline TUIs can report their cwd without entering the alternate screen.
+                pane.terminal.lock().feed_recording_output(b"\x1b[?1004h");
+                pane.handle_terminal_event(
+                    TerminalEvent::CwdChanged {
+                        cwd: "/work/project".into(),
+                        host: None,
+                    },
+                    cx,
+                );
+                pane.observe_autosuggest_input_bytes(b"dock", cx);
+                pane.snapshot.lines[pane.snapshot.cursor_row].active_input = true;
+                assert!(pane.terminal_autosuggest_candidates().is_empty());
+
+                pane.terminal.lock().feed_recording_output(b"\x1b[?1004l");
+                pane.handle_terminal_event(
+                    TerminalEvent::CwdChanged {
+                        cwd: "/work".into(),
+                        host: None,
+                    },
+                    cx,
+                );
+                pane.observe_autosuggest_input_bytes(b"dock", cx);
+                assert_eq!(
+                    pane.terminal_autosuggest_candidates()
+                        .into_iter()
+                        .map(|candidate| candidate.command)
+                        .collect::<Vec<_>>(),
+                    ["docker ps"]
+                );
+
+                pane.terminal
+                    .lock()
+                    .feed_recording_output(b"\x1b]133;C\x07\x1b]7;file:///work\x07");
+                pane.tick(cx);
+                pane.observe_autosuggest_input_bytes(b"dock", cx);
+                assert!(
+                    !pane.autosuggest_prompt_active,
+                    "cwd reports must not override command execution"
+                );
+                assert!(pane.terminal_autosuggest_candidates().is_empty());
+                pane.terminal
+                    .lock()
+                    .feed_recording_output(b"\x1b]133;A\x07$ \x1b]133;B\x07");
+                pane.tick(cx);
+                pane.observe_autosuggest_input_bytes(b"dock", cx);
+                assert_eq!(
+                    pane.terminal_autosuggest_candidates()
+                        .into_iter()
+                        .map(|candidate| candidate.command)
+                        .collect::<Vec<_>>(),
+                    ["docker ps"]
+                );
+            });
+        }
+    }
+
+    #[gpui::test]
+    fn ai_command_without_end_event_recovers_input_only_after_fresh_prompt(
+        cx: &mut TestAppContext,
+    ) {
+        let (_, cx) = cx.add_window_view(|_, _| TerminalTestRoot);
+        let pane = cx.update(|window, cx| {
+            cx.new(|cx| {
+                TerminalPane::new_recording_playback(
+                    80,
+                    4,
+                    TerminalUiPreferences::default(),
+                    window,
+                    cx,
+                )
+                .unwrap()
+            })
+        });
+        pane.update(cx, |pane, cx| {
+            pane.test_accepts_input = true;
+            // The outer shell advertised integration before entering a nested host.
+            pane.terminal
+                .lock()
+                .feed_recording_output(b"\x1b]133;A\x07outer@jump:~$ \x1b]133;B\x07");
+            pane.tick(cx);
+            pane.terminal
+                .lock()
+                .feed_recording_output(b"ssh inner\r\ninner@host:~$ ");
+            pane.tick(cx);
+            assert!(pane.shell_integration_status().detected);
+            let id = pane
+                .begin_command_mark(
+                    "pip install example",
+                    TerminalCommandMarkDetectionSource::Ai,
+                    cx,
+                )
+                .unwrap();
+            pane.last_terminal_activity = Instant::now() - Duration::from_secs(1);
+            assert!(pane.ai_command_input_pending());
+            pane.terminal.lock().feed_recording_output(
+                b"pip install example\r\nInstalling /\rInstalling -\rInstalling \\",
+            );
+            pane.tick(cx);
+            pane.last_terminal_activity = Instant::now() - Duration::from_secs(1);
+            assert!(
+                pane.ai_command_input_pending(),
+                "quiet progress output must not free input"
+            );
+            pane.terminal
+                .lock()
+                .feed_recording_output(b"\r\ninner@host:~$");
+            pane.tick(cx);
+            // Recording injection bypasses the live PTY drain's activity clock.
+            pane.last_terminal_activity = Instant::now();
+            assert!(
+                !pane.ai_command_prompt_returned(&id),
+                "prompt must settle first"
+            );
+            pane.terminal.lock().feed_recording_output(b" ");
+            pane.tick(cx);
+            pane.last_terminal_activity = Instant::now() - Duration::from_secs(1);
+            assert!(pane.ai_command_prompt_returned(&id));
+            assert!(!pane.ai_command_input_pending());
+            let record = pane
+                .ai_command_records()
+                .into_iter()
+                .find(|record| record.command_id == id)
+                .unwrap();
+            assert_eq!(
+                (record.status, record.exit_code),
+                (crate::TerminalCommandFactStatus::Open, None)
+            );
+            // A later command owns a new prompt boundary; old evidence cannot release it.
+            let next = pane
+                .begin_command_mark("cd /tmp", TerminalCommandMarkDetectionSource::Ai, cx)
+                .unwrap();
+            assert!(!pane.ai_command_prompt_returned(&id));
+            assert!(pane.ai_command_input_pending());
+            pane.terminal
+                .lock()
+                .feed_recording_output(b"cd /tmp\r\ninner@host:/tmp$ ");
+            pane.tick(cx);
+            pane.last_terminal_activity = Instant::now() - Duration::from_secs(1);
+            assert!(pane.ai_command_prompt_returned(&next));
+            pane.terminal.lock().scroll_lines(1);
+            assert_eq!(pane.terminal.lock().snapshot().display_offset, 1);
+            assert!(
+                pane.ai_command_prompt_returned(&next),
+                "scrollback viewing must not hide the live prompt"
+            );
+            pane.terminal
+                .lock()
+                .feed_recording_output(b"\x1b[?1049hinner@host:/tmp$ ");
+            pane.tick(cx);
+            pane.last_terminal_activity = Instant::now() - Duration::from_secs(1);
+            assert!(
+                pane.ai_command_input_pending(),
+                "alternate-screen applications own their input"
+            );
+        });
+    }
+
+    #[test]
+    fn osc52_clipboard_read_respects_permission_and_formats_allowed_content() {
+        let read_called = Cell::new(false);
+
+        let response = build_osc52_clipboard_response(
+            false,
+            || {
+                read_called.set(true);
+                Some("clipboard".to_string())
+            },
+            &|text| format!("response:{text}"),
+        );
+
+        assert!(response.is_none());
+        assert!(!read_called.get());
+
+        let response =
+            build_osc52_clipboard_response(true, || Some("clipboard".to_string()), &|text| {
+                format!("response:{text}")
+            })
+            .unwrap();
+
+        assert_eq!(response.as_str(), "response:clipboard");
+    }
+
+    fn timestamp_test_cell(ch: char) -> TerminalCell {
+        TerminalCell {
+            ch,
+            wide: false,
+            fg: TerminalColor::rgb(0xe6, 0xe8, 0xeb),
+            bg: TerminalColor::rgb(0x0d, 0x0f, 0x12),
+            style_origin: Default::default(),
+            attrs: TerminalAttrs::default(),
+            extra: None,
+            cursor: false,
+        }
+    }
+
+    fn timestamp_test_row(absolute_line: i64, text: &str) -> TerminalRow {
+        timestamp_test_row_with_cursor(absolute_line, text, None, false)
+    }
+
+    fn timestamp_test_row_with_cursor(
+        absolute_line: i64,
+        text: &str,
+        cursor_col: Option<usize>,
+        active_input: bool,
+    ) -> TerminalRow {
+        let mut cells = text.chars().map(timestamp_test_cell).collect::<Vec<_>>();
+        if cells.is_empty() {
+            cells.push(timestamp_test_cell(' '));
+        }
+        if let Some(cursor_col) = cursor_col
+            && let Some(cell) = cells.get_mut(cursor_col)
+        {
+            cell.cursor = true;
+        }
+        let mut row = TerminalRow {
+            line_id: absolute_line.max(0) as u64,
+            source_id: absolute_line.max(0) as usize,
+            absolute_line,
+            cells: Arc::new(cells),
+            wrapped: false,
+            active_input,
+            signature: 0,
+        };
+        row.refresh_signature();
+        row
+    }
+
+    fn timestamp_test_snapshot(row: TerminalRow) -> TerminalSnapshot {
+        TerminalSnapshot {
+            generation: 1,
+            cols: row.cells.len().max(1),
+            rows: 1,
+            cursor_col: 0,
+            cursor_row: 0,
+            cursor_shape: TerminalCursorShape::Block,
+            display_offset: 0,
+            scrollback_lines: 0,
+            lines: vec![row],
+            images: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn snapshot_line_ids_follow_scrolled_sources_without_reusing_recycled_rows() {
+        let mut previous_lines = (0..3)
+            .map(|line| timestamp_test_row(line, &format!("line-{line}")))
+            .collect::<Vec<_>>();
+        for (index, row) in previous_lines.iter_mut().enumerate() {
+            row.line_id = 10 + index as u64;
+            row.source_id = 100 + index;
+        }
+        let previous = TerminalSnapshot {
+            generation: 1,
+            cols: 8,
+            rows: 3,
+            cursor_col: 0,
+            cursor_row: 2,
+            cursor_shape: TerminalCursorShape::Block,
+            display_offset: 0,
+            scrollback_lines: 0,
+            lines: previous_lines,
+            images: Vec::new(),
+        };
+        let mut next = previous.clone();
+        next.lines = vec![
+            previous.lines[1].clone(),
+            previous.lines[2].clone(),
+            previous.lines[0].clone(),
+        ];
+        for (index, row) in next.lines.iter_mut().enumerate() {
+            row.line_id = 0;
+            row.absolute_line = index as i64;
+        }
+        next.lines[0].signature = 2_000;
+        let mut next_line_id = 20;
+
+        reconcile_snapshot_line_ids(&mut next, &previous, &mut next_line_id);
+
+        assert_eq!(
+            next.lines.iter().map(|row| row.line_id).collect::<Vec<_>>(),
+            vec![11, 12, 20]
+        );
+        assert_eq!(next_line_id, 21);
+    }
+
+    #[test]
+    fn row_timestamps_track_last_modified_nonblank_content() {
+        let mut store = TerminalRowTimestampStore::default();
+        let blank_snapshot = timestamp_test_snapshot(timestamp_test_row(42, "   "));
+        record_timestampable_snapshot_rows(&mut store, &blank_snapshot, "10:00:00");
+
+        // This fixture uses emulator source identity 42.
+        assert!(!store.entries.contains_key(&42));
+
+        let content_snapshot = timestamp_test_snapshot(timestamp_test_row(42, "ls"));
+        record_timestampable_snapshot_rows(&mut store, &content_snapshot, "10:00:01");
+
+        assert_eq!(
+            store.get(42).map(|timestamp| timestamp.label.as_str()),
+            Some("10:00:01")
+        );
+
+        let unchanged_snapshot =
+            timestamp_test_snapshot(timestamp_test_row_with_cursor(42, "ls", Some(1), true));
+        record_timestampable_snapshot_rows(&mut store, &unchanged_snapshot, "10:00:02");
+        let unchanged_timestamp = store.get(42).expect("timestamped row");
+        assert_eq!(unchanged_timestamp.label, "10:00:01");
+        assert_eq!(
+            unchanged_timestamp.source_signature,
+            unchanged_snapshot.lines[0].signature
+        );
+
+        let changed_snapshot = timestamp_test_snapshot(timestamp_test_row(42, "pwd"));
+        record_timestampable_snapshot_rows(&mut store, &changed_snapshot, "10:00:03");
+        assert_eq!(
+            store.get(42).map(|timestamp| timestamp.label.as_str()),
+            Some("10:00:03")
+        );
+
+        // Showing or hiding the timestamp gutter reserves columns and resizes
+        // the grid; the wider row must keep the label of the unchanged content.
+        let wider_snapshot = timestamp_test_snapshot(timestamp_test_row(42, "pwd        "));
+        record_timestampable_snapshot_rows(&mut store, &wider_snapshot, "10:00:04");
+        assert_eq!(
+            store.get(42).map(|timestamp| timestamp.label.as_str()),
+            Some("10:00:03"),
+            "a width-only change must not re-stamp an unchanged row"
+        );
+        assert_eq!(
+            store.get(42).map(|timestamp| timestamp.source_signature),
+            Some(wider_snapshot.lines[0].signature),
+            "the cheap invalidation key still follows the snapshot"
+        );
+
+        let label = terminal_timestamp_label(1, 2, 3, 4);
+        assert_eq!(label, "[01:02:03.004]");
+        assert_eq!(label.chars().count(), TERMINAL_TIMESTAMP_LABEL_CELLS);
+
+        let cleared_snapshot = timestamp_test_snapshot(timestamp_test_row(42, ""));
+        record_timestampable_snapshot_rows(&mut store, &cleared_snapshot, "10:00:05");
+
+        assert!(!store.entries.contains_key(&42));
+    }
+
+    #[test]
+    fn row_timestamps_track_styled_trailing_spaces() {
+        for style in ["\x1b[41m", "\x1b[4m", "\x1b]8;;https://example.com\x07"] {
+            let mut terminal =
+                TerminalSession::recording_playback(12, 1, GraphicsOptions::default(), 10);
+            terminal.feed_recording_output(b"pwd   ");
+            let initial = terminal.snapshot();
+            let key = terminal_row_timestamp_identity(&initial.lines[0]);
+            let mut store = TerminalRowTimestampStore::default();
+            record_timestampable_snapshot_rows(&mut store, &initial, "old");
+
+            terminal.feed_recording_output(b"\x1b[1;4H");
+            terminal.feed_recording_output(style.as_bytes());
+            terminal.feed_recording_output(b" \x1b[0m\x1b]8;;\x07");
+            record_timestampable_snapshot_rows(&mut store, &terminal.snapshot(), "styled");
+            assert_eq!(store.get(key).unwrap().label, "styled", "{style:?}");
+
+            terminal.feed_recording_output(b"\x1b[1;4H ");
+            record_timestampable_snapshot_rows(&mut store, &terminal.snapshot(), "cleared");
+            assert_eq!(store.get(key).unwrap().label, "cleared", "{style:?}");
+        }
+    }
+
+    #[test]
+    fn timestamp_identity_survives_burst_output_and_viewport_jumps() {
+        let mut terminal =
+            TerminalSession::recording_playback(20, 3, GraphicsOptions::default(), 10);
+        terminal.feed_recording_output(b"same\r\nsame\r\nsame\r\nsame\r\nsame\r\nsame\r\nsame\r\nsame\r\nsame\r\nsame\r\nkept\r\nsame");
+        let before = terminal.snapshot();
+        let kept = before
+            .lines
+            .iter()
+            .find(|row| row.text().trim() == "kept")
+            .unwrap();
+        let original_key = terminal_row_timestamp_identity(kept);
+        let mut store = TerminalRowTimestampStore::default();
+        record_timestampable_snapshot_rows(&mut store, &before, "old");
+        terminal.feed_recording_output(b"\r\nsame\r\nsame\r\nsame\r\nsame");
+        let after = terminal.snapshot();
+        record_timestampable_snapshot_rows(&mut store, &after, "new");
+        for row in after.lines.iter().filter(|row| row.text().trim() == "same") {
+            assert_eq!(
+                store
+                    .get(terminal_row_timestamp_identity(row))
+                    .unwrap()
+                    .label,
+                "new"
+            );
+        }
+        terminal.scroll_to_top();
+        let top = terminal.snapshot();
+        record_timestampable_snapshot_rows(&mut store, &top, "scroll");
+        terminal.scroll_to_display_offset(4);
+        let historical = terminal.snapshot();
+        let kept = historical
+            .lines
+            .iter()
+            .find(|row| row.text().trim() == "kept")
+            .unwrap();
+        record_timestampable_snapshot_rows(&mut store, &historical, "scroll");
+        assert_eq!(terminal_row_timestamp_identity(kept), original_key);
+        assert_eq!(store.get(original_key).unwrap().label, "old");
+    }
+
+    #[test]
+    fn timestamp_identity_follows_local_line_deletion_without_moving_other_rows() {
+        let mut terminal =
+            TerminalSession::recording_playback(20, 4, GraphicsOptions::default(), 10);
+        terminal.feed_recording_output(b"fixed\r\nremoved\r\nkept\r\nlast");
+        let before = terminal.snapshot();
+        let mut store = TerminalRowTimestampStore::default();
+        record_timestampable_snapshot_rows(&mut store, &before, "old");
+        terminal.feed_recording_output(b"\x1b[2;1H\x1b[M");
+        let after = terminal.snapshot();
+        assert_eq!(after.scrollback_lines, before.scrollback_lines);
+        record_timestampable_snapshot_rows(&mut store, &after, "new");
+        for text in ["fixed", "kept", "last"] {
+            let row = after
+                .lines
+                .iter()
+                .find(|row| row.text().trim() == text)
+                .unwrap();
+            assert_eq!(
+                store
+                    .get(terminal_row_timestamp_identity(row))
+                    .unwrap()
+                    .label,
+                "old",
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn timestamp_cache_bounds_sparse_identities_and_revisited_history() {
+        let timestamp = |id: u64| TerminalRowTimestamp {
+            label: id.to_string(),
+            signature: id,
+            source_signature: id,
+        };
+        let mut entries = (0..1100)
+            .map(|id| (id * 1000, timestamp(id)))
+            .collect::<HashMap<_, _>>();
+        trim_row_timestamp_history(&mut entries, 50);
+        assert_eq!(entries.len(), 50);
+        assert!(entries.contains_key(&1_099_000));
+        for id in 0..1100 {
+            entries.insert(id, timestamp(id));
+        }
+        trim_row_timestamp_history(&mut entries, 50);
+        assert_eq!(entries.len(), 50);
+        assert!(!entries.contains_key(&1));
+    }
+
+    #[gpui::test]
+    fn session_highlight_override_wins_over_connection_and_application_rules(
+        cx: &mut TestAppContext,
+    ) {
+        let (_, cx) = cx.add_window_view(|_window, _cx| TerminalTestRoot);
+        // Highlight precedence is independent of a live shell and must not start a PTY.
+        let pane = cx.update(|window, cx| {
+            cx.new(|cx| {
+                TerminalPane::new_recording_playback(
+                    DEFAULT_COLS,
+                    DEFAULT_ROWS,
+                    TerminalUiPreferences::default(),
+                    window,
+                    cx,
+                )
+                .expect("test terminal pane")
+            })
+        });
+        let rule = |id: &str| TerminalHighlightRule {
+            id: id.to_string(),
+            pattern: id.to_string(),
+            enabled: true,
+            ..TerminalHighlightRule::default()
+        };
+        pane.update(cx, |pane, cx| {
+            let mut application = TerminalUiPreferences::default();
+            application.highlight_rules = Arc::from([rule("application")]);
+            pane.set_preference_overrides(
+                TerminalUiPreferenceOverrides {
+                    highlight_rules: Some(Arc::from([rule("connection")])),
+                    highlight_rule_set_id: Some("connection-set".to_string()),
+                    ..TerminalUiPreferenceOverrides::default()
+                },
+                application.clone(),
+                cx,
+            );
+            pane.set_session_highlight_override(
+                Some(TerminalHighlightRuleSetOverride {
+                    id: "session-set".to_string(),
+                    rules: Arc::from([rule("session")]),
+                }),
+                application,
+                cx,
+            );
+        });
+
+        pane.read_with(cx, |pane, _cx| {
+            assert_eq!(pane.preferences.highlight_rules[0].id, "session");
+            assert_eq!(pane.session_highlight_rule_set_id(), Some("session-set"));
+        });
+    }
+}
+
+#[cfg(test)]
+#[path = "app/ssh_worker_tests.rs"]
+mod ssh_worker_tests;

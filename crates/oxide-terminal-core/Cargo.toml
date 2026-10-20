@@ -1,0 +1,52 @@
+[lints]
+workspace = true
+
+[package]
+name = "oxide-terminal-core"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+oxide-audit = { path = "../oxide-audit" }
+alacritty_terminal.workspace = true
+anyhow.workspace = true
+async-channel.workspace = true
+crossbeam-channel.workspace = true
+fernomade-predict = { path = "../fernomade/predict" }
+libc.workspace = true
+memchr.workspace = true
+oxide-ssh = { path = "../oxide-ssh" }
+oxide-modem-transfer = { path = "../oxide-modem-transfer" }
+oxide-mosh = { path = "../oxide-mosh" }
+oxide-network-proxy = { path = "../oxide-network-proxy" }
+oxide-terminal-encoding = { path = "../oxide-terminal-encoding" }
+oxide-terminal-graphics = { path = "../oxide-terminal-graphics" }
+oxide-terminal-model = { path = "../oxide-terminal-model" }
+oxide-terminal-triggers = { path = "../oxide-terminal-triggers" }
+oxide-tmux = { path = "../oxide-tmux" }
+oxide-trzsz = { path = "../oxide-trzsz" }
+polling.workspace = true
+serialport.workspace = true
+serde.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tempfile = "3.23"
+unicode-segmentation.workspace = true
+zeroize.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading"] }
+
+[dev-dependencies]
+russh.workspace = true
+rand.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "terminal_pipeline"
+harness = false
+
+[[bench]]
+name = "privilege_prompt_stream"
+harness = false

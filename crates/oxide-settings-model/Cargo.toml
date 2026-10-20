@@ -1,0 +1,17 @@
+[lints]
+workspace = true
+
+[package]
+name = "oxide-settings-model"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+
+oxide-cloud-sync = { path = "../oxide-cloud-sync" }
+oxide-settings = { path = "../oxide-settings" }
+oxide-terminal-semantic = { path = "../oxide-terminal-semantic", default-features = false }
+oxide-theme = { path = "../oxide-theme" }
+serde_json.workspace = true
+zeroize.workspace = true

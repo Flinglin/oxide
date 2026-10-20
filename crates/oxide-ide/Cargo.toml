@@ -1,0 +1,24 @@
+[lints]
+workspace = true
+
+[package]
+name = "oxide-ide"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+gpui.workspace = true
+oxide-audit = { path = "../oxide-audit" }
+oxide-editor-syntax = { path = "../oxide-editor-syntax" }
+oxide-editor = { path = "../oxide-editor" }
+oxide-ui = { path = "../oxide-ui" }
+oxide-ide-core = { path = "../oxide-ide-core" }
+oxide-ide-fs = { path = "../oxide-ide-fs" }
+oxide-ssh = { path = "../oxide-ssh" }
+oxide-theme = { path = "../oxide-theme" }
+tokio.workspace = true
+unicode-segmentation.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }

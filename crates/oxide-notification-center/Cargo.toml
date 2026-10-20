@@ -1,0 +1,10 @@
+[lints]
+workspace = true
+
+[package]
+name = "oxide-notification-center"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]

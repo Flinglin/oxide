@@ -1,0 +1,2305 @@
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[cfg(unix)]
+    use crate::recording_test_support::{AuditTestKeys, PausedFiles};
+
+    use alacritty_terminal::{
+        event::VoidListener,
+        term::Config,
+        term::color::Colors,
+        vte::ansi::{Color, NamedColor, Processor, Rgb, StdSyncHandler},
+    };
+    use oxide_terminal_graphics::{GraphicsIngress, TerminalGraphicsSegment};
+
+    use crate::{
+        color::{
+            DEFAULT_MINIMUM_CONTRAST_SCORE, OXIDE_DARK_THEME, color_for_alacritty_request,
+            perceptual_contrast_score, style_colors_for_cell,
+        },
+        process::{parse_lsof_cwd, parse_process_table_for_group},
+    };
+
+    #[cfg(unix)]
+    #[test]
+    fn local_pty_exit_records_actual_child_code_without_input() {
+        use oxide_audit::{AuditContext, AuditOutcome, AuditQuery, AuditService, AuditSource};
+
+        let directory = tempfile::tempdir().unwrap();
+        oxide_audit::AuditStore::open(&directory.path().join("audit.db"), &AuditTestKeys)
+            .unwrap()
+            .set_policy(oxide_audit::AuditPolicy {
+                enabled: true,
+                ..Default::default()
+            })
+            .unwrap();
+        let service =
+            AuditService::with_key_provider(directory.path().join("audit.db"), AuditTestKeys)
+                .unwrap();
+        let context =
+            AuditContext::new(service.client(), AuditSource::User).session("local", "localhost");
+        let config = crate::LocalPtyConfig {
+            shell: Some(
+                crate::ShellInfo::new("test-sh", "Test", "/bin/sh")
+                    .with_args(vec!["-c".into(), "exit 7".into()]),
+            ),
+            load_profile: false,
+            ..Default::default()
+        };
+        let mut session = LocalPtySession::spawn_with_config_graphics_encoding_and_audit(
+            20,
+            4,
+            config,
+            Default::default(),
+            Default::default(),
+            100,
+            Some(context),
+        )
+        .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while session.lifecycle.is_running() && std::time::Instant::now() < deadline {
+            session.drain_output();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(matches!(
+            session.lifecycle,
+            TerminalLifecycle::Exited(Some(7))
+        ));
+        let page = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(service.client().query(AuditQuery {
+                limit: 20,
+                ..Default::default()
+            }))
+            .unwrap();
+        let exit = page.records.iter().find(|record| {
+            record.details.operation.as_ref().is_some_and(|operation| {
+                operation.action == "local_terminal_exit"
+                    && operation.outcome == AuditOutcome::Failed
+            })
+        });
+        assert_eq!(
+            exit.unwrap().details.operation.as_ref().unwrap().exit_code,
+            Some(7)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_reader_records_output_resize_and_exit_without_pane_drain() {
+        use oxide_audit::{
+            AuditContext, AuditPolicy, AuditService, AuditSource, RecordingState,
+            StoredRecordingFrameKind,
+        };
+
+        let directory = tempfile::tempdir().unwrap();
+        let service =
+            AuditService::with_key_provider(directory.path().join("audit.db"), AuditTestKeys)
+                .unwrap();
+        let client = service.client();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime
+            .block_on(client.set_policy(AuditPolicy {
+                enabled: true,
+                record_output: true,
+                ..Default::default()
+            }))
+            .unwrap();
+        let context =
+            AuditContext::new(client.clone(), AuditSource::User).session("local", "localhost");
+        let session_id = context.session_id.clone();
+        let config = crate::LocalPtyConfig {
+            shell: Some(
+                crate::ShellInfo::new("test-sh", "Test", "/bin/sh").with_args(vec![
+                    "-c".into(),
+                    "stty -echo; printf 'ready\\r\\n'; IFS= read -r secret; printf 'done\\r\\n'"
+                        .into(),
+                ]),
+            ),
+            load_profile: false,
+            ..Default::default()
+        };
+        let mut session = LocalPtySession::spawn_with_config_graphics_encoding_and_audit(
+            80,
+            24,
+            config,
+            Default::default(),
+            Default::default(),
+            100,
+            Some(context),
+        )
+        .unwrap();
+        assert_eq!(
+            TerminalSessionBackend::audit_context(&session)
+                .unwrap()
+                .session_id,
+            session_id
+        );
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut saw_ready = false;
+        while std::time::Instant::now() < deadline {
+            let list = runtime.block_on(client.list_recordings(None, 10)).unwrap();
+            if let Some(recording) = list.recordings.first() {
+                let page = runtime
+                    .block_on(client.read_recording_page(recording.id.clone(), None, None, 10))
+                    .unwrap();
+                saw_ready = page
+                    .chunks
+                    .iter()
+                    .flat_map(|chunk| &chunk.frames)
+                    .any(|frame| {
+                        matches!(&frame.kind, StoredRecordingFrameKind::Output(bytes)
+                        if bytes.windows(b"ready".len()).any(|window| window == b"ready"))
+                    });
+            }
+            if saw_ready {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(saw_ready);
+        session.resize(40, 12).unwrap();
+        session.write_text("private-input\r").unwrap();
+
+        let mut recording_id = None;
+        while std::time::Instant::now() < deadline {
+            let list = runtime.block_on(client.list_recordings(None, 10)).unwrap();
+            if let Some(recording) = list.recordings.first()
+                && recording.state == RecordingState::Finished
+            {
+                recording_id = Some(recording.id.clone());
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let page = runtime
+            .block_on(client.read_recording_page(
+                recording_id.expect("PTY exit should finish the recording"),
+                None,
+                None,
+                10,
+            ))
+            .unwrap();
+        let mut output = Vec::new();
+        let mut sizes = Vec::new();
+        for frame in page.chunks.iter().flat_map(|chunk| &chunk.frames) {
+            match &frame.kind {
+                StoredRecordingFrameKind::Output(bytes) => output.extend_from_slice(bytes),
+                StoredRecordingFrameKind::Resize { columns, rows } => sizes.push((*columns, *rows)),
+                StoredRecordingFrameKind::Gap { .. } => panic!("unexpected recording gap"),
+            }
+        }
+        assert!(
+            output
+                .windows(b"ready".len())
+                .any(|window| window == b"ready")
+        );
+        assert!(
+            output
+                .windows(b"done".len())
+                .any(|window| window == b"done")
+        );
+        assert!(
+            !output
+                .windows(b"private-input".len())
+                .any(|window| window == b"private-input")
+        );
+        assert!(sizes.contains(&(80, 24)));
+        assert!(sizes.contains(&(40, 12)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_recording_pressure_preserves_output_and_services_input_and_close() {
+        let _pressure_guard = crate::recording_test_support::RECORDING_PRESSURE_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        use oxide_audit::{
+            AuditContext, AuditPolicy, AuditService, AuditSource, AuditStore, RecordingState,
+            StoredRecordingFrameKind,
+        };
+        use std::sync::{
+            Arc, Mutex,
+            atomic::AtomicBool,
+            mpsc,
+        };
+        use std::time::{Duration, Instant};
+
+        let corpus = (0..600_000)
+            .map(|index| format!("{index:08}:0123456789abcdef0123456789abcdef\r\n"))
+            .collect::<String>();
+        for cancel in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let database = directory.path().join("audit.db");
+            let fixture = directory.path().join("output");
+            let acknowledged = directory.path().join("input");
+            let ready = directory.path().join("ready");
+            let finished = directory.path().join("finished");
+            std::fs::write(&fixture, corpus.as_bytes()).unwrap();
+            let (entered, waiting) = mpsc::channel();
+            let (resume, resumed) = mpsc::channel();
+            let service = AuditService::with_recording_files(
+                database.clone(),
+                AuditTestKeys,
+                Arc::new(PausedFiles {
+                    first: AtomicBool::new(false),
+                    entered,
+                    resume: Mutex::new(resumed),
+                }),
+            )
+            .unwrap();
+            let client = service.client();
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            runtime
+                .block_on(client.set_policy(AuditPolicy {
+                    enabled: true,
+                    record_output: true,
+                    ..Default::default()
+                }))
+                .unwrap();
+            let context = AuditContext::new(client.clone(), AuditSource::User)
+                .session("local", "pressure-fixture");
+            let config = crate::LocalPtyConfig {
+                shell: Some(crate::ShellInfo::new("test-sh", "Test", "/bin/sh").with_args(vec![
+                    "-c".into(),
+                    r#"stty raw -echo; printf ready > "$3"; read line; cat "$1" & output=$!; dd bs=1 count=1 of="$2" 2>/dev/null; wait "$output"; printf finished > "$4"; read line"#.into(),
+                    "pressure-fixture".into(), fixture.to_string_lossy().into_owned(), acknowledged.to_string_lossy().into_owned(), ready.to_string_lossy().into_owned(), finished.to_string_lossy().into_owned(),
+                ])), load_profile: false, ..Default::default()
+            };
+            let mut session = LocalPtySession::spawn_with_config_graphics_encoding_and_audit(
+                120,
+                24,
+                config,
+                Default::default(),
+                Default::default(),
+                100,
+                Some(context),
+            )
+            .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(30);
+            while !ready.exists() {
+                assert!(Instant::now() < deadline, "PTY did not become ready");
+                std::thread::yield_now();
+            }
+            session.write_input(b"\n").unwrap();
+            waiting
+                .recv_timeout(Duration::from_secs(30))
+                .expect("recording did not reach file I/O");
+            loop {
+                let report = session
+                    .stats_rx
+                    .recv_timeout(Duration::from_secs(30))
+                    .expect("PTY did not report recording pressure");
+                if report.recording_backpressured {
+                    break;
+                }
+            }
+            assert!(
+                !finished.exists(),
+                "producer finished before pressure reached the PTY"
+            );
+            session.write_input(b"x").unwrap();
+            let input_deadline = Instant::now() + Duration::from_secs(3);
+            while std::fs::read(&acknowledged).unwrap_or_default() != b"x" {
+                assert!(
+                    Instant::now() < input_deadline,
+                    "recording pressure blocked PTY input"
+                );
+                std::thread::yield_now();
+            }
+            if cancel {
+                let reader = session.io_thread.take().unwrap();
+                session.shutdown();
+                let close_deadline = Instant::now() + Duration::from_secs(3);
+                while !reader.is_finished() {
+                    assert!(
+                        Instant::now() < close_deadline,
+                        "closing PTY waited for recording I/O"
+                    );
+                    std::thread::yield_now();
+                }
+                reader.join().unwrap();
+            }
+            resume.send(()).unwrap();
+            if !cancel {
+                let finish_deadline = Instant::now() + Duration::from_secs(30);
+                while !finished.exists() {
+                    assert!(
+                        Instant::now() < finish_deadline,
+                        "PTY did not resume after recording capacity returned"
+                    );
+                    session.drain_output();
+                    std::thread::yield_now();
+                }
+                session.write_input(b"\n").unwrap();
+            }
+            let complete_deadline = Instant::now() + Duration::from_secs(30);
+            loop {
+                session.drain_output();
+                let list = runtime.block_on(client.list_recordings(None, 10)).unwrap();
+                if list
+                    .recordings
+                    .first()
+                    .is_some_and(|recording| recording.state != RecordingState::InProgress)
+                {
+                    break;
+                }
+                assert!(
+                    Instant::now() < complete_deadline,
+                    "recording did not finish"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            drop(service);
+            let store = AuditStore::open(&database, &AuditTestKeys).unwrap();
+            let list = store.list_recordings(None, 10).unwrap();
+            assert_eq!(
+                list.recordings[0].state,
+                if cancel {
+                    RecordingState::Interrupted
+                } else {
+                    RecordingState::Finished
+                }
+            );
+            let mut actual = Vec::new();
+            let mut cursor = None;
+            loop {
+                let page = store
+                    .read_recording_page(&list.recordings[0].id, cursor, None, 16)
+                    .unwrap();
+                for frame in page.chunks.iter().flat_map(|chunk| &chunk.frames) {
+                    match &frame.kind {
+                        StoredRecordingFrameKind::Output(bytes) => actual.extend_from_slice(bytes),
+                        StoredRecordingFrameKind::Gap { .. } => {
+                            panic!("accepted PTY output was lost")
+                        }
+                        StoredRecordingFrameKind::Resize { .. } => {}
+                    }
+                }
+                cursor = page.next_cursor;
+                if cursor.is_none() {
+                    break;
+                }
+            }
+            if cancel {
+                assert!(!actual.is_empty() && actual.len() < corpus.len());
+                assert_eq!(actual, corpus.as_bytes()[..actual.len()]);
+            } else {
+                assert_eq!(actual, corpus.as_bytes());
+                assert_eq!(client.health().unrecorded, 0);
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "manual release-profile local PTY throughput benchmark"]
+    fn local_pty_output_benchmark() {
+        use oxide_audit::{
+            AuditContext, AuditPolicy, AuditService, AuditSource, AuditStore,
+            StoredRecordingFrameKind,
+        };
+        use std::time::{Duration, Instant};
+        let record_output = std::env::var("oxide_BENCH_RECORD_OUTPUT").as_deref() == Ok("1");
+        let audit_directory = tempfile::tempdir().unwrap();
+        let audit_service =
+            AuditService::with_key_provider(audit_directory.path().join("audit.db"), AuditTestKeys)
+                .unwrap();
+        let audit_client = audit_service.client();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime
+            .block_on(audit_client.set_policy(AuditPolicy {
+                enabled: true,
+                record_output,
+                ..Default::default()
+            }))
+            .unwrap();
+        let corpus_file = tempfile::NamedTempFile::new().unwrap();
+        let input_ack = tempfile::NamedTempFile::new().unwrap();
+        for (name, pattern) in [
+            (
+                "plain",
+                "terminal benchmark output abcdefghijklmnopqrstuvwxyz 0123456789\r\n",
+            ),
+            (
+                "ansi",
+                "\x1b[38;5;42mcolored output\x1b[0m terminal benchmark\r\n",
+            ),
+            (
+                "unicode",
+                "中文输出终端性能测试 e\u{301} 🦀 日本語かなカナ\r\n",
+            ),
+        ] {
+            let corpus = pattern.repeat((16 * 1024 * 1024) / pattern.len());
+            std::fs::write(corpus_file.path(), &corpus).unwrap();
+            for round in 0..4 {
+                std::fs::write(input_ack.path(), []).unwrap();
+                let config = crate::LocalPtyConfig {
+                    shell: Some(crate::ShellInfo::new("test-sh", "Test", "/bin/sh").with_args(vec![
+                        "-c".into(),
+                        r#"stty raw -echo; printf '\033]2;ready\007'; read line; cat "$1" & output=$!; dd bs=1 count=1 of="$2" 2>/dev/null; wait "$output"; printf '\r\nBENCH-END\r\n\033]2;done\007'; read line"#.into(),
+                        "pty-benchmark".into(),
+                        corpus_file.path().to_string_lossy().into_owned(),
+                        input_ack.path().to_string_lossy().into_owned(),
+                    ])),
+                    load_profile: false,
+                    ..Default::default()
+                };
+                let context = AuditContext::new(audit_client.clone(), AuditSource::User)
+                    .session("local", "benchmark");
+                let mut session = LocalPtySession::spawn_with_config_graphics_encoding_and_audit(
+                    120,
+                    40,
+                    config,
+                    Default::default(),
+                    Default::default(),
+                    20_000,
+                    Some(context),
+                )
+                .unwrap();
+                let startup = Instant::now();
+                while session.title.as_deref() != Some("ready") {
+                    assert!(
+                        startup.elapsed() < Duration::from_secs(10),
+                        "startup timeout"
+                    );
+                    session.drain_output();
+                    session.take_events();
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                let started = Instant::now();
+                session.write_input(b"\n").unwrap();
+                let mut report = TerminalDrainReport::default();
+                let mut input_started = None;
+                let mut input_latency = None;
+                while session.title.as_deref() != Some("done") {
+                    assert!(
+                        started.elapsed() < Duration::from_secs(30),
+                        "output timeout: {name}"
+                    );
+                    report.combine(session.drain_output_with_budget(
+                        TerminalDrainBudget::unlimited().with_performance_metrics(true),
+                    ));
+                    if report.drained_bytes >= 256 * 1024 && input_started.is_none() {
+                        input_started = Some(Instant::now());
+                        session.write_input(b"x").unwrap();
+                    }
+                    if let Some(started) = input_started {
+                        if input_latency.is_none()
+                            && std::fs::read(input_ack.path()).unwrap() == b"x"
+                        {
+                            input_latency = Some(started.elapsed());
+                        }
+                    }
+                    session.take_events();
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                let elapsed = started.elapsed();
+                let rss_kib = std::process::Command::new("ps")
+                    .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+                    .output()
+                    .ok()
+                    .and_then(|output| String::from_utf8(output.stdout).ok())
+                    .and_then(|value| value.trim().parse::<u64>().ok());
+                let snapshot = session.snapshot();
+                assert!(snapshot.lines.iter().any(|line| {
+                    line.cells
+                        .iter()
+                        .map(|cell| cell.ch)
+                        .collect::<String>()
+                        .starts_with("BENCH-END")
+                }));
+                session.write_input(b"\n").unwrap();
+                let shutdown = Instant::now();
+                while session.lifecycle().is_running() {
+                    assert!(
+                        shutdown.elapsed() < Duration::from_secs(5),
+                        "shutdown timeout"
+                    );
+                    session.drain_output();
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                eprintln!(
+                    "PTY_BENCH {name} round={round} record_output={record_output} bytes={} elapsed_ms={:.3} parse_ms={:.3} lock_ms={:.3} max_chunk={} input_ack_ms={:.3} unrecorded={} rss_kib={rss_kib:?}",
+                    corpus.len(),
+                    elapsed.as_secs_f64() * 1000.0,
+                    report.output_processing_duration.as_secs_f64() * 1000.0,
+                    report.terminal_lock_wait_duration.as_secs_f64() * 1000.0,
+                    report.max_data_chunk_bytes,
+                    input_latency
+                        .expect("input was not acknowledged during output")
+                        .as_secs_f64()
+                        * 1000.0,
+                    audit_client.health().unrecorded,
+                );
+            }
+        }
+        drop(audit_service);
+        if record_output {
+            let store =
+                AuditStore::open(&audit_directory.path().join("audit.db"), &AuditTestKeys).unwrap();
+            let mut stored_bytes = 0u64;
+            let mut lost_bytes = 0u64;
+            let mut unknown_gaps = 0u64;
+            let mut recording_cursor = None;
+            loop {
+                let list = store.list_recordings(recording_cursor, 100).unwrap();
+                for recording in list.recordings {
+                    let mut chunk_cursor = None;
+                    loop {
+                        let page = store
+                            .read_recording_page(&recording.id, chunk_cursor, None, 16)
+                            .unwrap();
+                        for frame in page.chunks.iter().flat_map(|chunk| &chunk.frames) {
+                            match &frame.kind {
+                                StoredRecordingFrameKind::Output(bytes) => {
+                                    stored_bytes += bytes.len() as u64
+                                }
+                                StoredRecordingFrameKind::Gap {
+                                    lost_bytes: Some(bytes),
+                                } => lost_bytes += *bytes,
+                                StoredRecordingFrameKind::Gap { lost_bytes: None } => {
+                                    unknown_gaps += 1
+                                }
+                                StoredRecordingFrameKind::Resize { .. } => {}
+                            }
+                        }
+                        chunk_cursor = page.next_cursor;
+                        if chunk_cursor.is_none() {
+                            break;
+                        }
+                    }
+                }
+                recording_cursor = list.next_cursor;
+                if recording_cursor.is_none() {
+                    break;
+                }
+            }
+            eprintln!(
+                "PTY_BENCH_CAPTURE stored_bytes={stored_bytes} lost_bytes={lost_bytes} unknown_gaps={unknown_gaps} lost_pct={:.2}",
+                100.0 * lost_bytes as f64 / (lost_bytes + stored_bytes).max(1) as f64
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn busy_render_snapshot_preserves_damage_and_selection_for_retry() {
+        let config = crate::LocalPtyConfig {
+            shell: Some(
+                crate::ShellInfo::new("test-sh", "Test", "/bin/sh")
+                    .with_args(vec!["-c".into(), "read line".into()]),
+            ),
+            load_profile: false,
+            ..Default::default()
+        };
+        let session = LocalPtySession::spawn_with_config_graphics_and_encoding(
+            20,
+            4,
+            config,
+            Default::default(),
+            Default::default(),
+            100,
+        )
+        .unwrap();
+        let previous = session.snapshot();
+        let term = session.term.clone();
+        let mut guard = term.lock_unfair();
+        let mut parser = Processor::<StdSyncHandler>::new();
+        parser.advance(&mut *guard, b"\x1b[?2004hupdated");
+        let range = crate::TerminalSelectionRange {
+            start_line: 0,
+            end_line: 0,
+            start_col: 0,
+            end_col: 2,
+            is_block: false,
+        };
+        crate::selection::set_term_selection(&mut guard, Some(range));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            tx.send(session.try_render_snapshot(&previous, true))
+                .unwrap();
+            (session, previous)
+        });
+        let attempt = rx.recv_timeout(std::time::Duration::from_millis(100));
+        drop(guard);
+        let (mut session, previous) = worker.join().unwrap();
+        let next = session.try_render_snapshot(&previous, true);
+        session.shutdown();
+        assert!(
+            matches!(attempt, Ok(None)),
+            "render waited for the busy parser"
+        );
+        let (snapshot, selection, mode) = next.unwrap();
+        assert!(mode.contains(TermMode::BRACKETED_PASTE));
+        assert_eq!(selection, Some(range));
+        let text: String = snapshot.lines[0]
+            .cells
+            .iter()
+            .take(7)
+            .map(|cell| cell.ch)
+            .collect();
+        assert_eq!(text, "updated");
+    }
+
+    #[test]
+    fn focus_reports_are_gated_by_terminal_mode() {
+        assert_eq!(focus_report_sequence(false, true), None);
+        assert_eq!(focus_report_sequence(false, false), None);
+        assert_eq!(
+            focus_report_sequence(true, true),
+            Some(b"\x1b[I".as_slice())
+        );
+        assert_eq!(
+            focus_report_sequence(true, false),
+            Some(b"\x1b[O".as_slice())
+        );
+    }
+
+    #[test]
+    fn terminal_resize_request_clamps_to_minimum_grid() {
+        let resize = TerminalResize::new(0, 1, 12, 24);
+
+        assert_eq!(resize.cols, 2);
+        assert_eq!(resize.rows, 2);
+        assert_eq!(resize.cell_width, 12);
+        assert_eq!(resize.cell_height, 24);
+    }
+
+    #[test]
+    fn ssh_resize_resets_command_mark_coordinates_only_when_grid_changes() {
+        let mut session = crate::session::SshPtyCore::new_disconnected_for_test(
+            SshSessionConfig::new("127.0.0.1", 9, "nobody"),
+            80,
+            24,
+            GraphicsOptions::default(),
+            TerminalEncoding::Utf8,
+            1000,
+        );
+
+        session
+            .resize_with_cell_size(TerminalResize::new(80, 24, 8, 16))
+            .expect("cell-only resize should succeed");
+        assert!(!session.take_events().iter().any(|event| matches!(
+            event,
+            TerminalEvent::CommandMark(TerminalCommandMarkEvent::Reset)
+        )));
+
+        session
+            .resize_with_cell_size(TerminalResize::new(100, 24, 8, 16))
+            .expect("grid resize should succeed");
+        assert!(session.take_events().iter().any(|event| matches!(
+            event,
+            TerminalEvent::CommandMark(TerminalCommandMarkEvent::Reset)
+        )));
+    }
+
+    #[test]
+    fn process_group_parser_ignores_zombies_and_picks_latest_pid() {
+        let ps_output = "\
+          100   42 S\n\
+          101   42 Z\n\
+          205   99 S\n\
+          103   42 S+\n";
+
+        assert_eq!(parse_process_table_for_group(ps_output, 42), Some(103));
+        assert_eq!(parse_process_table_for_group(ps_output, 123), None);
+    }
+
+    #[test]
+    fn lsof_cwd_parser_reads_name_record() {
+        let lsof_output = "p12345\nn/Users/dominical/Documents/oxide\n";
+        assert_eq!(
+            parse_lsof_cwd(lsof_output),
+            Some(PathBuf::from("/Users/dominical/Documents/oxide"))
+        );
+    }
+
+    #[test]
+    fn logical_search_splits_matches_across_wrapped_rows() {
+        let cell_map = vec![(-1, 0), (-1, 1), (-1, 2), (0, 0), (0, 1), (0, 2)];
+        let matches = search_logical_line_matches("abcdef", &cell_map, "cde", 80);
+
+        assert_eq!(
+            matches,
+            vec![TerminalSearchMatch {
+                line: -1,
+                start_col: 2,
+                end_col: 3,
+                ranges: vec![
+                    TerminalSearchRange {
+                        line: -1,
+                        start_col: 2,
+                        end_col: 3,
+                    },
+                    TerminalSearchRange {
+                        line: 0,
+                        start_col: 0,
+                        end_col: 2,
+                    },
+                ],
+            }]
+        );
+    }
+
+    #[test]
+    fn scrolled_grid_lines_map_into_viewport_rows() {
+        assert_eq!(viewport_row_for_grid_line(-10, 10), Some(0));
+        assert_eq!(viewport_row_for_grid_line(-1, 10), Some(9));
+        assert_eq!(viewport_row_for_grid_line(0, 10), Some(10));
+        assert_eq!(viewport_row_for_grid_line(-11, 10), None);
+    }
+
+    #[test]
+    fn graphics_state_evicts_images_and_placements_over_budget() {
+        let mut graphics = TerminalGraphicsState {
+            storage_limit_bytes: 4,
+            ..TerminalGraphicsState::default()
+        };
+
+        graphics.handle_event(TerminalGraphicsEvent::ImageReady(TerminalImageData {
+            id: TerminalImageId(1),
+            protocol: TerminalImageProtocol::Kitty,
+            version: 0,
+            width: 1,
+            height: 1,
+            rgba: vec![0, 0, 0, 255].into(),
+            frames: Vec::new(),
+            animation: TerminalImageAnimationState::default(),
+            name: None,
+        }));
+        graphics.handle_event(TerminalGraphicsEvent::Place(TerminalImagePlacement {
+            id: TerminalImageId(1),
+            protocol: TerminalImageProtocol::Kitty,
+            line: 0,
+            row: 0,
+            col: 0,
+            cols: 1,
+            rows: 1,
+            pixel_width: 1,
+            pixel_height: 1,
+            source_x: 0,
+            source_y: 0,
+            source_width: 1,
+            source_height: 1,
+            z_index: 0,
+            placeholder: true,
+        }));
+        graphics.handle_event(TerminalGraphicsEvent::ImageReady(TerminalImageData {
+            id: TerminalImageId(2),
+            protocol: TerminalImageProtocol::Kitty,
+            version: 0,
+            width: 1,
+            height: 1,
+            rgba: vec![255, 255, 255, 255].into(),
+            frames: Vec::new(),
+            animation: TerminalImageAnimationState::default(),
+            name: None,
+        }));
+
+        assert!(!graphics.images.contains_key(&TerminalImageId(1)));
+        assert!(graphics.images.contains_key(&TerminalImageId(2)));
+        assert!(graphics.placements.is_empty());
+    }
+
+    #[test]
+    fn graphics_state_retransmission_removes_placements_but_updates_preserve_them() {
+        let image = |rgba: [u8; 4]| TerminalImageData {
+            id: TerminalImageId(7),
+            protocol: TerminalImageProtocol::Kitty,
+            version: 0,
+            width: 1,
+            height: 1,
+            rgba: Vec::from(rgba).into(),
+            frames: Vec::new(),
+            animation: TerminalImageAnimationState::default(),
+            name: None,
+        };
+        let placement = TerminalImagePlacement {
+            id: TerminalImageId(7),
+            protocol: TerminalImageProtocol::Kitty,
+            line: 0,
+            row: 0,
+            col: 0,
+            cols: 1,
+            rows: 1,
+            pixel_width: 1,
+            pixel_height: 1,
+            source_x: 0,
+            source_y: 0,
+            source_width: 1,
+            source_height: 1,
+            z_index: 0,
+            placeholder: true,
+        };
+        for (event, expected_placements) in [
+            (TerminalGraphicsEvent::ImageReady(image([255; 4])), vec![]),
+            (
+                TerminalGraphicsEvent::ImageUpdated(image([255; 4])),
+                vec![placement.clone()],
+            ),
+        ] {
+            let mut graphics = TerminalGraphicsState::default();
+            graphics.handle_event(TerminalGraphicsEvent::ImageReady(image([0, 0, 0, 255])));
+            graphics.handle_event(TerminalGraphicsEvent::Place(placement.clone()));
+            graphics.handle_event(event);
+
+            assert_eq!(graphics.images[&TerminalImageId(7)].rgba.as_ref(), &[255; 4]);
+            assert_eq!(graphics.placements, expected_placements);
+        }
+    }
+
+    #[test]
+    fn graphics_state_uses_monotonic_versions_across_deleted_image_ids() {
+        let mut graphics = TerminalGraphicsState::default();
+        let image = |id| TerminalImageData {
+            id: TerminalImageId(id),
+            protocol: TerminalImageProtocol::Kitty,
+            version: 0,
+            width: 1,
+            height: 1,
+            rgba: vec![0, 0, 0, 255].into(),
+            frames: Vec::new(),
+            animation: TerminalImageAnimationState::default(),
+            name: None,
+        };
+
+        graphics.handle_event(TerminalGraphicsEvent::ImageReady(image(100)));
+        let first_version = graphics.images[&TerminalImageId(100)].version;
+        graphics.handle_event(TerminalGraphicsEvent::Delete {
+            id: Some(TerminalImageId(100)),
+        });
+        graphics.handle_event(TerminalGraphicsEvent::ImageReady(image(200)));
+        let second_version = graphics.images[&TerminalImageId(200)].version;
+
+        assert!(second_version > first_version);
+        assert_eq!(graphics.images.len(), 1);
+    }
+
+    #[test]
+    fn image_snapshots_share_terminal_image_data() {
+        let size = TerminalSize {
+            cols: 4,
+            rows: 4,
+            cell_width: 8,
+            cell_height: 17,
+        };
+        let term = Term::new(Config::default(), &size, VoidListener);
+        let mut graphics = TerminalGraphicsState::default();
+        graphics.handle_event(TerminalGraphicsEvent::ImageReady(TerminalImageData {
+            id: TerminalImageId(9),
+            protocol: TerminalImageProtocol::Kitty,
+            version: 0,
+            width: 1,
+            height: 1,
+            rgba: vec![0, 0, 0, 255].into(),
+            frames: Vec::new(),
+            animation: TerminalImageAnimationState::default(),
+            name: None,
+        }));
+        graphics.handle_event(TerminalGraphicsEvent::Place(TerminalImagePlacement {
+            id: TerminalImageId(9),
+            protocol: TerminalImageProtocol::Kitty,
+            line: 0,
+            row: 0,
+            col: 0,
+            cols: 1,
+            rows: 1,
+            pixel_width: 1,
+            pixel_height: 1,
+            source_x: 0,
+            source_y: 0,
+            source_width: 1,
+            source_height: 1,
+            z_index: 0,
+            placeholder: false,
+        }));
+
+        let first = snapshot_from_term(&term, size, &graphics, &TerminalPalette::default());
+        let second = snapshot_from_term(&term, size, &graphics, &TerminalPalette::default());
+        let first_data = first.images[0].data.as_ref().expect("image data");
+        let second_data = second.images[0].data.as_ref().expect("image data");
+
+        // Snapshot construction runs every changed tick; image payloads must stay
+        // shared so ordinary terminal output does not clone frame metadata.
+        assert!(Arc::ptr_eq(first_data, second_data));
+    }
+
+    #[test]
+    fn yazi_kgp_old_sequence_anchors_image_at_moved_cursor_in_snapshot() {
+        let size = TerminalSize {
+            cols: 80,
+            rows: 24,
+            cell_width: 10,
+            cell_height: 20,
+        };
+        let term = std::cell::RefCell::new(Term::new(Config::default(), &size, VoidListener));
+        let mut parser = Processor::<StdSyncHandler>::new();
+        let mut ingress = GraphicsIngress::new(GraphicsOptions::default());
+        let mut graphics = TerminalGraphicsState::default();
+        let payload = "AAAA/////wAAAP8A";
+        let sequence =
+            format!("\x1b7\x1b[6;41H\x1b_Gq=2,a=T,z=-1,C=1,f=24,s=2,v=2,m=0;{payload}\x1b\\\x1b8");
+
+        let events = ingress.advance_with(
+            sequence.as_bytes(),
+            |bytes| {
+                let mut term = term.borrow_mut();
+                parser.advance(&mut *term, bytes);
+            },
+            || graphics_cursor_from_term(&term.borrow(), size),
+        );
+        for event in events {
+            graphics.handle_event(event);
+        }
+
+        let snapshot =
+            snapshot_from_term(&term.borrow(), size, &graphics, &TerminalPalette::default());
+        assert_eq!(snapshot.images.len(), 1);
+        let image = &snapshot.images[0];
+        assert_eq!(image.row, 5);
+        assert_eq!(image.col, 40);
+        assert_eq!(image.cols, 1);
+        assert_eq!(image.rows, 1);
+        assert!(image.data.is_some());
+    }
+
+    #[test]
+    fn split_synchronized_redraw_keeps_cursor_and_cells_until_frame_end() {
+        let size = TerminalSize {
+            cols: 20,
+            rows: 5,
+            cell_width: 10,
+            cell_height: 20,
+        };
+        // Exercise the same graphics and shell scanners that precede the local PTY parser.
+        for recording in [false, true] {
+            let term = std::cell::RefCell::new(Term::new(Config::default(), &size, VoidListener));
+            let mut parser = Processor::<StdSyncHandler>::new();
+            let mut ingress = GraphicsIngress::new(GraphicsOptions::default());
+            let mut shell = crate::shell_integration::TerminalShellIntegration::default();
+            let graphics = TerminalGraphicsState::default();
+            parser.advance(&mut *term.borrow_mut(), b"\x1b[4;3H");
+            let mut snapshot =
+                snapshot_from_term(&term.borrow(), size, &graphics, &TerminalPalette::default());
+            let frame = b"\x1b[?2026h\x1b[2;1H*\x1b[4;5H\x1b[?2026l";
+            for (index, byte) in frame.iter().enumerate() {
+                ingress.advance_ordered(
+                    std::slice::from_ref(byte),
+                    |segment| match segment {
+                        TerminalGraphicsSegment::Terminal(bytes) => {
+                            if recording {
+                                shell.advance_with_recording(
+                                    &mut parser,
+                                    &mut term.borrow_mut(),
+                                    &bytes,
+                                    |_| {},
+                                );
+                            } else {
+                                shell.advance(&mut parser, &mut term.borrow_mut(), &bytes, |_| {});
+                            }
+                        }
+                        TerminalGraphicsSegment::Event(_) => {
+                            panic!("redraw must stay terminal output")
+                        }
+                    },
+                    || graphics_cursor_from_term(&term.borrow(), size),
+                );
+                snapshot = incremental_snapshot_from_term(
+                    &mut term.borrow_mut(),
+                    size,
+                    &graphics,
+                    &TerminalPalette::default(),
+                    &snapshot,
+                );
+                let complete = index + 1 == frame.len();
+                assert_eq!(
+                    (snapshot.cursor_row, snapshot.cursor_col),
+                    if complete { (3, 4) } else { (3, 2) },
+                    "byte {index}, recording {recording}"
+                );
+                assert_eq!(
+                    snapshot.lines[1].cells[0].ch,
+                    if complete { '*' } else { ' ' }
+                );
+                assert_eq!(snapshot.cursor_shape, TerminalCursorShape::Block);
+                let painted_cursors = snapshot
+                    .lines
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(row, line)| {
+                        line.cells
+                            .iter()
+                            .enumerate()
+                            .filter_map(move |(col, cell)| cell.cursor.then_some((row, col)))
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(painted_cursors, [if complete { (3, 4) } else { (3, 2) }]);
+            }
+        }
+    }
+
+    #[test]
+    fn full_screen_application_can_hide_and_restore_the_snapshot_cursor() {
+        let size = TerminalSize {
+            cols: 80,
+            rows: 24,
+            cell_width: 10,
+            cell_height: 20,
+        };
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+        let mut parser = Processor::<StdSyncHandler>::new();
+        let graphics = TerminalGraphicsState::default();
+
+        // TUI applications commonly move the cursor into scratch space before hiding it.
+        parser.advance(&mut term, b"\x1b[6;41H\x1b[?25l");
+        let hidden = snapshot_from_term(&term, size, &graphics, &TerminalPalette::default());
+        assert_eq!(hidden.cursor_col, 40);
+        assert_eq!(hidden.cursor_row, 5);
+        assert_eq!(hidden.cursor_shape, TerminalCursorShape::Hidden);
+
+        parser.advance(&mut term, b"\x1b[?25h");
+        let visible = snapshot_from_term(&term, size, &graphics, &TerminalPalette::default());
+        assert_eq!(visible.cursor_shape, TerminalCursorShape::Block);
+    }
+
+    #[test]
+    fn wide_glyph_spacers_keep_the_glyph_background() {
+        let size = TerminalSize {
+            cols: 8,
+            rows: 2,
+            cell_width: 10,
+            cell_height: 20,
+        };
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+        let mut parser = Processor::<StdSyncHandler>::new();
+        parser.advance(&mut term, "\x1b[48;2;1;2;3m中\x1b[m".as_bytes());
+
+        let snapshot = snapshot_from_term(
+            &term,
+            size,
+            &TerminalGraphicsState::default(),
+            &TerminalPalette::default(),
+        );
+        let cells = &snapshot.lines[0].cells;
+
+        assert_eq!(
+            (cells[0].ch, cells[0].wide, cells[0].bg),
+            ('中', true, TerminalColor::rgb(1, 2, 3))
+        );
+        assert_eq!(
+            (cells[1].ch, cells[1].wide, cells[1].bg),
+            (' ', false, TerminalColor::rgb(1, 2, 3))
+        );
+        assert_eq!(cells[2].bg, OXIDE_DARK_THEME.background);
+    }
+
+    #[test]
+    fn vim_startup_clears_previous_shell_content_from_the_alternate_screen() {
+        let size = TerminalSize {
+            cols: 80,
+            rows: 24,
+            cell_width: 10,
+            cell_height: 20,
+        };
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+        let mut parser = Processor::<StdSyncHandler>::new();
+        let graphics = TerminalGraphicsState::default();
+
+        // Vim enters the alternate screen and clears it after the shell has already
+        // painted a prompt. No prompt glyph may survive in the first snapshot row.
+        parser.advance(
+            &mut term,
+            b"\x1b[48;2;0;0;0m\x1b[38;2;255;255;255mshell-prompt-content\x1b[m",
+        );
+        parser.advance(
+            &mut term,
+            b"\x1b[?1049h\x1b[>4;2m\x1b[?1h\x1b=\x1b[?2004h\x1b[?1004h\x1b[1;24r\x1b[m\x1b[H\x1b[2J\x1b[?25l\x1b[24;1H\"oxide-vim-test.txt\" [New]\x1b[1;1H\x1b[?25h",
+        );
+
+        let snapshot = snapshot_from_term(&term, size, &graphics, &TerminalPalette::default());
+        assert!(
+            snapshot.lines[0].cells.iter().all(|cell| cell.ch == ' '),
+            "Vim's alternate-screen clear retained shell glyphs in the first row"
+        );
+        assert!(
+            snapshot.lines[0]
+                .cells
+                .iter()
+                .all(|cell| cell.bg == OXIDE_DARK_THEME.background),
+            "Vim's alternate-screen clear retained shell backgrounds in the first row"
+        );
+        assert_eq!(snapshot.cursor_row, 0);
+        assert_eq!(snapshot.cursor_col, 0);
+        assert_eq!(snapshot.cursor_shape, TerminalCursorShape::Block);
+    }
+
+    #[test]
+    fn alternate_screen_resize_does_not_restore_primary_screen_backgrounds() {
+        let initial_size = TerminalSize {
+            cols: 80,
+            rows: 24,
+            cell_width: 10,
+            cell_height: 20,
+        };
+        let resized = TerminalSize {
+            cols: 96,
+            rows: 30,
+            ..initial_size
+        };
+        let mut term = Term::new(Config::default(), &initial_size, VoidListener);
+        let mut parser = Processor::<StdSyncHandler>::new();
+        let graphics = TerminalGraphicsState::default();
+
+        // A delayed workspace layout resize can arrive just after a TUI enters the alternate
+        // screen. Resizing that grid must not reintroduce cells from the primary shell screen.
+        parser.advance(
+            &mut term,
+            b"\x1b[48;2;0;0;0m\x1b[38;2;255;255;255mshell-prompt-content\x1b[m",
+        );
+        parser.advance(&mut term, b"\x1b[?1049h\x1b[m\x1b[H\x1b[2J");
+        term.resize(resized);
+
+        let snapshot = snapshot_from_term(&term, resized, &graphics, &TerminalPalette::default());
+        assert!(
+            snapshot.lines[0]
+                .cells
+                .iter()
+                .all(|cell| cell.ch == ' ' && cell.bg == OXIDE_DARK_THEME.background),
+            "alternate-screen resize restored primary-screen prompt cells"
+        );
+    }
+
+    #[test]
+    fn vim_insert_redraw_preserves_text_and_final_cursor_position() {
+        let size = TerminalSize {
+            cols: 80,
+            rows: 24,
+            cell_width: 10,
+            cell_height: 20,
+        };
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+        let mut parser = Processor::<StdSyncHandler>::new();
+        let graphics = TerminalGraphicsState::default();
+
+        // Vim hides the cursor while clearing its status line, writes the edited row,
+        // moves back onto the final character, and then restores the cursor.
+        parser.advance(
+            &mut term,
+            b"\x1b[?25l\x1b[m\x1b[24;1H\x1b[1m-- INSERT --\x1b[m\x1b[24;13H\x1b[K\x1b[24;1H\x1b[K\x1b[1;1H846\x08\x1b[?25h",
+        );
+
+        let snapshot = snapshot_from_term(&term, size, &graphics, &TerminalPalette::default());
+        let first_row = &snapshot.lines[0];
+        let text = first_row
+            .cells
+            .iter()
+            .take(3)
+            .map(|cell| cell.ch)
+            .collect::<String>();
+        assert_eq!(text, "846");
+        assert_eq!(snapshot.cursor_row, 0);
+        assert_eq!(snapshot.cursor_col, 2);
+        assert_eq!(snapshot.cursor_shape, TerminalCursorShape::Block);
+        assert_eq!(first_row.cells.iter().filter(|cell| cell.cursor).count(), 1);
+        assert!(first_row.cells[2].cursor);
+    }
+
+    #[test]
+    fn yazi_kgp_old_image_is_cleared_after_alt_screen_exit() {
+        let size = TerminalSize {
+            cols: 80,
+            rows: 24,
+            cell_width: 10,
+            cell_height: 20,
+        };
+        let term = std::cell::RefCell::new(Term::new(Config::default(), &size, VoidListener));
+        let mut parser = Processor::<StdSyncHandler>::new();
+        let mut ingress = GraphicsIngress::new(GraphicsOptions::default());
+        let mut graphics = TerminalGraphicsState::default();
+        let mut alt_screen_active = false;
+        let cursor = std::cell::Cell::new(graphics_cursor_from_term(&term.borrow(), size));
+        let payload = "AAAA/////wAAAP8A";
+        let sequence = format!(
+            "\x1b[?1049h\x1b7\x1b[6;41H\x1b_Gq=2,a=T,z=-1,C=1,f=24,s=2,v=2,m=0;{payload}\x1b\\\x1b8\x1b[?1049l"
+        );
+
+        ingress.advance_ordered(
+            sequence.as_bytes(),
+            |segment| match segment {
+                TerminalGraphicsSegment::Terminal(bytes) => {
+                    let mut term = term.borrow_mut();
+                    parser.advance(&mut *term, &bytes);
+                    graphics.clear_for_alt_screen_transition(&term, &mut alt_screen_active);
+                    cursor.set(graphics_cursor_from_term(&term, size));
+                }
+                TerminalGraphicsSegment::Event(event) => {
+                    graphics.handle_event(event);
+                }
+            },
+            || cursor.get(),
+        );
+
+        let term = term.borrow();
+        let snapshot = snapshot_from_term(&term, size, &graphics, &TerminalPalette::default());
+        assert!(!term.mode().contains(TermMode::ALT_SCREEN));
+        assert!(snapshot.images.is_empty());
+    }
+
+    #[test]
+    fn snapshot_preserves_soft_wrapped_visual_rows() {
+        let size = TerminalSize {
+            cols: 10,
+            rows: 6,
+            cell_width: 8,
+            cell_height: 17,
+        };
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+        let mut parser = Processor::<StdSyncHandler>::new();
+        parser.advance(&mut term, b"012345678901234567890123456789X");
+
+        let snapshot = snapshot_from_term(
+            &term,
+            size,
+            &TerminalGraphicsState::default(),
+            &TerminalPalette::default(),
+        );
+        let row_text = |row: usize| -> String {
+            snapshot.lines[row]
+                .cells
+                .iter()
+                .map(|cell| cell.ch)
+                .collect::<String>()
+        };
+
+        assert_eq!(row_text(0), "0123456789");
+        assert_eq!(row_text(1), "0123456789");
+        assert_eq!(row_text(2), "0123456789");
+        assert_eq!(&row_text(3)[..1], "X");
+        assert!(snapshot.lines[0].wrapped);
+        assert!(snapshot.lines[1].wrapped);
+        assert!(snapshot.lines[2].wrapped);
+        assert!(!snapshot.lines[3].wrapped);
+        assert!(snapshot.lines[0].active_input);
+        assert!(snapshot.lines[1].active_input);
+        assert!(snapshot.lines[2].active_input);
+        assert!(snapshot.lines[3].active_input);
+    }
+
+    #[test]
+    fn snapshot_with_display_offset_can_include_paint_overscan_rows() {
+        let size = TerminalSize {
+            cols: 12,
+            rows: 3,
+            cell_width: 8,
+            cell_height: 17,
+        };
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+        let mut parser = Processor::<StdSyncHandler>::new();
+        parser.advance(
+            &mut term,
+            b"alpha\r\nbravo\r\ncharlie\r\ndelta\r\necho\r\nfoxtrot",
+        );
+
+        let snapshot = snapshot_from_term_with_display_offset(
+            &term,
+            size,
+            &TerminalGraphicsState::default(),
+            &TerminalPalette::default(),
+            1,
+            4,
+        );
+
+        assert_eq!(snapshot.display_offset, 1);
+        assert_eq!(snapshot.rows, 3);
+        assert_eq!(snapshot.lines.len(), 4);
+        assert_eq!(snapshot.lines[0].absolute_line, -1);
+        assert_eq!(snapshot.lines[3].absolute_line, 2);
+        assert_eq!(snapshot.lines[3].text().trim_end(), "foxtrot");
+    }
+
+    #[test]
+    fn shell_integration_osc633_creates_and_closes_command_mark() {
+        let size = TerminalSize {
+            cols: 80,
+            rows: 8,
+            cell_width: 8,
+            cell_height: 17,
+        };
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+        let mut parser = Processor::<StdSyncHandler>::new();
+        let mut integration = crate::shell_integration::TerminalShellIntegration::default();
+        let mut events = Vec::new();
+
+        integration.advance(
+            &mut parser,
+            &mut term,
+            b"\x1b]633;A\x07$ \x1b]633;B\x07echo hi\r\n\x1b]633;E;echo%20hi\x07hi\r\n\x1b]633;D;0\x07",
+            |event| events.push(event),
+        );
+
+        let marks = integration.command_marks();
+        assert_eq!(marks.len(), 1);
+        assert_eq!(marks[0].command.as_deref(), Some("echo hi"));
+        assert!(marks[0].is_closed);
+        assert_eq!(
+            marks[0].closed_by,
+            Some(TerminalCommandMarkClosedBy::ShellIntegration)
+        );
+        assert_eq!(marks[0].exit_code, Some(0));
+        assert!(matches!(
+            integration.status().state,
+            ShellIntegrationLifecycleState::Closed
+        ));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            TerminalEvent::CommandMark(TerminalCommandMarkEvent::Created(_))
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            TerminalEvent::CommandMark(TerminalCommandMarkEvent::Closed(_))
+        )));
+        let snapshot = snapshot_from_term(
+            &term,
+            size,
+            &TerminalGraphicsState::default(),
+            &TerminalPalette::default(),
+        );
+        let visible_text = snapshot
+            .lines
+            .iter()
+            .map(|row| row.text())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!visible_text.contains("633;"));
+        assert!(!visible_text.contains("echo%20hi"));
+    }
+
+    #[test]
+    fn shell_command_ranges_follow_history_eviction_including_chunked_output() {
+        for chunk_size in [1, 4096] {
+            let size = TerminalSize {
+                cols: 80,
+                rows: 4,
+                cell_width: 8,
+                cell_height: 17,
+            };
+            let config = Config {
+                scrolling_history: 3,
+                ..Config::default()
+            };
+            let mut term = Term::new(config, &size, VoidListener);
+            let mut parser = Processor::<StdSyncHandler>::new();
+            let mut integration = crate::shell_integration::TerminalShellIntegration::default();
+            let mut projected = Vec::<TerminalCommandMark>::new();
+            let bytes = b"\x1b]133;A\x07$ old\r\n\x1b]133;C;cmdline_url=old\x07old\r\n\x1b]133;D;0\x07\x1b]133;A\x07$ ls\r\n\x1b]133;C;cmdline_url=ls\x07a\r\nb\r\nc\r\nd\r\ne\r\nf\r\ng\r\nh\r\ni\r\n";
+            for chunk in bytes.chunks(chunk_size) {
+                integration.advance(&mut parser, &mut term, chunk, |event| {
+                    if let TerminalEvent::CommandMark(event) = event {
+                        match event {
+                            TerminalCommandMarkEvent::Created(mark) => projected.push(mark),
+                            TerminalCommandMarkEvent::Closed(mark) => {
+                                let existing = projected
+                                    .iter_mut()
+                                    .find(|existing| existing.command_id == mark.command_id)
+                                    .unwrap();
+                                *existing = mark;
+                            }
+                            TerminalCommandMarkEvent::HistoryTrimmed { lines } => {
+                                projected.retain_mut(|mark| mark.trim_history(lines))
+                            }
+                            TerminalCommandMarkEvent::Reset => projected.clear(),
+                        }
+                    }
+                });
+            }
+            let marks = integration.command_marks();
+            assert_eq!(projected, marks);
+            assert_eq!(marks.len(), 1);
+            assert_eq!(marks[0].command.as_deref(), Some("ls"));
+            assert!(marks[0].command_line_clipped);
+            assert_eq!(marks[0].output_start_line(), 0);
+            assert!(!marks[0].is_closed);
+
+            integration.advance(
+                &mut parser,
+                &mut term,
+                b"\x1b[?1049h1\r\n2\r\n3\r\n4\r\n5\r\n\x1b[?1049l",
+                |_| {},
+            );
+            assert_eq!(integration.command_marks(), marks);
+            integration.advance(&mut parser, &mut term, b"\x1b]133;D;0\x07", |_| {});
+            let closed = integration.command_marks();
+            assert!(closed[0].is_closed);
+            assert_eq!(closed[0].exit_code, Some(0));
+            assert_eq!(closed[0].end_line, Some(5));
+        }
+    }
+
+    #[test]
+    fn shell_integration_osc133_clear_saved_history_resets_command_mark_coordinates() {
+        let size = TerminalSize {
+            cols: 80,
+            rows: 8,
+            cell_width: 8,
+            cell_height: 17,
+        };
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+        let mut parser = Processor::<StdSyncHandler>::new();
+        let mut integration = crate::shell_integration::TerminalShellIntegration::default();
+        let mut events = Vec::new();
+
+        integration.advance(
+            &mut parser,
+            &mut term,
+            b"\x1b]133;A;click_events=1\x07$ ls\r\n\x1b]133;C;cmdline_url=ls\x07file\r\n\x1b]133;D;0\x07",
+            |event| events.push(event),
+        );
+        integration.advance(
+            &mut parser,
+            &mut term,
+            b"\x1b]133;A;click_events=1\x07$ clear\r\n\x1b]133;C;cmdline_url=clear\x07\x1b[H\x1b[2J\x1b[3",
+            |event| events.push(event),
+        );
+        integration.advance(
+            &mut parser,
+            &mut term,
+            b"J\x1b]133;D;0\x07\x1b]133;A\x07$ ",
+            |event| events.push(event),
+        );
+
+        assert!(integration.command_marks().is_empty());
+        assert!(events.iter().any(|event| matches!(
+            event,
+            TerminalEvent::CommandMark(TerminalCommandMarkEvent::Closed(mark))
+                if mark.closed_by == Some(TerminalCommandMarkClosedBy::TerminalReset)
+                    && mark.command.as_deref() == Some("clear")
+                    && mark.stale
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            TerminalEvent::CommandMark(TerminalCommandMarkEvent::Reset)
+        )));
+
+        integration.advance(
+            &mut parser,
+            &mut term,
+            b"pwd\r\n\x1b]133;C;cmdline_url=pwd\x07/tmp\r\n\x1b]133;D;0\x07",
+            |event| events.push(event),
+        );
+        let marks = integration.command_marks();
+        assert_eq!(marks.len(), 1);
+        assert_eq!(marks[0].command.as_deref(), Some("pwd"));
+        assert!(marks[0].is_closed);
+    }
+
+    #[test]
+    fn shell_integration_grid_reflow_closes_and_clears_active_command_mark() {
+        let size = TerminalSize {
+            cols: 80,
+            rows: 8,
+            cell_width: 8,
+            cell_height: 17,
+        };
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+        let mut parser = Processor::<StdSyncHandler>::new();
+        let mut integration = crate::shell_integration::TerminalShellIntegration::default();
+        let mut events = Vec::new();
+
+        integration.advance(
+            &mut parser,
+            &mut term,
+            b"\x1b]133;A;click_events=1\x07$ long-command\r\n\x1b]133;C;cmdline_url=long-command\x07output",
+            |event| events.push(event),
+        );
+        assert_eq!(integration.command_marks().len(), 1);
+
+        integration.reset_command_marks_for_grid_reflow(|event| events.push(event));
+
+        assert!(integration.command_marks().is_empty());
+        assert!(events.iter().any(|event| matches!(
+            event,
+            TerminalEvent::CommandMark(TerminalCommandMarkEvent::Closed(mark))
+                if mark.command.as_deref() == Some("long-command")
+                    && mark.closed_by == Some(TerminalCommandMarkClosedBy::TerminalReset)
+                    && mark.stale
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            TerminalEvent::CommandMark(TerminalCommandMarkEvent::Reset)
+        )));
+
+        integration.advance(
+            &mut parser,
+            &mut term,
+            b"\r\n$ next-command\r\n\x1b]133;C;cmdline_url=next-command\x07done\r\n\x1b]133;D;0\x07",
+            |event| events.push(event),
+        );
+        let marks = integration.command_marks();
+        assert_eq!(marks.len(), 1);
+        assert_eq!(marks[0].command.as_deref(), Some("next-command"));
+        assert_eq!(marks[0].command_line, marks[0].start_line);
+        assert!(marks[0].is_closed);
+    }
+
+    #[test]
+    fn shell_integration_osc633_clear_saved_history_uses_shared_reset_path() {
+        let size = TerminalSize {
+            cols: 80,
+            rows: 8,
+            cell_width: 8,
+            cell_height: 17,
+        };
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+        let mut parser = Processor::<StdSyncHandler>::new();
+        let mut integration = crate::shell_integration::TerminalShellIntegration::default();
+        let mut events = Vec::new();
+
+        integration.advance(
+            &mut parser,
+            &mut term,
+            b"\x1b]633;A\x07PS> \x1b]633;B\x07Clear-Host\r\n\x1b]633;E;Clear-Host\x07\x1b[2J\x1b[3J",
+            |event| events.push(event),
+        );
+
+        assert!(integration.command_marks().is_empty());
+        assert!(events.iter().any(|event| matches!(
+            event,
+            TerminalEvent::CommandMark(TerminalCommandMarkEvent::Reset)
+        )));
+    }
+
+    #[test]
+    fn shell_integration_cwd_protocols_emit_metadata_without_visible_payloads() {
+        let size = TerminalSize {
+            cols: 80,
+            rows: 8,
+            cell_width: 8,
+            cell_height: 17,
+        };
+        let cases = [
+            ("OSC 7 URI", "\x1b]7;file://build-host/home/dev/Oxide%20Term\x07", "/home/dev/Oxide Term", Some("build-host")),
+            ("private metadata version", "\x1b]7719;v=1;cwd=%2fwrong;host=%62%61%64\x07\x1b]7719;v=2;cwd=%2fhome%2fdev%2fAstrBot;host=%62%75%69%6c%64\x07", "/home/dev/AstrBot", Some("build")),
+            ("private Windows path", "\x1b]7719;v=2;cwd=C%3a%5cUsers%5calice;host=desktop\x07", "C:\\Users\\alice", Some("desktop")),
+            ("OSC 7 raw path", "\x1b]7;/tmp/Oxide%20Term\x07", "/tmp/Oxide Term", None),
+            ("OSC 633 property", "\x1b]633;P;Cwd=/work/Oxide%20Term\x07", "/work/Oxide Term", None),
+            ("OSC 1337 directory", "\x1b]1337;CurrentDir=/srv/Oxide%20Term\x07", "/srv/Oxide Term", None),
+        ];
+        for (scenario, payload, expected_cwd, expected_host) in cases {
+            let mut term = Term::new(Config::default(), &size, VoidListener);
+            let mut parser = Processor::<StdSyncHandler>::new();
+            let mut integration = crate::shell_integration::TerminalShellIntegration::default();
+            let mut events = Vec::new();
+            integration.advance(&mut parser, &mut term, format!("{payload}$ ").as_bytes(), |event| events.push(event));
+
+            let cwd_events = events.iter().filter_map(|event| match event {
+                TerminalEvent::CwdChanged { cwd, host } => Some((cwd.as_str(), host.as_deref())),
+                _ => None,
+            }).collect::<Vec<_>>();
+            assert_eq!(cwd_events, [(expected_cwd, expected_host)], "{scenario}");
+            assert!(integration.command_marks().is_empty(), "{scenario}");
+            let snapshot = snapshot_from_term(&term, size, &TerminalGraphicsState::default(), &TerminalPalette::default());
+            let visible_text = snapshot.lines.iter().map(|row| row.text()).collect::<Vec<_>>().join("\n");
+            assert_eq!(visible_text.trim(), "$", "{scenario}");
+        }
+    }
+
+    #[test]
+    fn shell_integration_private_editor_messages_route_without_field_order_assumptions() {
+        let size = TerminalSize {
+            cols: 80,
+            rows: 8,
+            cell_width: 8,
+            cell_height: 17,
+        };
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+        let mut parser = Processor::<StdSyncHandler>::new();
+        let mut integration = crate::shell_integration::TerminalShellIntegration::default();
+        let mut events = Vec::new();
+
+        integration.advance(
+            &mut parser,
+            &mut term,
+            b"\x1b]7719;app=vim;selection=char;kind=editor-state;active=1;caps=mouse,clipboard,edit;mode=visual;v=3\x07\x1b]7719;data=%E4%BD%A0%E5%A5%BD;op=copy;app=vim;kind=editor-clipboard;v=3\x07$ ",
+            |event| events.push(event),
+        );
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            TerminalEvent::EditorIntegration(editor)
+                if editor.application == TerminalEditorApplication::Vim
+                    && editor.mode == TerminalEditorMode::Visual
+                    && editor.selection == TerminalEditorSelection::Character
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            TerminalEvent::EditorClipboard(clipboard)
+                if clipboard.application == TerminalEditorApplication::Vim
+                    && clipboard.operation == TerminalEditorClipboardOperation::Copy
+                    && clipboard.text.as_str() == "你好"
+        )));
+        let snapshot = snapshot_from_term(
+            &term,
+            size,
+            &TerminalGraphicsState::default(),
+            &TerminalPalette::default(),
+        );
+        let visible_text = snapshot
+            .lines
+            .iter()
+            .map(|row| row.text())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!visible_text.contains("7719;"));
+        assert!(visible_text.contains("$"));
+    }
+
+    #[test]
+    fn shell_integration_private_editor_messages_ignore_unsupported_versions() {
+        let size = TerminalSize {
+            cols: 80,
+            rows: 8,
+            cell_width: 8,
+            cell_height: 17,
+        };
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+        let mut parser = Processor::<StdSyncHandler>::new();
+        let mut integration = crate::shell_integration::TerminalShellIntegration::default();
+        let mut events = Vec::new();
+
+        integration.advance(
+            &mut parser,
+            &mut term,
+            b"\x1b]7719;kind=editor-state;v=4;app=vim;mode=normal;selection=none;caps=mouse;active=1\x07$ ",
+            |event| events.push(event),
+        );
+
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, TerminalEvent::EditorIntegration(_)))
+        );
+        let snapshot = snapshot_from_term(
+            &term,
+            size,
+            &TerminalGraphicsState::default(),
+            &TerminalPalette::default(),
+        );
+        let visible_text = snapshot
+            .lines
+            .iter()
+            .map(|row| row.text())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!visible_text.contains("7719;"));
+        assert!(visible_text.contains("$"));
+    }
+
+    #[test]
+    fn shell_integration_retains_editor_clipboard_payloads_beyond_legacy_osc_limit() {
+        let size = TerminalSize {
+            cols: 80,
+            rows: 8,
+            cell_width: 8,
+            cell_height: 17,
+        };
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+        let mut parser = Processor::<StdSyncHandler>::new();
+        let mut integration = crate::shell_integration::TerminalShellIntegration::default();
+        let mut events = Vec::new();
+        let expected_text = "x".repeat(20 * 1024);
+        let encoded_text = "%78".repeat(expected_text.len());
+        let payload = format!(
+            "\u{1b}]7719;v=3;kind=editor-clipboard;app=vim;op=copy;data={encoded_text}\u{7}"
+        );
+
+        integration.advance(&mut parser, &mut term, payload.as_bytes(), |event| {
+            events.push(event)
+        });
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            TerminalEvent::EditorClipboard(clipboard)
+                if clipboard.text.as_str() == expected_text
+        )));
+    }
+
+    #[test]
+    fn shell_integration_scanner_waits_for_split_osc_terminator() {
+        let size = TerminalSize {
+            cols: 80,
+            rows: 8,
+            cell_width: 8,
+            cell_height: 17,
+        };
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+        let mut parser = Processor::<StdSyncHandler>::new();
+        let mut integration = crate::shell_integration::TerminalShellIntegration::default();
+        let mut events = Vec::new();
+
+        integration.advance(
+            &mut parser,
+            &mut term,
+            b"\x1b]633;A\x07$ \x1b]633;B\x07",
+            |event| events.push(event),
+        );
+        integration.advance(&mut parser, &mut term, b"\x1b]633;E;pwd", |event| {
+            events.push(event)
+        });
+        assert!(integration.command_marks().is_empty());
+        integration.advance(&mut parser, &mut term, b"\x07/home\r\n", |event| {
+            events.push(event)
+        });
+
+        let marks = integration.command_marks();
+        assert_eq!(marks.len(), 1);
+        assert_eq!(marks[0].command.as_deref(), Some("pwd"));
+        assert!(!marks[0].is_closed);
+        let snapshot = snapshot_from_term(
+            &term,
+            size,
+            &TerminalGraphicsState::default(),
+            &TerminalPalette::default(),
+        );
+        let visible_text = snapshot
+            .lines
+            .iter()
+            .map(|row| row.text())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!visible_text.contains("633;"));
+        assert!(!visible_text.contains("pwd\x07"));
+    }
+
+    #[test]
+    fn shell_integration_scanner_handles_split_osc_introducer_and_st() {
+        let size = TerminalSize {
+            cols: 80,
+            rows: 8,
+            cell_width: 8,
+            cell_height: 17,
+        };
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+        let mut parser = Processor::<StdSyncHandler>::new();
+        let mut integration = crate::shell_integration::TerminalShellIntegration::default();
+        let mut events = Vec::new();
+
+        integration.advance(&mut parser, &mut term, b"\x1b", |event| events.push(event));
+        integration.advance(
+            &mut parser,
+            &mut term,
+            b"]7;file://build-host/home/dev\x1b",
+            |event| events.push(event),
+        );
+        integration.advance(&mut parser, &mut term, b"\\$ ", |event| events.push(event));
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            TerminalEvent::CwdChanged {
+                cwd,
+                host: Some(host),
+            } if cwd == "/home/dev" && host == "build-host"
+        )));
+        let snapshot = snapshot_from_term(
+            &term,
+            size,
+            &TerminalGraphicsState::default(),
+            &TerminalPalette::default(),
+        );
+        let visible_text = snapshot
+            .lines
+            .iter()
+            .map(|row| row.text())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(visible_text.contains("$"));
+        assert!(!visible_text.contains("file://"));
+    }
+
+    #[test]
+    fn terminal_recording_bytes_exclude_private_osc_across_chunks() {
+        for terminator in ["\x07", "\x1b\\"] {
+            let input = format!(
+                "before\x1b]7719;v=3;kind=editor-clipboard;app=vim;op=copy;data=%73%65%63%72%65%74{terminator}after\x1b]0;title\x07"
+            );
+            for split in 0..=input.len() {
+                let size = TerminalSize {
+                    cols: 80,
+                    rows: 8,
+                    cell_width: 8,
+                    cell_height: 17,
+                };
+                let mut term = Term::new(Config::default(), &size, VoidListener);
+                let mut parser = Processor::<StdSyncHandler>::new();
+                let mut integration = crate::shell_integration::TerminalShellIntegration::default();
+                let mut events = Vec::new();
+                let mut recorded = Vec::new();
+                for chunk in [&input.as_bytes()[..split], &input.as_bytes()[split..]] {
+                    let (_, bytes) = integration.advance_with_recording(
+                        &mut parser,
+                        &mut term,
+                        chunk,
+                        |event| events.push(event),
+                    );
+                    recorded.extend(bytes);
+                }
+                assert_eq!(recorded, b"beforeafter\x1b]0;title\x07", "split {split}");
+                assert_eq!(
+                    events
+                        .iter()
+                        .filter(|event| matches!(event, TerminalEvent::EditorClipboard(_)))
+                        .count(),
+                    1,
+                    "split {split}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn osc_capture_preserves_link_payload_and_recording_at_every_split() {
+        let input = b"\x1b]77190;not-private\x07\x1b]8;id=build;https://ex\0ample.com/log?a=1;b=2\x1b\\AB\x1b]8;;\x07C";
+        for split in 0..=input.len() {
+            let size = TerminalSize {
+                cols: 80,
+                rows: 2,
+                cell_width: 8,
+                cell_height: 17,
+            };
+            let mut term = Term::new(Config::default(), &size, VoidListener);
+            let mut parser = Processor::<StdSyncHandler>::new();
+            let mut integration = crate::shell_integration::TerminalShellIntegration::default();
+            let mut recorded = Vec::new();
+            for chunk in [&input[..split], &input[split..]] {
+                let (_, bytes) =
+                    integration.advance_with_recording(&mut parser, &mut term, chunk, |_| {});
+                recorded.extend(bytes);
+            }
+            assert_eq!(recorded, input, "split {split}");
+            let snapshot = snapshot_from_term(
+                &term,
+                size,
+                &TerminalGraphicsState::default(),
+                &TerminalPalette::default(),
+            );
+            assert_eq!(snapshot.lines[0].text().trim_end(), "ABC", "split {split}");
+            assert_eq!(
+                snapshot.lines[0].cells[..3]
+                    .iter()
+                    .map(TerminalCell::hyperlink)
+                    .collect::<Vec<_>>(),
+                vec![
+                    Some("https://example.com/log?a=1;b=2"),
+                    Some("https://example.com/log?a=1;b=2"),
+                    None
+                ],
+                "split {split}"
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_recording_discards_oversized_private_osc_until_terminator() {
+        let size = TerminalSize {
+            cols: 80,
+            rows: 8,
+            cell_width: 8,
+            cell_height: 17,
+        };
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+        let mut parser = Processor::<StdSyncHandler>::new();
+        let mut integration = crate::shell_integration::TerminalShellIntegration::default();
+        let mut oversized = b"\x1b]7719;v=3;kind=editor-clipboard;app=vim;op=copy;data=".to_vec();
+        oversized.extend(std::iter::repeat_n(
+            b'A',
+            crate::editor_integration::EDITOR_PROTOCOL_PAYLOAD_LIMIT + 128,
+        ));
+
+        let (_, first) =
+            integration.advance_with_recording(&mut parser, &mut term, &oversized, |_| {});
+        let (_, second) = integration.advance_with_recording(
+            &mut parser,
+            &mut term,
+            b"sensitive-tail\x07after",
+            |_| {},
+        );
+
+        assert!(first.is_empty());
+        assert_eq!(second, b"after");
+    }
+
+    #[test]
+    fn shell_integration_scanner_preserves_utf8_prompt_glyphs() {
+        let size = TerminalSize {
+            cols: 80,
+            rows: 8,
+            cell_width: 8,
+            cell_height: 17,
+        };
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+        let mut parser = Processor::<StdSyncHandler>::new();
+        let mut integration = crate::shell_integration::TerminalShellIntegration::default();
+
+        let (_, recorded) = integration.advance_with_recording(
+            &mut parser,
+            &mut term,
+            "❯ typed input".as_bytes(),
+            |_| {},
+        );
+
+        assert_eq!(recorded, "❯ typed input".as_bytes());
+        let snapshot = snapshot_from_term(
+            &term,
+            size,
+            &TerminalGraphicsState::default(),
+            &TerminalPalette::default(),
+        );
+        let visible_text = snapshot
+            .lines
+            .iter()
+            .map(|row| row.text())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(visible_text.contains("❯ typed input"));
+    }
+
+    #[test]
+    fn shell_integration_osc7_normalizes_windows_uri_and_rejects_invalid_context() {
+        let size = TerminalSize {
+            cols: 80,
+            rows: 8,
+            cell_width: 8,
+            cell_height: 17,
+        };
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+        let mut parser = Processor::<StdSyncHandler>::new();
+        let mut integration = crate::shell_integration::TerminalShellIntegration::default();
+        let mut events = Vec::new();
+
+        integration.advance(
+            &mut parser,
+            &mut term,
+            b"\x1b]7;file://desktop/C:/Users/alice\x07",
+            |event| events.push(event),
+        );
+        integration.advance(
+            &mut parser,
+            &mut term,
+            b"\x1b]7;file://bad%0Ahost/home/alice\x07",
+            |event| events.push(event),
+        );
+
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, TerminalEvent::CwdChanged { .. }))
+                .count(),
+            1
+        );
+        assert!(events.iter().any(|event| matches!(
+            event,
+            TerminalEvent::CwdChanged {
+                cwd,
+                host: Some(host),
+            } if cwd == "C:/Users/alice" && host == "desktop"
+        )));
+    }
+
+    fn solarized_light_palette() -> TerminalPalette {
+        let hex =
+            |value: u32| TerminalColor::rgb((value >> 16) as u8, (value >> 8) as u8, value as u8);
+        TerminalPalette::new(
+            hex(0x657b83),
+            hex(0xfdf6e3),
+            hex(0x586e75),
+            [
+                0x073642, 0xdc322f, 0x859900, 0xb58900, 0x268bd2, 0xd33682, 0x2aa198, 0xeee8d5,
+                0x002b36, 0xcb4b16, 0x586e75, 0x657b83, 0x839496, 0x6c71c4, 0x93a1a1, 0xfdf6e3,
+            ]
+            .map(hex),
+        )
+    }
+
+    #[test]
+    fn color_requests_follow_palette_and_runtime_overrides() {
+        let light = solarized_light_palette();
+        let rgb = |color: Rgb| TerminalColor::rgb(color.r, color.g, color.b);
+        for palette in [OXIDE_DARK_THEME, light] {
+            let overrides = Colors::default();
+            for (index, expected) in [
+                (1, palette.ansi[1]),
+                (256, palette.foreground),
+                (257, palette.background),
+                (258, palette.cursor),
+                (268, palette.dim_foreground),
+                (999, TerminalColor::rgb(0, 0, 0)),
+            ] {
+                assert_eq!(
+                    rgb(color_for_alacritty_request(index, &palette, &overrides)),
+                    expected,
+                    "slot {index} of {palette:?}"
+                );
+            }
+        }
+
+        let mut overrides = Colors::default();
+        overrides[257] = Some(Rgb {
+            r: 12,
+            g: 34,
+            b: 56,
+        });
+        assert_eq!(
+            rgb(color_for_alacritty_request(257, &light, &overrides)),
+            TerminalColor::rgb(12, 34, 56)
+        );
+        let (_, bg) = style_colors_for_cell(
+            Color::Named(NamedColor::Foreground),
+            Color::Named(NamedColor::Background),
+            'x',
+            TerminalAttrs::default(),
+            &light,
+            &overrides,
+        );
+        assert_eq!(bg, TerminalColor::rgb(12, 34, 56));
+    }
+
+    #[test]
+    fn cell_colors_follow_palette_only_for_palette_sourced_colors() {
+        let light = solarized_light_palette();
+        let overrides = Colors::default();
+        // Decoration glyphs bypass contrast adjustment so the resolved palette slot is visible.
+        for (fg, expected) in [
+            (
+                Color::Named(NamedColor::Red),
+                TerminalColor::rgb(0xdc, 0x32, 0x2f),
+            ),
+            (Color::Indexed(1), TerminalColor::rgb(0xdc, 0x32, 0x2f)),
+            (Color::Indexed(196), TerminalColor::rgb(255, 0, 0)),
+            (
+                Color::Spec(Rgb { r: 1, g: 2, b: 3 }),
+                TerminalColor::rgb(1, 2, 3),
+            ),
+        ] {
+            let colors = style_colors_for_cell(
+                fg,
+                Color::Named(NamedColor::Background),
+                '\u{2500}',
+                TerminalAttrs::default(),
+                &light,
+                &overrides,
+            );
+            assert_eq!(
+                colors,
+                (expected, TerminalColor::rgb(0xfd, 0xf6, 0xe3)),
+                "{fg:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn minimum_contrast_uses_resolved_palette_background() {
+        let overrides = Colors::default();
+        for palette in [OXIDE_DARK_THEME, solarized_light_palette()] {
+            // ANSI white is nearly invisible on a light background until contrast adjusts it.
+            let (fg, bg) = style_colors_for_cell(
+                Color::Named(NamedColor::White),
+                Color::Named(NamedColor::Background),
+                'x',
+                TerminalAttrs::default(),
+                &palette,
+                &overrides,
+            );
+
+            assert_eq!(bg, palette.background);
+            assert!(
+                perceptual_contrast_score(fg, bg).abs() >= DEFAULT_MINIMUM_CONTRAST_SCORE,
+                "{fg:?} on {bg:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn app_chosen_truecolor_and_256_colors_bypass_contrast_adjustment() {
+        // Both colors are too dark for the default background and would otherwise be lifted.
+        for (fg, expected) in [
+            (
+                Color::Spec(Rgb {
+                    r: 20,
+                    g: 20,
+                    b: 20,
+                }),
+                TerminalColor::rgb(20, 20, 20),
+            ),
+            (Color::Indexed(233), TerminalColor::rgb(18, 18, 18)),
+        ] {
+            let (resolved, _) = style_colors_for_cell(
+                fg,
+                Color::Named(NamedColor::Background),
+                'x',
+                TerminalAttrs::default(),
+                &TerminalPalette::default(),
+                &Colors::default(),
+            );
+            assert_eq!(resolved, expected, "{fg:?}");
+        }
+    }
+
+    #[test]
+    fn decorative_characters_bypass_contrast_adjustment() {
+        let (fg, bg) = style_colors_for_cell(
+            Color::Named(NamedColor::White),
+            Color::Indexed(15),
+            '\u{e0b0}',
+            TerminalAttrs::default(),
+            &TerminalPalette::default(),
+            &Colors::default(),
+        );
+
+        assert_eq!(fg, OXIDE_DARK_THEME.ansi[7]);
+        assert_eq!(bg, OXIDE_DARK_THEME.ansi[15]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "requires the tmux executable; uses a private test server socket"]
+    fn real_tmux_control_actions_keep_replies_with_their_audit_operations() {
+        use oxide_audit::{
+            AuditCategory, AuditContext, AuditEvidence, AuditOutcome, AuditPhase, AuditQuery,
+            AuditService, AuditSource,
+        };
+        use std::time::{Duration, Instant};
+        struct Server(PathBuf);
+        impl Drop for Server {
+            fn drop(&mut self) {
+                let _ = std::process::Command::new("tmux")
+                    .args(["-S"])
+                    .arg(&self.0)
+                    .arg("kill-server")
+                    .output();
+            }
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let server = Server(directory.path().join("tmux.sock"));
+        let service =
+            AuditService::with_key_provider(directory.path().join("audit.db"), AuditTestKeys)
+                .unwrap();
+        let client = service.client();
+        let context =
+            AuditContext::new(client.clone(), AuditSource::User).session("local", "tmux-fixture");
+        let config = crate::LocalPtyConfig {
+            shell: Some(
+                crate::ShellInfo::new("test-tmux", "Test", "tmux").with_args(vec![
+                    "-S".into(),
+                    server.0.to_string_lossy().into_owned(),
+                    "-f".into(),
+                    "/dev/null".into(),
+                    "-CC".into(),
+                    "new-session".into(),
+                    "-s".into(),
+                    "audit-fixture".into(),
+                    "/bin/cat".into(),
+                ]),
+            ),
+            load_profile: false,
+            ..Default::default()
+        };
+        let mut session = LocalPtySession::spawn_with_config_graphics_encoding_and_audit(
+            80,
+            24,
+            config,
+            Default::default(),
+            Default::default(),
+            100,
+            Some(context.clone()),
+        )
+        .unwrap();
+        let started = Instant::now();
+        while !session.tmux_state().is_some_and(|state| state.ready) {
+            session.drain_output();
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "tmux did not become ready"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let id = session
+            .tmux_state()
+            .unwrap()
+            .sessions
+            .iter()
+            .find(|session| session.active)
+            .unwrap()
+            .id;
+        let rename = context.operation(AuditCategory::Automation, "tmux_control", Some("rename"));
+        let rename_id = rename.id().unwrap().to_owned();
+        session
+            .tmux_action(
+                crate::TmuxAction::RenameSession {
+                    id,
+                    name: "audit-renamed".into(),
+                },
+                rename,
+            )
+            .unwrap();
+        let rejected =
+            context.operation(AuditCategory::Automation, "tmux_control", Some("invalid"));
+        let rejected_id = rejected.id().unwrap().to_owned();
+        session
+            .tmux_action(
+                crate::TmuxAction::RunCommand("invalid-audit-fixture-command".into()),
+                rejected,
+            )
+            .unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        loop {
+            session.drain_output();
+            let page = runtime
+                .block_on(client.query(AuditQuery {
+                    category: Some(AuditCategory::Automation),
+                    limit: 20,
+                    ..Default::default()
+                }))
+                .unwrap();
+            let results = page
+                .records
+                .iter()
+                .filter_map(|record| record.details.operation.as_ref())
+                .filter(|operation| operation.phase == Some(AuditPhase::Result))
+                .collect::<Vec<_>>();
+            if results.len() == 2 {
+                let rename = results
+                    .iter()
+                    .find(|operation| operation.id == rename_id)
+                    .unwrap();
+                assert_eq!(
+                    (rename.outcome, rename.evidence),
+                    (AuditOutcome::Succeeded, AuditEvidence::Protocol)
+                );
+                let rejected = results
+                    .iter()
+                    .find(|operation| operation.id == rejected_id)
+                    .unwrap();
+                assert_eq!(
+                    (rejected.outcome, rejected.evidence),
+                    (AuditOutcome::Failed, AuditEvidence::Protocol)
+                );
+                assert!(
+                    session
+                        .tmux_state()
+                        .unwrap()
+                        .sessions
+                        .iter()
+                        .any(|session| session.id == id && session.name == "audit-renamed")
+                );
+                break;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "tmux did not return the action results"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+}

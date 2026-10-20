@@ -1,0 +1,832 @@
+#!/usr/bin/env python3
+"""Tests for native release packaging helpers."""
+
+from pathlib import Path
+import codecs
+import os
+import plistlib
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import call, patch
+
+# Import the release helpers from their responsibility-specific directory.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "release"))
+
+import package_native
+import verify_background_package
+
+
+class RuntimeResourceTests(unittest.TestCase):
+    def test_remote_desktop_helpers_are_not_bundled_even_when_stale_resources_exist(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            resources = root / "resources"
+            target = "aarch64-apple-darwin"
+            for relative in [
+                "agents/oxide-agent-linux", "icons/app.png",
+                f"cli-bin/{target}/oxide", f"helpers/{target}/oxide-vnc-helper",
+                f"helpers/{target}/oxide-rdp-helper",
+            ]:
+                file = resources / relative
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_bytes(relative.encode())
+            destination = root / "bundle"
+            with patch.object(package_native, "RESOURCE_DIR", resources):
+                package_native.copy_runtime_resources(destination, target)
+            self.assertFalse((destination / "helpers").exists())
+            for relative in ["agents/oxide-agent-linux", "icons/app.png", f"cli-bin/{target}/oxide"]:
+                self.assertEqual((destination / relative).read_bytes(), relative.encode())
+
+
+class WindowsInstallerScriptTests(unittest.TestCase):
+    def identity(self) -> package_native.ReleaseIdentity:
+        return package_native.ReleaseIdentity(
+            channel="gpui-preview",
+            app_name="oxide GPUI Preview",
+            app_identifier="com.oxide.gpuiPreview",
+            windows_install_dir=r"$LOCALAPPDATA\Programs\oxide GPUI Preview",
+            windows_registry_key="oxide GPUI Preview",
+            windows_uninstall_key="oxide GPUI Preview",
+            linux_package_name="oxide-gpui-preview",
+            linux_install_dir="oxide-gpui-preview",
+            linux_desktop_id="com.oxide.gpuiPreview",
+            linux_icon_name="oxide-gpui-preview",
+        )
+
+    def test_existing_install_is_upgraded_in_place(self) -> None:
+        identity = self.identity()
+        script = package_native.windows_installer_script(
+            binary=Path("oxide.exe"),
+            version="1.2.0-gpui-preview.2",
+            identity=identity,
+            installer_root=Path(r"C:\dist\nsis-windows_x64"),
+            installer_path=Path(r"C:\dist\oxide_setup.exe"),
+            icon_path=Path(r"C:\icons\icon.ico"),
+        )
+
+        self.assertIn("InstallDirRegKey HKCU", script)
+        self.assertIn("SetOverwrite on", script)
+        self.assertIn("WriteUninstaller", script)
+        self.assertIn("WriteRegStr HKCU", script)
+        self.assertIn('VIProductVersion "1.2.0.0"', script)
+        self.assertIn('"FileVersion" "1.2.0-gpui-preview.2"', script)
+        self.assertIn('"FileDescription" "oxide GPUI Preview Installer"', script)
+        self.assertIn('"LegalCopyright" "Copyright (C) 2026 AnalyseDeCircuit"', script)
+        self.assertIn('"ProductVersion" "1.2.0-gpui-preview.2"', script)
+        self.assertIn("normal_install:", script)
+        normal_install = script.split("normal_install:\n", 1)[1].split("update_install:\n", 1)[0]
+        self.assertLess(
+            normal_install.index("Call EnsureApplicationClosed"),
+            normal_install.index('SetOutPath "$INSTDIR"'),
+        )
+        self.assertIn("!insertmacro MUI_PAGE_COMPONENTS", script)
+        self.assertIn('Section "Application Files"', script)
+        self.assertIn("SectionIn RO", script)
+        self.assertIn('Section "Start Menu Shortcut"', script)
+        self.assertIn('Section /o "Desktop Shortcut"', script)
+        self.assertNotIn("already installed", script)
+        self.assertNotIn("uninstall_existing", script)
+        self.assertNotIn("ExecWait", script)
+
+    def test_preflight_requires_consent_and_rechecks_file_owners(self) -> None:
+        script = package_native.windows_installer_script(
+            binary=Path("oxide.exe"),
+            version="2.0.31",
+            identity=self.identity(),
+            installer_root=Path(r"C:\dist\nsis-windows_x64"),
+            installer_path=Path(r"C:\dist\oxide_setup.exe"),
+            icon_path=Path(r"C:\icons\icon.ico"),
+        )
+        preflight = script.split("Function EnsureApplicationClosed\n", 1)[1].split("FunctionEnd", 1)[0]
+        self.assertIn(r'IfFileExists "$INSTDIR\oxide.exe"', preflight)
+        self.assertIn('RmRegisterResources(i r0, i 1, *w', preflight)
+        self.assertLess(preflight.index("IfSilent preflight_cancel"), preflight.index("MessageBox MB_OKCANCEL"))
+        self.assertIn('IDCANCEL preflight_cancel', preflight)
+        shutdown = "RmShutdown(i r0, i 0, p 0)"
+        self.assertLess(preflight.index("MessageBox MB_OKCANCEL"), preflight.index(shutdown))
+        after_shutdown = preflight.split(shutdown, 1)[1]
+        self.assertLess(after_shutdown.index("RmGetList"), after_shutdown.index("preflight_done:"))
+        self.assertIn("StrCmp $2 0 preflight_done preflight_failed", after_shutdown)
+        cancel = preflight.split("preflight_cancel:\n", 1)[1].split("preflight_done:", 1)[0]
+        self.assertIn("RmEndSession", cancel)
+        self.assertIn("SetErrorLevel 2\n  Quit", cancel)
+
+    def test_installer_prompts_use_all_application_locales(self) -> None:
+        script = package_native.windows_installer_script(
+            binary=Path("oxide.exe"),
+            version="2.0.31",
+            identity=self.identity(),
+            installer_root=Path(r"C:\dist\nsis-windows_x64"),
+            installer_path=Path(r"C:\dist\oxide_setup.exe"),
+            icon_path=Path(r"C:\icons\icon.ico"),
+        )
+        for language in (
+            "English", "SimpChinese", "TradChinese", "German", "Spanish",
+            "French", "Italian", "Japanese", "Korean", "PortugueseBR", "Vietnamese",
+        ):
+            with self.subTest(language=language):
+                self.assertIn(f'!insertmacro MUI_LANGUAGE "{language}"', script)
+                self.assertIn(f'LangString CloseRunningApplication ${{LANG_{language.upper()}}}', script)
+                self.assertIn(f'LangString ApplicationCloseFailed ${{LANG_{language.upper()}}}', script)
+        self.assertIn("oxide GPUI Preview 仍在运行", script)
+        self.assertNotIn("{{app}}", script)
+        self.assertNotIn("{{path}}", script)
+
+    def test_installer_compiler_receives_utf8_with_bom(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            payload = root / "payload"
+            payload.mkdir()
+            compiler_inputs = []
+
+            def capture_compiler_input(command: list[str]) -> None:
+                compiler_inputs.append(Path(command[-1]).read_bytes())
+
+            with (
+                patch.object(package_native, "DIST_DIR", root),
+                patch.object(package_native, "find_makensis", return_value="makensis"),
+                patch.object(package_native, "stage_windows_installer_root", return_value=payload),
+                patch.object(package_native, "run", side_effect=capture_compiler_input),
+                patch.object(package_native, "sign_windows_file"),
+            ):
+                package_native.create_windows_installer(
+                    binary=Path("oxide.exe"),
+                    update_helper=Path("oxide-update-helper.exe"),
+                    target="x86_64-pc-windows-msvc",
+                    version="2.1.0",
+                    label="windows_x64",
+                    identity=self.identity(),
+                )
+
+            script_bytes, = compiler_inputs
+            self.assertTrue(script_bytes.startswith(codecs.BOM_UTF8))
+            self.assertIn("oxide GPUI Preview 仍在运行", script_bytes.decode("utf-8-sig"))
+
+    @unittest.skipUnless(shutil.which("makensis"), "NSIS compiler is not installed")
+    def test_installer_compiles_with_localized_preflight(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            payload = root / "payload"
+            (payload / "tools").mkdir(parents=True)
+            (payload / "oxide.exe").write_bytes(b"app payload")
+            (payload / "tools" / "oxide-update-helper.exe").write_bytes(b"helper payload")
+            installer = root / "setup.exe"
+            source = root / "setup.nsi"
+            source.write_text(package_native.windows_installer_script(
+                binary=Path("oxide.exe"),
+                version="2.0.31",
+                identity=self.identity(),
+                installer_root=payload,
+                installer_path=installer,
+                icon_path=package_native.RESOURCE_DIR / "icons" / "icon.ico",
+            ), encoding="utf-8-sig")
+            result = subprocess.run(
+                [shutil.which("makensis"), "/V2" if sys.platform == "win32" else "-V2", str(source)],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(installer.read_bytes()[:2], b"MZ")
+
+    def test_update_mode_stages_files_and_installs_helper_directly(self) -> None:
+        script = package_native.windows_installer_script(
+            binary=Path("oxide.exe"),
+            version="1.2.0-gpui-preview.2",
+            identity=self.identity(),
+            installer_root=Path(r"C:\dist\nsis-windows_x64"),
+            installer_path=Path(r"C:\dist\oxide_setup.exe"),
+            icon_path=Path(r"C:\icons\icon.ico"),
+        )
+
+        self.assertIn('/oxide_UPDATE=1', script)
+        self.assertIn('SetSilent silent', script)
+        self.assertIn('RMDir /r "$INSTDIR\\install"', script)
+        self.assertIn('SetOutPath "$INSTDIR\\tools"', script)
+        self.assertIn('tools/oxide-update-helper.exe"', script)
+        self.assertIn('SetOutPath "$INSTDIR\\install"', script)
+        self.assertIn('Exec \'"$INSTDIR\\tools\\oxide-update-helper.exe"', script)
+        self.assertIn('--install-dir "$INSTDIR"', script)
+        self.assertIn('--app-exe "$INSTDIR\\oxide.exe" --launch', script)
+        self.assertIn('StrCmp $IsOxideUpdate "1" start_menu_shortcut_done', script)
+        self.assertIn('StrCmp $IsOxideUpdate "1" desktop_shortcut_done', script)
+        self.assertNotIn('$LOCALAPPDATA\\oxide\\oxide.exe', script)
+        update_install = script.split("update_install:\n", 1)[1].split("install_done:\n", 1)[0]
+        self.assertNotIn("Call EnsureApplicationClosed", update_install)
+
+    def test_installer_and_installed_application_use_the_application_icon(self) -> None:
+        icon_path = Path(r"C:\icons\icon.ico")
+        script = package_native.windows_installer_script(
+            binary=Path("oxide.exe"),
+            version="1.2.0-gpui-preview.2",
+            identity=self.identity(),
+            installer_root=Path(r"C:\dist\nsis-windows_x64"),
+            installer_path=Path(r"C:\dist\oxide_setup.exe"),
+            icon_path=icon_path,
+        )
+        resolved_icon = package_native.nsis_path(icon_path)
+        installer_icon = f'!define MUI_ICON "{resolved_icon}"'
+        uninstaller_icon = f'!define MUI_UNICON "{resolved_icon}"'
+
+        self.assertIn(installer_icon, script)
+        self.assertIn(uninstaller_icon, script)
+        self.assertLess(script.index(installer_icon), script.index("!include MUI2.nsh"))
+        self.assertNotIn('\nIcon "', script)
+        self.assertNotIn("\nUninstallIcon ", script)
+        display_icon_entry = r'"DisplayIcon" "$\"$INSTDIR\oxide.exe$\",0"'
+        self.assertEqual(script.count(display_icon_entry), 2)
+
+    def test_stable_installer_detects_tauri_current_user_install(self) -> None:
+        identity = package_native.release_identity("v2.0.0", "2.0.0")
+        script = package_native.windows_installer_script(
+            binary=Path("oxide.exe"),
+            version="2.0.0",
+            identity=identity,
+            installer_root=Path(r"C:\dist\nsis-windows_x64"),
+            installer_path=Path(r"C:\dist\oxide_setup.exe"),
+            icon_path=Path(r"C:\icons\icon.ico"),
+        )
+
+        self.assertIn('$LOCALAPPDATA\\oxide\\oxide.exe', script)
+        self.assertIn('StrCpy $INSTDIR "$LOCALAPPDATA\\oxide"', script)
+        self.assertIn('StrCpy $IsOxideUpdate "1"', script)
+        self.assertIn('StrCpy $IsLegacyUpgrade "1"', script)
+        self.assertIn('SetSilent silent', script)
+        self.assertIn(
+            'CreateShortcut "$SMPROGRAMS\\oxide\\oxide.lnk" '
+            '"$INSTDIR\\oxide.exe"',
+            script,
+        )
+        self.assertIn('IfFileExists "$DESKTOP\\oxide.lnk"', script)
+
+    def test_installer_registers_connection_uri_capabilities_without_embedding_credentials(self) -> None:
+        identity = self.identity()
+        script = package_native.windows_installer_script(
+            binary=Path("oxide.exe"),
+            version="2.0.23",
+            identity=identity,
+            installer_root=Path(r"C:\dist\nsis-windows_x64"),
+            installer_path=Path(r"C:\dist\oxide_setup.exe"),
+            icon_path=Path(r"C:\icons\icon.ico"),
+        )
+
+        for scheme in package_native.CONNECTION_URI_SCHEMES:
+            self.assertIn(f'"{scheme}" "{identity.app_identifier}.{scheme}"', script)
+        self.assertIn(r'"$\"$INSTDIR\oxide.exe$\" $\"%1$\""', script)
+        self.assertIn('Software\\RegisteredApplications', script)
+
+
+class MacosConnectionUriTests(unittest.TestCase):
+    def test_bundle_declares_all_connection_uri_schemes(self) -> None:
+        identity = package_native.release_identity("v2.0.23", "2.0.23")
+        plist = package_native.build_macos_info_plist("2.0.23", identity)
+
+        self.assertEqual(
+            plist["CFBundleURLTypes"][0]["CFBundleURLSchemes"],
+            list(package_native.CONNECTION_URI_SCHEMES),
+        )
+
+
+class MacosBridgeArchiveTests(unittest.TestCase):
+    def test_tauri_bridge_archive_keeps_app_bundle_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            app = root / "oxide.app"
+            executable = app / "Contents" / "MacOS" / "oxide"
+            executable.parent.mkdir(parents=True)
+            executable.write_bytes(b"native")
+            executable.chmod(0o755)
+            archive_path = root / "oxide.app.tar.gz"
+
+            package_native.archive_macos_tauri_bundle(app, archive_path)
+
+            with package_native.tarfile.open(archive_path, "r:gz") as archive:
+                member = archive.getmember(
+                    "oxide.app/Contents/MacOS/oxide"
+                )
+                self.assertEqual(member.mode & 0o111, 0o111)
+
+
+class MacosDmgCreateTests(unittest.TestCase):
+    def test_creation_retries_resource_busy_for_both_image_formats(self) -> None:
+        for notice, image_format in [(False, "UDZO"), (True, "UDRW")]:
+            with self.subTest(image_format=image_format), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                image = root / "oxide.dmg"
+                attempts = []
+
+                def run_command(command, **kwargs):
+                    if command[:2] == ["hdiutil", "create"]:
+                        attempts.append(command)
+                        if len(attempts) == 1:
+                            raise subprocess.CalledProcessError(
+                                1, command, stderr="hdiutil: create failed - Resource busy\n"
+                            )
+                    return subprocess.CompletedProcess(command, 0, stderr="")
+
+                with (
+                    patch.object(package_native, "should_include_macos_unsigned_install_notice", return_value=notice),
+                    patch.object(package_native.subprocess, "run", side_effect=run_command),
+                    patch.object(package_native, "attach_macos_dmg", return_value="/dev/disk9"),
+                    patch.object(package_native, "detach_macos_dmg"),
+                    patch.object(package_native.time, "sleep") as sleep,
+                ):
+                    package_native.create_macos_dmg(root, image, package_native.release_identity("v2.0.30", "2.0.30"))
+                expected_image = root / ".oxide.writable.dmg" if notice else image
+                expected = ["hdiutil", "create", "-volname", "oxide", "-srcfolder", str(root), "-ov", "-format", image_format, str(expected_image)]
+                self.assertEqual(attempts, [expected, expected])
+                sleep.assert_called_once_with(2)
+
+    def test_creation_fails_after_busy_limit_and_does_not_retry_other_errors(self) -> None:
+        for code, diagnostic, expected_attempts in [
+            (1, "hdiutil: create failed - Resource busy\n", 3),
+            (16, "", 3),
+            (1, "hdiutil: create failed - No space left on device\n", 1),
+        ]:
+            with self.subTest(code=code, diagnostic=diagnostic):
+                command = ["hdiutil", "create", "-volname", "oxide", "-srcfolder", "/tmp/source", "-ov", "-format", "UDZO", "/tmp/output.dmg"]
+                error = subprocess.CalledProcessError(code, command, stderr=diagnostic)
+                with (
+                    patch.object(package_native.subprocess, "run", side_effect=error) as run_mock,
+                    patch.object(package_native.time, "sleep") as sleep,
+                    self.assertRaises(subprocess.CalledProcessError) as raised,
+                ):
+                    package_native.create_macos_disk_image(Path("/tmp/source"), Path("/tmp/output.dmg"), "oxide", "UDZO")
+                self.assertIs(raised.exception, error)
+                self.assertEqual([args.args[0] for args in run_mock.call_args_list], [command] * expected_attempts)
+                self.assertEqual(sleep.call_args_list, [call(2)] * (expected_attempts - 1))
+
+
+class MacosDmgDetachTests(unittest.TestCase):
+    def test_selects_partition_scheme_root_device_from_attach_plist(self) -> None:
+        attach_plist = plistlib.dumps(
+            {
+                "system-entities": [
+                    {
+                        "dev-entry": "/dev/disk4",
+                        "content-hint": "GUID_partition_scheme",
+                    },
+                    {
+                        "dev-entry": "/dev/disk4s1",
+                        "content-hint": "Apple_APFS",
+                    },
+                    {
+                        "dev-entry": "/dev/disk5s1",
+                        "mount-point": "/tmp/oxide-test.mount",
+                    },
+                ]
+            }
+        )
+
+        self.assertEqual(
+            package_native.macos_dmg_root_device(attach_plist),
+            "/dev/disk4",
+        )
+
+    def test_collects_devices_from_hdiutil_info_plist(self) -> None:
+        info_plist = plistlib.dumps(
+            {
+                "images": [
+                    {
+                        "system-entities": [
+                            {"dev-entry": "/dev/disk4"},
+                            {"dev-entry": "/dev/disk4s1"},
+                        ]
+                    },
+                    {"system-entities": [{"dev-entry": "/dev/disk8"}]},
+                ]
+            }
+        )
+
+        self.assertEqual(
+            package_native.macos_dmg_devices_from_info_plist(info_plist),
+            {"/dev/disk4", "/dev/disk4s1", "/dev/disk8"},
+        )
+
+    def test_detach_retries_only_busy_attached_devices_with_bounded_force_fallback(self) -> None:
+        device = "/dev/disk9"
+        normal = ["hdiutil", "detach", device]
+        forced = ["hdiutil", "detach", "-force", device]
+        busy = subprocess.CalledProcessError(16, normal)
+        permission = subprocess.CalledProcessError(1, normal)
+        for name, results, attached, expected_commands, waits, error in [
+            ("retry", [busy, None], True, [normal] * 2, 1, None),
+            ("force", [busy] * 5 + [None], True, [normal] * 5 + [forced], 4, None),
+            ("force retry", [busy] * 6 + [None], True, [normal] * 5 + [forced] * 2, 5, None),
+            ("exhausted", [busy] * 20, True, [normal] * 5 + [forced] * 15, 18, busy),
+            ("permission", [permission], True, [normal], 0, permission),
+            ("already detached", [busy], False, [normal], 0, None),
+        ]:
+            with (
+                self.subTest(case=name),
+                patch.object(package_native, "run", side_effect=results) as run_mock,
+                patch.object(package_native, "macos_dmg_device_is_attached", return_value=attached) as probe,
+                patch.object(package_native.time, "sleep") as sleep,
+            ):
+                if error:
+                    with self.assertRaises(subprocess.CalledProcessError) as raised:
+                        package_native.detach_macos_dmg(device)
+                    self.assertIs(raised.exception, error)
+                else:
+                    package_native.detach_macos_dmg(device)
+                self.assertEqual(run_mock.call_args_list, [call(command) for command in expected_commands])
+                self.assertEqual(sleep.call_args_list, [call(2)] * waits)
+                expected_probes = sum(result is busy for result in results)
+                self.assertEqual(probe.call_args_list, [call(device)] * expected_probes)
+
+
+class ReleaseDocumentTests(unittest.TestCase):
+    def test_distribution_artwork_matches_the_recorded_hashes(self) -> None:
+        import hashlib
+        import re
+
+        notice = (package_native.THIRD_PARTY_LICENSE_DIR / "DISTRO-ICONS-NOTICE.md").read_text()
+        assets = re.findall(r"Bundled file: `([^`]+)`\.\n- SHA-256: `([0-9a-f]+)`", notice)
+        self.assertEqual([Path(path).stem for path, _ in assets], ["ubuntu", "archlinux", "debian", "gentoo", "nixos", "rocky", "linuxmint"])
+        asset_directory = package_native.ROOT_DIR / "crates/oxide-app/resources/distro-icons"
+        self.assertEqual({Path(path).name for path, _ in assets}, {path.name for path in asset_directory.glob("*.svg")})
+        for path, expected_hash in assets:
+            with self.subTest(asset=path):
+                self.assertEqual(hashlib.sha256((package_native.ROOT_DIR / path).read_bytes()).hexdigest(), expected_hash)
+
+    def test_release_documents_include_native_and_agent_notices(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory)
+            package_native.copy_release_documents(destination)
+
+            self.assertEqual(
+                {path.name for path in destination.iterdir()},
+                {
+                    "LICENSE",
+                    "README.md",
+
+                },
+            )
+            self.assertGreater((destination / "THIRD_PARTY_NOTICES.md").stat().st_size, 0)
+            background_license = (
+                destination / "BACKGROUND-ASSETS-LICENSE.md"
+            ).read_text(encoding="utf-8")
+            self.assertIn("oxide-nocturne-v1.webp", background_license)
+            self.assertIn("CC-BY-4.0", background_license)
+            self.assertIn("does not grant rights", background_license)
+            self.assertGreater(
+                (destination / "AGENT_THIRD_PARTY_NOTICES.md").stat().st_size,
+                0,
+            )
+
+    def test_portable_update_manifest_owns_only_release_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            package_root = Path(directory)
+            binary = package_root / "oxide"
+            update_helper = package_root / "oxide-update-helper"
+
+            package_native.write_portable_update_manifest(
+                package_root, binary, update_helper
+            )
+
+            manifest = package_native.json.loads(
+                (package_root / "portable-update.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(manifest["appExecutable"], binary.name)
+            self.assertEqual(
+                manifest["updateHelper"],
+                f"tools/{update_helper.name}",
+            )
+            self.assertIn("resources", manifest["managedEntries"])
+            self.assertIn("tools", manifest["managedEntries"])
+            self.assertNotIn("data", manifest["managedEntries"])
+            self.assertNotIn("portable.json", manifest["managedEntries"])
+
+
+class ReleaseVersionTests(unittest.TestCase):
+    def test_release_version_must_match_compiled_workspace_version(self) -> None:
+        workspace_version = package_native.workspace_version()
+        package_native.validate_release_version(f"gpui-v{workspace_version}", workspace_version)
+
+        mismatched_version = f"{workspace_version}.mismatch"
+        with self.assertRaisesRegex(RuntimeError, "scripts/release/bump_version.py"):
+            package_native.validate_release_version(
+                f"v{mismatched_version}", mismatched_version
+            )
+
+
+class LinuxDesktopEntryTests(unittest.TestCase):
+    def test_desktop_entry_exposes_matching_startup_window_class(self) -> None:
+        identity = package_native.release_identity("v2.0.0", "2.0.0")
+        with tempfile.TemporaryDirectory() as directory:
+            desktop_file = Path(directory) / "com.oxide.app.desktop"
+
+            package_native.write_linux_desktop_file(
+                desktop_file, identity, "/opt/oxide/oxide"
+            )
+
+            desktop_entry = desktop_file.read_text(encoding="utf-8")
+            self.assertIn("StartupWMClass=com.oxide.app", desktop_entry)
+            for scheme in package_native.CONNECTION_URI_SCHEMES:
+                self.assertIn(f"x-scheme-handler/{scheme}", desktop_entry)
+
+
+class PlatformSigningTests(unittest.TestCase):
+    def test_macos_signing_options_follow_the_selected_identity(self) -> None:
+        for environment, identity, hardened in [
+            ({"MACOS_CODESIGN_IDENTITY": "Developer ID Application: oxide"},
+             "Developer ID Application: oxide", True),
+            ({}, "-", False),
+        ]:
+            with (
+                self.subTest(identity=identity),
+                patch.dict(package_native.os.environ, environment, clear=True),
+            ):
+                command = package_native.macos_codesign_command("codesign", Path("oxide.app"))
+                self.assertEqual(command[-3:], ["--sign", identity, "oxide.app"])
+                if hardened:
+                    self.assertEqual(command[3:6], ["--options", "runtime", "--timestamp"])
+                else:
+                    self.assertNotIn("--options", command)
+                    self.assertNotIn("--timestamp", command)
+
+    def test_macos_notarization_is_optional_for_development_builds(self) -> None:
+        with patch.dict(package_native.os.environ, {}, clear=True):
+            submitted = package_native.notarize_macos_artifact(
+                Path("oxide.app.zip"), staple=False
+            )
+
+        self.assertFalse(submitted)
+
+    def test_gatekeeper_artwork_is_copied_only_for_unsigned_stable_images(self) -> None:
+        for tag, version, signer, expected in [
+            ("v2.0.0", "2.0.0", "", True),
+            ("v2.0.0", "2.0.0", "Developer ID Application: oxide", False),
+            ("gpui-v2.0.0-gpui-preview.16", "2.0.0-gpui-preview.16", "", False),
+        ]:
+            with self.subTest(tag=tag, signer=signer), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = root / "notice-source.png"
+                source.write_bytes(b"png notice")
+                background = root / "background-source.png"
+                background.write_bytes(b"png background")
+                dmg_root = root / "dmg"
+                dmg_root.mkdir()
+                with (
+                    patch.object(package_native, "MACOS_UNSIGNED_INSTALL_NOTICE", source),
+                    patch.object(package_native, "MACOS_UNSIGNED_DMG_BACKGROUND", background),
+                    patch.dict(package_native.os.environ, {"MACOS_CODESIGN_IDENTITY": signer}, clear=True),
+                ):
+                    copied = package_native.copy_macos_unsigned_install_notice(
+                        dmg_root, package_native.release_identity(tag, version)
+                    )
+                self.assertEqual(copied, expected)
+                notice_path = dmg_root / package_native.MACOS_UNSIGNED_INSTALL_NOTICE_NAME
+                background_path = (
+                    dmg_root / package_native.MACOS_DMG_BACKGROUND_DIR_NAME
+                    / package_native.MACOS_DMG_BACKGROUND_NAME
+                )
+                if expected:
+                    self.assertEqual(notice_path.read_bytes(), b"png notice")
+                    self.assertEqual(background_path.read_bytes(), b"png background")
+                else:
+                    self.assertEqual(list(dmg_root.iterdir()), [])
+
+    def test_unsigned_finder_layout_keeps_primary_icons_and_notice_separate(self) -> None:
+        script = package_native.macos_dmg_finder_script()
+
+        self.assertIn("set dmgFolder to POSIX file mountPath as alias", script)
+        self.assertNotIn("tell disk volumeName", script)
+        self.assertIn("set bounds of dmgWindow to {120, 120, 840, 600}", script)
+        self.assertIn("set position of item appName of dmgFolder to {180, 205}", script)
+        self.assertIn(
+            'set position of item "Applications" of dmgFolder to {540, 205}', script
+        )
+        self.assertIn(
+            "set position of item noticeName of dmgFolder to {620, 390}", script
+        )
+        self.assertIn(package_native.MACOS_DMG_BACKGROUND_NAME, script)
+
+
+class LinuxPackagingTests(unittest.TestCase):
+    def test_plugin_scanner_uses_installed_package_when_configured_path_is_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            configured = root / "libexec" / "gstreamer-1.0"
+            installed = root / "lib" / "aarch64-linux-gnu" / "gstreamer1.0" / "gstreamer-1.0" / "gst-plugin-scanner"
+            installed.parent.mkdir(parents=True)
+            installed.write_bytes(b"packaged scanner")
+            for configured_dir in (str(configured), ""):
+                with (
+                    self.subTest(configured_dir=configured_dir),
+                    patch.object(package_native, "require_tool", side_effect=lambda name: name),
+                    patch.object(package_native.subprocess, "run", side_effect=[
+                        subprocess.CompletedProcess([], 0, stdout=configured_dir),
+                        subprocess.CompletedProcess([], 0, stdout=f"{root}\n{installed}\n"),
+                    ]),
+                ):
+                    self.assertEqual(package_native.linux_gstreamer_plugin_scanner(), installed)
+            configured.mkdir(parents=True)
+            configured_scanner = configured / "gst-plugin-scanner"
+            configured_scanner.write_bytes(b"configured scanner")
+            with (
+                patch.object(package_native, "require_tool", side_effect=lambda name: name),
+                patch.object(package_native.subprocess, "run", return_value=
+                    subprocess.CompletedProcess([], 0, stdout=str(configured))) as run,
+            ):
+                self.assertEqual(package_native.linux_gstreamer_plugin_scanner(), configured_scanner)
+                self.assertEqual(run.call_count, 1)
+
+    def test_missing_elf_dependencies_stop_packaging(self) -> None:
+        result = subprocess.CompletedProcess(
+            ["ldd"], 0, stdout="libgstvideo-1.0.so.0 => not found\n", stderr=""
+        )
+        with patch.object(package_native.subprocess, "run", return_value=result):
+            with self.assertRaisesRegex(RuntimeError, "libgstvideo-1.0.so.0"):
+                package_native.linux_dynamic_libraries(Path("oxide"))
+
+    @unittest.skipUnless(
+        sys.platform == "linux" and shutil.which("gst-inspect-1.0") and shutil.which("dpkg-query"),
+        "Ubuntu GStreamer packaging tools are required",
+    )
+    def test_appimage_plugins_load_from_bundled_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            appdir = Path(directory)
+            package_native.copy_linux_appimage_media_runtime(Path("/bin/true"), appdir)
+            environment = {
+                **os.environ,
+                "LC_ALL": "C",
+                "LD_LIBRARY_PATH": str(appdir / "usr/lib"),
+                "GST_PLUGIN_PATH": "",
+                "GST_PLUGIN_PATH_1_0": "",
+                "GST_PLUGIN_SYSTEM_PATH": str(appdir / "usr/lib/gstreamer-1.0"),
+                "GST_PLUGIN_SYSTEM_PATH_1_0": str(appdir / "usr/lib/gstreamer-1.0"),
+                "GST_PLUGIN_SCANNER": str(appdir / "usr/libexec/gst-plugin-scanner"),
+                "GST_PLUGIN_SCANNER_1_0": str(appdir / "usr/libexec/gst-plugin-scanner"),
+                "GST_REGISTRY_1_0": str(appdir / "registry.bin"),
+            }
+            for factory in ("avdec_h264", "qtdemux", "appsink", "videoflip", "audioconvert"):
+                result = subprocess.run(
+                    ["gst-inspect-1.0", factory], env=environment,
+                    check=True, capture_output=True, text=True,
+                )
+                self.assertIn(str(appdir / "usr/lib/gstreamer-1.0"), result.stdout)
+            license_dir = appdir / "usr/share/doc/gstreamer-runtime"
+            self.assertIn("GStreamer", (license_dir / "gstreamer1.0-libav.copyright").read_text())
+            self.assertIn("GNU", (license_dir / "common-licenses/LGPL-2.1").read_text())
+
+    def test_package_probe_checks_pixels_timing_and_loop_restart(self) -> None:
+        colors = [[0, 0, 253, 255]] * 25 + [[254, 0, 0, 255]] * 25 + [[0, 0, 253, 255]] * 6
+        frames = [[i + 1, i * 40, 40, 64, 48, *color] for i, color in enumerate(colors)]
+        def output(rows):
+            return "\n".join(" ".join(map(str, row)) for row in rows)
+        verify_background_package.verify_frames(output(frames))
+        for row, column, replacement in ((50, 1, 0), (25, 5, 0), (0, 3, 16), (0, 8, 0)):
+            with self.subTest(row=row, column=column):
+                broken = [frame.copy() for frame in frames]
+                broken[row][column] = replacement
+                with self.assertRaises(RuntimeError):
+                    verify_background_package.verify_frames(output(broken))
+
+    def test_dynamic_graphics_loaders_are_declared_as_recommendations(self) -> None:
+        # Vulkan and EGL are loaded with dlopen, so ELF dependency discovery
+        # cannot add these runtime packages automatically.
+        self.assertEqual(
+            package_native.linux_deb_graphics_recommends(),
+            "libegl1, libvulkan1",
+        )
+        self.assertEqual(
+            package_native.linux_rpm_graphics_recommends(),
+            "Recommends: libglvnd-egl\nRecommends: vulkan-loader",
+        )
+
+    def test_rpm_arch_and_prerelease_version_are_normalized(self) -> None:
+        self.assertEqual(
+            package_native.linux_rpm_arch("aarch64-unknown-linux-gnu"),
+            "aarch64",
+        )
+        self.assertEqual(
+            package_native.linux_rpm_version_release("2.0.0-gpui-preview.16"),
+            ("2.0.0", "0.gpui.preview.16"),
+        )
+        self.assertEqual(
+            package_native.linux_rpm_version_release("2.0.0"),
+            ("2.0.0", "1"),
+        )
+
+    @unittest.skipUnless(
+        shutil.which("rpmbuild") and shutil.which("rpm"),
+        "RPM build tools are not installed",
+    )
+    def test_rpm_package_contains_runtime_layout_and_metadata(self) -> None:
+        # Exercise the actual RPM spec with synthetic resources so Linux CI
+        # catches rpmbuild syntax and payload regressions before a release.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dist_dir = root / "dist"
+            resource_dir = root / "resources"
+            dist_dir.mkdir()
+
+            for icon_name in (
+                "32x32.png",
+                "64x64.png",
+                "128x128.png",
+                "128x128@2x.png",
+            ):
+                icon_path = resource_dir / "icons" / icon_name
+                icon_path.parent.mkdir(parents=True, exist_ok=True)
+                icon_path.write_bytes(b"synthetic icon")
+
+            target = "x86_64-unknown-linux-gnu"
+            for relative_path in (
+                Path("cli-bin") / target / "oxide",
+                Path("helpers") / target / "oxide-rdp-helper",
+                Path("helpers") / target / "oxide-vnc-helper",
+            ):
+                destination = resource_dir / relative_path
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2("/bin/true", destination)
+
+            for agent_target in (
+                "x86_64-unknown-linux-gnu",
+                "aarch64-unknown-linux-gnu",
+            ):
+                # Follow the production resource contract so a directory rename
+                # cannot leave the RPM fixture silently testing a stale layout.
+                agent_path = (
+                    resource_dir
+                    / package_native.AGENT_RESOURCE_DIR
+                    / agent_target
+                    / "oxide-agent"
+                )
+                agent_path.parent.mkdir(parents=True, exist_ok=True)
+                agent_path.write_bytes(b"synthetic agent")
+
+            release_documents = []
+            for name in (
+                "GPUI-CE-LICENSE-APACHE",
+                "LICENSE",
+                "MICROSOFT-TERMINAL-LICENSE-MIT",
+                "NOTICE",
+                "README.md",
+                "THIRD_PARTY_NOTICES.md",
+                "AGENT_THIRD_PARTY_NOTICES.md",
+            ):
+                document = root / name
+                document.write_text(f"{name}\n", encoding="utf-8")
+                # Production documents carry an explicit package filename so
+                # sources outside the repository root can be renamed safely.
+                release_documents.append((document, name))
+
+            binary = root / "oxide"
+            shutil.copy2("/bin/true", binary)
+            identity = package_native.release_identity("v2.0.0", "2.0.0")
+            with (
+                patch.object(package_native, "DIST_DIR", dist_dir),
+                patch.object(package_native, "RESOURCE_DIR", resource_dir),
+                patch.object(package_native, "RELEASE_DOCUMENTS", release_documents),
+            ):
+                package_native.create_linux_rpm(
+                    binary,
+                    target,
+                    "2.0.0",
+                    "linux_x64",
+                    identity,
+                )
+
+            artifact = dist_dir / "oxide_2.0.0_linux_x64.rpm"
+            self.assertTrue(artifact.is_file())
+            package_listing = subprocess.check_output(
+                ["rpm", "-qpl", str(artifact)],
+                text=True,
+            )
+            self.assertIn("/opt/oxide/PACKAGE_KIND", package_listing)
+            self.assertIn("/opt/oxide/oxide", package_listing)
+            self.assertIn(
+                "/opt/oxide/resources/agents/x86_64-unknown-linux-gnu/oxide-agent",
+                package_listing,
+            )
+            self.assertIn(
+                "/opt/oxide/resources/agents/aarch64-unknown-linux-gnu/oxide-agent",
+                package_listing,
+            )
+            recommendations = subprocess.check_output(
+                ["rpm", "-qp", "--recommends", str(artifact)],
+                text=True,
+            )
+            for package_name in package_native.LINUX_RPM_GRAPHICS_RECOMMENDS:
+                self.assertIn(package_name, recommendations)
+            dependencies = subprocess.check_output(
+                ["rpm", "-qp", "--requires", str(artifact)], text=True,
+            ).splitlines()
+            self.assertIn("gstreamer1-plugin-openh264", dependencies)
+            self.assertIn("openh264", dependencies)
+
+    def test_dpkg_shlibdeps_output_requires_dependency_expression(self) -> None:
+        dependencies = package_native.parse_dpkg_shlibdeps_output(
+            "shlibs:Depends=libc6 (>= 2.35), libgcc-s1 (>= 3.0)\n"
+        )
+        self.assertEqual(dependencies, "libc6 (>= 2.35), libgcc-s1 (>= 3.0)")
+
+        with self.assertRaisesRegex(RuntimeError, "shlibs:Depends"):
+            package_native.parse_dpkg_shlibdeps_output("shlibs:Recommends=libx11-6")
+
+
+if __name__ == "__main__":
+    unittest.main()

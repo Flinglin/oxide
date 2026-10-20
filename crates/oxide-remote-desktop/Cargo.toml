@@ -1,0 +1,15 @@
+[lints]
+workspace = true
+
+[package]
+name = "oxide-remote-desktop"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+gpui.workspace = true
+image.workspace = true
+oxide-ui = { path = "../oxide-ui" }
+oxide-remote-desktop-core = { path = "../oxide-remote-desktop-core" }
+oxide-theme = { path = "../oxide-theme" }

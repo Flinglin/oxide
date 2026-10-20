@@ -1,0 +1,270 @@
+#[cfg(feature = "bench")]
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TerminalPlaybackUpdateTimings {
+    pub terminal_lock: Duration,
+    pub parse_and_grid: Duration,
+    pub event_extraction: Duration,
+    pub gpui_state_update: Duration,
+}
+
+impl TerminalPane {
+    pub fn recording_status(&self) -> TerminalRecordingStatus {
+        self.recorder
+            .as_ref()
+            .map(TerminalRecorder::status)
+            .unwrap_or_default()
+    }
+
+    pub fn start_recording(&mut self, title: Option<String>, cx: &mut Context<Self>) {
+        let context = self.terminal.lock().audit_context();
+        let audit = oxide_audit::AuditOperation::in_request(
+            context.as_ref(), oxide_audit::AuditCategory::Automation,
+            "terminal_recording_start", None,
+        );
+        let options = TerminalRecordingOptions {
+            title,
+            capture_input: false,
+            theme: Some(TerminalRecordingTheme {
+                fg: hex_color(self.theme.foreground),
+                bg: hex_color(self.theme.background),
+                palette: asciicast_palette(self.theme.tokens.terminal),
+            }),
+        };
+        self.recorder = Some(TerminalRecorder::start(
+            self.snapshot.cols,
+            self.snapshot.rows,
+            options,
+        ));
+        self.sync_terminal_output_events_enabled();
+        audit.finish(oxide_audit::AuditOutcome::Succeeded,
+            oxide_audit::AuditEvidence::Lifecycle, None, None);
+        cx.emit(TerminalPaneEvent::RecordingStatusChanged);
+        cx.notify();
+    }
+
+    pub fn pause_recording(&mut self, cx: &mut Context<Self>) {
+        if let Some(recorder) = self.recorder.as_mut() {
+            let before = recorder.status().state;
+            recorder.pause();
+            let changed = recorder.status().state != before;
+            let context = self.terminal.lock().audit_context();
+            let audit = oxide_audit::AuditOperation::in_request(
+                context.as_ref(), oxide_audit::AuditCategory::Automation,
+                "terminal_recording_pause", None,
+            );
+            audit.finish(if changed { oxide_audit::AuditOutcome::Succeeded }
+                else { oxide_audit::AuditOutcome::Unchanged },
+                oxide_audit::AuditEvidence::Lifecycle, None, None);
+            self.sync_terminal_output_events_enabled();
+            cx.emit(TerminalPaneEvent::RecordingStatusChanged);
+            cx.notify();
+        }
+    }
+
+    pub fn resume_recording(&mut self, cx: &mut Context<Self>) {
+        if let Some(recorder) = self.recorder.as_mut() {
+            let before = recorder.status().state;
+            recorder.resume();
+            let changed = recorder.status().state != before;
+            let context = self.terminal.lock().audit_context();
+            let audit = oxide_audit::AuditOperation::in_request(
+                context.as_ref(), oxide_audit::AuditCategory::Automation,
+                "terminal_recording_resume", None,
+            );
+            audit.finish(if changed { oxide_audit::AuditOutcome::Succeeded }
+                else { oxide_audit::AuditOutcome::Unchanged },
+                oxide_audit::AuditEvidence::Lifecycle, None, None);
+            self.sync_terminal_output_events_enabled();
+            cx.emit(TerminalPaneEvent::RecordingStatusChanged);
+            cx.notify();
+        }
+    }
+
+    pub fn discard_recording(&mut self, cx: &mut Context<Self>) {
+        if self.recorder.take().is_some() {
+            let context = self.terminal.lock().audit_context();
+            oxide_audit::AuditOperation::in_request(
+                context.as_ref(), oxide_audit::AuditCategory::Automation,
+                "terminal_recording_discard", None,
+            ).finish(oxide_audit::AuditOutcome::Succeeded,
+                oxide_audit::AuditEvidence::Lifecycle, None, None);
+            self.sync_terminal_output_events_enabled();
+            cx.emit(TerminalPaneEvent::RecordingStatusChanged);
+            cx.notify();
+        }
+    }
+
+    pub fn stop_recording(&mut self, cx: &mut Context<Self>) -> Option<String> {
+        let recorder = self.recorder.take()?;
+        let context = self.terminal.lock().audit_context();
+        let audit = oxide_audit::AuditOperation::in_request(
+            context.as_ref(), oxide_audit::AuditCategory::Automation,
+            "terminal_recording_stop", None,
+        );
+        self.sync_terminal_output_events_enabled();
+        cx.emit(TerminalPaneEvent::RecordingStatusChanged);
+        cx.notify();
+        let content = recorder.stop();
+        audit.finish(oxide_audit::AuditOutcome::Succeeded,
+            oxide_audit::AuditEvidence::Lifecycle, None, Some(content.len() as u64));
+        Some(content)
+    }
+
+    pub fn reset_recording_playback(&mut self, cols: usize, rows: usize, cx: &mut Context<Self>) {
+        let snapshot = {
+            let mut terminal = self.terminal.lock();
+            terminal.reset_recording_playback(cols, rows);
+            terminal.snapshot()
+        };
+        self.snapshot = self.stamp_snapshot(snapshot);
+        self.mark_terminal_content_changed(cx);
+        self.set_selection(None);
+        self.search_query = None;
+        self.search_cache = None;
+        self.selected_search_match = None;
+        cx.notify();
+    }
+
+    pub fn feed_recording_output(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
+        {
+            let mut terminal = self.terminal.lock();
+            terminal.feed_recording_output(bytes);
+            let _ = terminal.take_events();
+        }
+        // Match live PTY output: multiple updates may coalesce before the visible pane builds one
+        // latest incremental snapshot during render.
+        self.snapshot_dirty = true;
+        self.mark_terminal_content_changed(cx);
+        cx.notify();
+    }
+
+    #[cfg(feature = "bench")]
+    #[doc(hidden)]
+    pub fn feed_benchmark_output(&mut self, bytes: &[u8], cx: &mut Context<Self>) {
+        // Recording playback intentionally discards events; command-aware benchmarks need the
+        // same shell integration event handling as live output before building the next frame.
+        let events = {
+            let mut terminal = self.terminal.lock();
+            terminal.feed_recording_output(bytes);
+            terminal.take_events()
+        };
+        for event in events {
+            self.handle_terminal_event(event, cx);
+        }
+        self.snapshot_dirty = true;
+        self.mark_terminal_content_changed(cx);
+        cx.notify();
+    }
+
+    #[cfg(feature = "bench")]
+    #[doc(hidden)]
+    pub fn enable_benchmark_performance_metrics(&mut self) {
+        // Benchmark collection is separate from the visible overlay so diagnostic chrome does
+        // not change the scene whose layout and paint cost is being measured.
+        self.benchmark_performance_metrics_enabled = true;
+    }
+
+    #[cfg(feature = "bench")]
+    #[doc(hidden)]
+    pub fn benchmark_render_stage_micros(&self) -> (u64, u64, u64, u64, u64) {
+        let performance = self.layout_cache.lock().performance();
+        (
+            self.render_stats.snapshot_micros,
+            self.benchmark_backend_snapshot_micros,
+            self.benchmark_snapshot_state_micros,
+            performance.layout_micros,
+            performance.paint_micros,
+        )
+    }
+
+    #[cfg(feature = "bench")]
+    #[doc(hidden)]
+    pub fn benchmark_layout_cache_hit_percent(&self) -> u8 {
+        self.layout_cache.lock().performance().cache_hit_percent
+    }
+
+    #[cfg(feature = "bench")]
+    #[doc(hidden)]
+    pub fn benchmark_semantic_stage_micros(&self) -> (u64, u64, usize) {
+        let performance = self.layout_cache.lock().performance();
+        (
+            performance.semantic_roles_micros,
+            performance.highlights_micros,
+            performance.semantic_command_lines,
+        )
+    }
+
+    #[cfg(feature = "bench")]
+    #[doc(hidden)]
+    pub fn feed_recording_output_profiled(
+        &mut self,
+        bytes: &[u8],
+        cx: &mut Context<Self>,
+    ) -> TerminalPlaybackUpdateTimings {
+        // Stage clocks are opt-in benchmark work; the production feed path above remains free of
+        // timing calls and uses the same operation order.
+        let lock_started = Instant::now();
+        let mut terminal = self.terminal.lock();
+        let terminal_lock = lock_started.elapsed();
+
+        let parse_started = Instant::now();
+        terminal.feed_recording_output(bytes);
+        let parse_and_grid = parse_started.elapsed();
+
+        let events_started = Instant::now();
+        let _ = terminal.take_events();
+        let event_extraction = events_started.elapsed();
+
+        drop(terminal);
+
+        let state_started = Instant::now();
+        self.snapshot_dirty = true;
+        self.mark_terminal_content_changed(cx);
+        cx.notify();
+        let gpui_state_update = state_started.elapsed();
+
+        TerminalPlaybackUpdateTimings {
+            terminal_lock,
+            parse_and_grid,
+            event_extraction,
+            gpui_state_update,
+        }
+    }
+
+    pub fn resize_recording_playback(&mut self, cols: usize, rows: usize, cx: &mut Context<Self>) {
+        let snapshot = {
+            let mut terminal = self.terminal.lock();
+            let _ = terminal.resize_with_cell_size(cols, rows, 0, 0);
+            terminal.snapshot()
+        };
+        self.snapshot = self.stamp_snapshot(snapshot);
+        self.mark_terminal_content_changed(cx);
+        cx.notify();
+    }
+
+}
+
+fn asciicast_palette(theme: oxide_theme::TerminalTheme) -> String {
+    // Asciicast v2 themes require all 16 ANSI colors when a theme object is present.
+    [
+        theme.black,
+        theme.red,
+        theme.green,
+        theme.yellow,
+        theme.blue,
+        theme.magenta,
+        theme.cyan,
+        theme.white,
+        theme.bright_black,
+        theme.bright_red,
+        theme.bright_green,
+        theme.bright_yellow,
+        theme.bright_blue,
+        theme.bright_magenta,
+        theme.bright_cyan,
+        theme.bright_white,
+    ]
+    .map(hex_color)
+    .join(":")
+}

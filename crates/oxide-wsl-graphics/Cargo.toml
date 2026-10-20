@@ -1,0 +1,15 @@
+[lints]
+workspace = true
+
+[package]
+name = "oxide-wsl-graphics"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true

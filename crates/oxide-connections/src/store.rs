@@ -1,0 +1,42 @@
+use std::{
+    collections::{HashMap, HashSet},
+    fmt, fs,
+    path::{Path, PathBuf},
+};
+
+use anyhow::{Context, Result, bail};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use chrono::{DateTime, Duration, Utc};
+use oxide_atomic_file::{durable_remove, durable_write_with_before_replace};
+use oxide_remote_desktop_core::{RemoteDesktopProtocol, RemoteDesktopSessionOptions};
+use russh::keys::{PrivateKey, PublicKeyBase64};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use uuid::Uuid;
+
+const MANAGED_SSH_KEYCHAIN_SERVICE: &str = "com.oxide.managed-ssh-keys";
+const PRIVILEGE_CREDENTIAL_KEYCHAIN_SERVICE: &str = "com.oxide.privilege-credentials";
+
+// Store internals remain included at the crate-root store module so saved
+// connection serialization and keychain helper visibility stay unchanged.
+include!("store/types.rs");
+include!("store/encrypted_config.rs");
+include!("store/connection_store.rs");
+include!("store/helpers.rs");
+include!("store/sync.rs");
+include!("store/ftp.rs");
+include!("store/local_terminal.rs");
+include!("store/resolved_sync.rs");
+include!("store/managed_sync.rs");
+include!("store/privilege_sync.rs");
+#[cfg(test)]
+include!("store/tests.rs");
+
+mod credential_sync;
+mod totp;
+pub use credential_sync::{
+    CLEARED_PROFILE_CREDENTIAL_KIND, CredentialOwner, CredentialSlot, CredentialSyncSelection,
+    CredentialTarget, PROFILE_CREDENTIAL_KIND, PreparedProfileCredentials,
+    ProfileCredentialRestoreSummary, is_profile_credential,
+};
+pub use totp::{TotpBinding, TotpResolver};

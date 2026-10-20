@@ -1,0 +1,12 @@
+[lints]
+workspace = true
+
+[package]
+name = "oxide-terminal-encoding"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+encoding_rs.workspace = true
+zeroize.workspace = true

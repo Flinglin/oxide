@@ -1,0 +1,30 @@
+[lints]
+workspace = true
+
+[package]
+name = "oxide-editor"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[features]
+default = []
+
+[dependencies]
+gpui.workspace = true
+oxide-ui = { path = "../oxide-ui" }
+tracing.workspace = true
+serde.workspace = true
+oxide-editor-core = { path = "../oxide-editor-core" }
+oxide-editor-syntax = { path = "../oxide-editor-syntax" }
+oxide-plugin-manifest = { path = "../oxide-plugin-manifest" }
+oxide-theme = { path = "../oxide-theme" }
+unicode-segmentation.workspace = true
+unicode-width.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+zip.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+gpui = { workspace = true, features = ["test-support"] }

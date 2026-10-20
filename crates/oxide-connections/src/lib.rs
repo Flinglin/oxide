@@ -1,0 +1,73 @@
+mod connection_import;
+mod connection_transport;
+mod draft;
+mod keychain;
+pub mod oxide_file;
+mod secret;
+mod ssh_config;
+mod ssh_config_sync;
+mod ssh_keys;
+mod ssh_paths;
+mod store;
+pub mod totp;
+pub use connection_import::{
+    ConnectionImportApplyRequest, ConnectionImportApplyResult, ConnectionImportDuplicateStrategy,
+    ConnectionImportErrorInfo, ConnectionImportPreview, ConnectionImportSource,
+    ImportedConnectionAuthType, ImportedConnectionDraft, ImportedProxyHopDraft,
+    apply_connection_import, preview_connection_import,
+};
+pub use connection_transport::{
+    ConnectionTransport, MOSH_DEFAULT_PORT_TEXT, RDP_DEFAULT_PORT_TEXT, SSH_DEFAULT_PORT_TEXT,
+    TELNET_DEFAULT_PORT_TEXT, TransportUsernameTransition, VNC_DEFAULT_PORT_TEXT,
+    transport_default_port, transport_is_persistable, transport_port_replacement,
+    transport_username_transition,
+};
+pub use draft::{
+    ConnectionAuthDraft, ConnectionAuthDraftKind, ConnectionDraft, IMPORTED_GROUP, ProxyHopDraft,
+    SSH_CONFIG_TAG, SSH_PROXY_COMMAND_TAG, SSH_REMOTE_COMMAND_TAG,
+    first_available_default_key_path, save_request_from_draft, saved_auth_from_draft,
+    saved_connection_from_ssh_host,
+};
+pub use secret::SecretString;
+pub use ssh_config::{
+    SshBatchImportResult, SshConfigHost, SshConfigImportError, SshConfigProxyHop,
+    canonical_ssh_config_alias, default_ssh_config_path, import_ssh_config_alias,
+    is_literal_ssh_config_alias_query, list_ssh_config_hosts, list_ssh_config_hosts_from_path,
+    resolve_proxy_command, resolve_ssh_config_alias,
+};
+pub use ssh_config_sync::{
+    SshConfigSyncOutcome, SshConfigSyncService, sync_ssh_config_path_into_store,
+};
+pub use ssh_keys::{SshKeyInfo, list_available_ssh_keys};
+pub use store::{
+    ApplySavedConnectionsSyncOutcome, ApplySavedConnectionsSyncSnapshotResult, AuthType,
+    CLEARED_PROFILE_CREDENTIAL_KIND, CONFIG_VERSION, ConnectionCredentialSlot, ConnectionInfo,
+    ConnectionOptions, ConnectionStore, ConnectionStoreCheckpoint, ConnectionStoreData,
+    ConnectionTerminalBackspaceSequence, ConnectionTerminalDeleteSequence,
+    ConnectionTerminalEncoding, ConnectionTerminalOptions, ConnectionTerminalSessionLogPolicy,
+    ConnectionX11ForwardingMode, ConnectionX11ForwardingOptions, CredentialOwner, CredentialSlot,
+    CredentialSyncSelection, CredentialTarget, DEFAULT_SSH_CONNECT_TIMEOUT_SECONDS,
+    DEFAULT_X11_UNTRUSTED_TIMEOUT_SECONDS, DeletedConnectionTombstone, FtpProfile,
+    FtpProfilesSyncSnapshot, FtpSecurity, GLOBAL_UPSTREAM_PROXY_PASSWORD_KEYCHAIN_ID,
+    LOCAL_SHELL_PRIVILEGE_CONNECTION_ID, LocalSyncMetadata, LocalTerminalProfile,
+    ManagedSshKeyInfo, ManagedSshKeyOrigin, ManagedSshKeySyncRecord, ManagedSshKeyUsage,
+    MoshIpFamily, MoshPredictionMode, MoshProfile, MoshProfilesSyncSnapshot, MoshUdpPortSelection,
+    PROFILE_CREDENTIAL_KIND, PreparedProfileCredentials, PreparedSavedConnectionsSync,
+    PrivilegeCredentialKind, PrivilegeCredentialSyncRecord, ProfileCredentialRestoreSummary,
+    ProxyHopInfo, RemoteDesktopProfile, RemoteDesktopProfilesSyncSnapshot,
+    ResolvedConnectionConfiguration, SaveConnectionRequest, SaveFtpProfileRequest,
+    SaveLocalTerminalProfileRequest, SaveMoshProfileRequest, SavePrivilegeCredentialRequest,
+    SaveRemoteDesktopProfileRequest, SaveSerialProfileRequest, SaveStandaloneSftpProfileRequest,
+    SaveTelnetProfileRequest, SavedAuth, SavedConnection, SavedConnectionRuntimeSecrets,
+    SavedConnectionSyncRecord, SavedConnectionsConflictStrategy, SavedConnectionsSyncCleanup,
+    SavedConnectionsSyncSnapshot, SavedMoshProfileRuntimeSecrets, SavedPrivilegeCredential,
+    SavedProxyCommand, SavedProxyHop, SavedStandaloneSftpEndpointRuntimeSecrets,
+    SavedStandaloneSftpProfileRuntimeSecrets, SavedUpstreamProxyAuth, SavedUpstreamProxyConfig,
+    SavedUpstreamProxyPolicy, SavedUpstreamProxyProtocol, SerialFlowControl, SerialLineEnding,
+    SerialParity, SerialProfile, SerialProfilesSyncSnapshot, SshAlgorithmPreferences,
+    SshChannelStrategy, StandaloneSftpEndpoint, StandaloneSftpProfile,
+    StandaloneSftpProfilesSyncSnapshot, StandaloneSftpTransferMode, TelnetProfile,
+    TelnetProfilesSyncSnapshot, default_telnet_upstream_proxy, is_profile_credential,
+    validate_group_name,
+};
+pub use store::{TotpBinding, TotpResolver};

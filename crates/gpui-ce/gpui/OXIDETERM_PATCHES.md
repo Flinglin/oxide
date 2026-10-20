@@ -1,0 +1,736 @@
+# oxide GPUI Vendor Ledger
+
+oxide uses Longbridge's crates.io `gpui-pre` 0.3.7 publication, the version
+pinned by GPUI Kit v0.7.0. The six locally patched packages retain
+oxide framework changes and selected capabilities inherited from GPUI-CE.
+This is not an unmodified Zed tree.
+
+The authoritative provenance record is [`UPSTREAM_BASELINE.toml`](./UPSTREAM_BASELINE.toml).
+It records the published package names and versions, pristine registry archive
+checksums, and each package's `package.metadata.gpui-pre` Zed crate, version,
+and revision. The recorded Zed revision is
+`1a28cff4b409169bac058bca40dfbfeb7621d19b`.
+
+The previous hybrid inputs remain historical provenance:
+Zed `0969b0dba3f3411592fce801d00f8d81b8dcf902`, GPUI-CE
+`9949f8b2d27bb1d6dbc1efe90be039634cf1fb6b`, and oxide import parent
+`f462f86a7bcbc5d2803b55b118f6763a3b7c89b6`. Preserve the GPUI-CE root
+license and packaged Apache license because community-derived code remains.
+
+Registry checksums describe pristine publication archives; they are not hashes
+of oxide's modified directories. Cargo.lock records the complete resolved
+dependency graph; this ledger does not equate a set of downloaded research
+samples with that graph.
+
+## Local Patch Boundary
+
+Only six published packages are patched to local workspace members:
+
+| Published package  | Local directory               |
+| ------------------ | ----------------------------- |
+| `gpui-pre`         | `crates/gpui-ce/gpui`         |
+| `gpui-pre-apple`   | `crates/gpui-ce/gpui_apple`   |
+| `gpui-pre-macos`   | `crates/gpui-ce/gpui_macos`   |
+| `gpui-pre-windows` | `crates/gpui-ce/gpui_windows` |
+| `gpui-pre-linux`   | `crates/gpui-ce/gpui_linux`   |
+| `gpui-pre-wgpu`    | `crates/gpui-ce/gpui_wgpu`    |
+
+The root `[patch.crates-io]` mapping makes the product and registry platform
+packages use the same six patched packages. Other gpui-pre dependencies are
+resolved from crates.io, including utility, collection, macro, scheduling,
+platform, and metrics packages. Their registry checksums are enforced by Cargo.
+The old 18-directory CE closure is not the new dependency boundary.
+
+### Migration disposition
+
+| Category                                                              | Disposition                                                                                                                                  |
+| --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Six package sources and manifests                                     | Adopt the published 0.3.7 source and package metadata; reconcile local integration changes against that source                               |
+| CE backdrop/content filters, extended colors, and window capabilities | Retain as community-derived local patches; preserve their original license and attribution                                                   |
+| Framework and native fixes described below                            | Preserve the product contract in the corresponding patched core/backend; use upstream equivalents only when the complete contract is present |
+| Utility/platform dependencies outside the six packages                | Use registry implementations instead of carrying the old local CE package layout                                                             |
+| Product API differences                                               | Adapt product call sites to 0.3.7; do not introduce unused framework compatibility code                                                      |
+| Platform qualification                                                | Native compilation, framework tests, and manual renderer/input checks remain separate verification gates                                     |
+
+The inventory below describes the required semantics, not a claim that a source
+merge has already passed platform validation. Review the final diff for each
+category and record any upstream-equivalent replacement explicitly.
+
+## Renderer Baseline: No Blade
+
+This vendor baseline does not contain the old Blade renderer, Blade shaders, or
+the old Blade-specific Naga buffer-contract test. Do not replay any of the
+previous `src/platform/blade/*`, `macos-blade`, or Blade WGSL patches. The
+semantic Rust-to-shader layout contract is still mandatory and is migrated to
+the WGPU backend below.
+
+The renderer layout is now:
+
+- Linux and FreeBSD: `gpui_wgpu`, using WGPU with Vulkan and GL backends;
+- macOS: `gpui_macos` with the extracted `gpui_apple` Metal renderer;
+- Windows: `gpui_windows`, using Direct3D 11;
+
+Backdrop and content filtering, extended color support, and the associated
+window capabilities originated in the prior GPUI-CE layer. They must remain
+available after moving to gpui-pre through the locally patched core and
+renderers; they are not guaranteed by the pristine gpui-pre publication.
+Retain the style-to-scene and shader/backend behavior together, with the
+community source attribution and license.
+
+Public `Rgba` and `Hsla` use gpui-pre's native types and conversions so the
+published macro crate and GPUI Kit share the same color API. Palette remains
+an implementation detail of the retained CE alpha-compositing equations;
+it is no longer exported as the public color representation. `SceneHsla`
+continues to encode the renderer's four-scalar shader layout.
+
+### WGPU shader-transfer contract
+
+`crates/gpui-ce/gpui_wgpu/src/wgpu_renderer.rs` must not upload scene structures as raw
+memory. Scene structures can contain Rust enums, booleans, private fields, or
+padding that do not share WGSL's representation. Preserve these rules:
+
+- every uniform and storage upload uses a `bytemuck::Pod` transfer structure;
+- scene enums and booleans are converted to explicit `u32` values;
+- reusable scratch vectors hold fully initialized storage-buffer instances;
+- the generic storage-buffer writer accepts only `T: Pod` and performs the
+  only typed-slice-to-byte conversion;
+- Naga reflection recursively enumerates every structure reachable from a
+  uniform or storage binding and checks every field offset, total size, and
+  storage-array stride;
+- the separate dual-source-blending shader is audited in addition to the base
+  shader module.
+
+`Background::shader_components` is a hidden, backend-facing decomposition that
+lets renderer crates encode private background tags without inspecting enum
+storage. New background variants must update that exhaustive conversion and
+the shader encoding together.
+
+The historical Blade blur struct is not copied because WGPU owns a different
+`BlurParams` contract. Its replacement is the Naga size/offset audit against
+the actual WGPU uniform.
+
+## Local Patch Inventory
+
+Every source file changed by oxide should retain an English modification
+notice near the top. The sections below define the behavior to preserve; line
+numbers are intentionally omitted because upstream refreshes move code.
+
+### Benchmark frame-cost reporting
+
+`crates/gpui-ce/gpui/src/app/bench_context.rs` extends renderer benchmark reports with the
+platform presentation duration and final-frame scene primitive, GPU batch, and replay-operation
+counts. Scene accounting runs after Criterion's timed iteration loop because walking the batch
+iterator again is diagnostic work rather than product rendering. Preserve that separation so
+terminal render benchmarks expose CPU draw, GPU submission, presentation, and scene-complexity
+changes without measuring the reporter itself. `BenchAppContext::assert_no_rendered_frames`
+supports idle benchmarks whose contract is the absence of draw and presentation events after
+setup has settled. Named stage samples are merged only after a timed iterator returns, keeping
+histogram aggregation outside the measurement while allowing product benchmarks to split their
+own synchronous pipelines.
+
+The 0.3.7 benchmark dispatcher delivers scheduled frames and activates benchmark windows.
+Terminal fixtures let the next-frame viewport update and resize debounce finish before
+calibration; the warm-cache benchmark checks that its grid remains unchanged across measurement.
+Compare performance only after both versions have settled at the same viewport and grid size.
+
+### Pointer capture and Windows cursor recovery
+
+`crates/gpui-ce/gpui/src/window.rs` cancels logical pointer capture and application drag state when
+a platform window loses focus or hover ownership. Native platforms may revoke capture without a
+final mouse-up event, and retaining the old hitbox makes a text input remain globally hovered and
+consume later clicks. `crates/gpui-ce/gpui_windows/src/events.rs` immediately applies a changed
+cursor handle to the currently hovered window while respecting cursor hiding, clears an unreleased
+non-client caption press when the pointer leaves the window, and converts `WM_CAPTURECHANGED` or
+`WM_CANCELMODE` into exactly one deferred mouse-up event. The deferred delivery is required because
+Win32 can revoke capture re-entrantly while GPUI's input callback is borrowed. Every client mouse
+move also reconciles the captured button against the authoritative Win32 message flags and emits a
+missing mouse-up before the move when they disagree. Preserve all three parts: capture recovery
+restores hit testing on every desktop backend, while the Windows updates prevent an I-beam, drag,
+or pressed caption control from surviving native pointer ownership loss or a dropped release.
+
+`Window::request_close` routes programmatic close controls through the same stored
+`on_window_should_close` handler as an operating-system close event before marking the window for
+removal. Client-decorated close buttons must use this request path so future unsaved-work or
+close-to-background policies cannot be bypassed.
+
+### DirectWrite shaped-face identity
+
+`gpui_windows::TextRenderer::DrawGlyphRun` retains the font face supplied by
+DirectWrite when registering a previously unseen fallback run. Glyph indices
+must be rasterized against that same face, and each COM-identity cache key must
+remain backed by an owned face reference. Family-name lookup is reserved for
+requested fonts; it must not reconstruct a face for already-shaped glyphs.
+The `windows_text_` regression checks retained face identity using
+DirectWrite alone, without requiring a GPU or optional language font packs.
+
+### Windows DirectX blur state restoration
+
+`crates/gpui-ce/gpui_windows/src/directx_renderer.rs` restores the scene batch constant buffer
+after each completed blur composite. The blur shaders and ordinary scene vertex shaders both use
+constant-buffer slot `b1`; leaving `BlurParams` bound makes primitives after a backdrop read an
+invalid batch offset, so a modal backdrop can appear while its foreground panel is blank. Preserve
+the restoration when changing blur passes or batch submission.
+
+`gpui_windows/build.rs` precompiles the retained `blur_downsample`, `blur`, and
+`blur_composite` vertex/fragment entry points for release builds. Debug builds
+compile these at runtime, so the Windows platform check also checks the release
+backend to catch missing generated shader bindings before packaging.
+
+### Native window movement, resizing, and ownership
+
+Windows client-decorated windows perform eight-direction outer-frame hit testing instead of
+leaving the left, right, and bottom resize targets at the system's minimal fallback width.
+`gpui_windows::WindowsWindow` also implements the platform resize entry point and packs screen
+coordinates into `WM_NCLBUTTONDOWN` according to the Win32 message contract. Floating windows are
+owned by the active application window. Modal parents are disabled only after renderer and window
+setup succeeds, and are restored if the final placement operation fails.
+
+X11 and Wayland retain their native compositor move and resize protocols. Dialog and anchored-popup
+ownership is added to the parent registry only after renderer and platform setup succeeds. Keep
+registration at that commit boundary: registering earlier can leave a destroyed child recorded as
+blocking, causing the parent window to reject all later input.
+
+### Transparent border-only quad overdraw
+
+`crates/gpui-ce/gpui/src/window.rs` limits transparent, border-only quads to four clipped
+border regions before inserting them into the scene:
+
+- the quad retains its original bounds, corner radii, border widths, and border style so the
+  shader still evaluates rounded and dashed borders against the correct geometry;
+- only each primitive's rectangular content mask is narrowed to one edge;
+- the masks include one device pixel of antialiasing margin;
+- opaque quads remain one primitive, and controls too small to contain a removable interior
+  retain the original primitive;
+- an existing ancestor content mask is intersected with every edge mask, and empty
+  intersections are omitted.
+
+oxide has many large bordered panels. Rendering one transparent quad for each panel would
+run the quad fragment shader across its entire transparent interior. Preserving the geometry
+while excluding that interior reduces GPU overdraw without changing layout or border appearance.
+The behavior is covered by tests for transparent and opaque quads and is an independent
+implementation informed by `zed-industries/zed#61274`.
+
+### Windows nested message-pump exit
+
+`gpui_windows::WindowsPlatformInner::run_foreground_task` yields to paint and input after its
+execution budget. If its message dispatcher receives `WM_QUIT`, it reposts that message with
+its exit code and returns immediately so the main `GetMessageW` loop can terminate.
+Queue-category filters such as `PM_QS_INPUT` are distinct from message-number ranges and need
+not retrieve a pending quit; the forwarding regression test uses an unfiltered read. Native Windows regression tests cover frame-message coalescing, suppression
+of in-draw animation wakeups, and propagation of the quit code to the main loop.
+
+### Native Windows thread-pool dispatch
+
+The gpui-pre 0.3.7 source already uses the native Win32 thread-pool APIs and
+priority mapping. Its failed-submission path permits a raw runnable leak;
+oxide's explicit failed-submission and failed-timer cleanup remains a
+local ownership patch rather than an upstream-equivalent replacement.
+
+`crates/gpui-ce/gpui_windows/src/dispatcher.rs` schedules background work with the native
+Win32 thread-pool API instead of the WinRT `Windows::System::Threading` projection:
+
+- immediate tasks use `TrySubmitThreadpoolCallback` with the requested Win32 callback priority;
+- delayed tasks use a one-shot `CreateThreadpoolTimer` deadline expressed as a negative
+  100-nanosecond interval;
+- exactly one callback reconstructs and runs each raw `RunnableVariant`;
+- failed submission or timer creation reconstructs and drops the runnable immediately so raw
+  task ownership is never leaked;
+- timer callbacks close their native timer after execution;
+- the existing GPUI task timing records and main-thread priority queue remain unchanged.
+
+The unused workspace `System_Threading` feature is removed from `Cargo.toml`;
+`Win32_System_Threading` remains required. This avoids the extra WinRT work-item wrapper and its
+internal synchronization on the Windows hot path. Preserve these ownership and priority rules
+during vendor refreshes. The behavior is an independent implementation informed by
+`zed-industries/zed#60917`.
+
+### Re-entrant draw and element-arena lifetime
+
+Windows can synchronously re-enter its window procedure while GPUI is drawing, including through
+cross-thread messages and nested COM/OLE loops used by clipboard and drag-and-drop operations.
+oxide therefore carries one coordinated draw-lifetime patch across the generic GPUI and
+Windows platform layers:
+
+- `crates/gpui-ce/gpui/src/arena.rs` counts active draw scopes. `clear` defers while any
+  enclosing scope remains active, and `Drop` force-clears only when the arena itself is destroyed.
+  Allocation bounds are checked in address space before a pointer is constructed, avoiding an
+  out-of-bounds pointer on chunk spill.
+- `crates/gpui-ce/gpui/src/window.rs` enters and exits the App-owned arena scope for every draw.
+  Scope teardown is a guard operation so normal return and panic unwinding both balance the
+  nesting count. The resulting clear token validates the owning App before clearing.
+- The generic `on_request_frame` callback rejects a request received while a GPUI draw is already
+  on the current thread's stack. A deferred forced render remains pending across both re-entry
+  and frame throttling.
+- `crates/gpui-ce/gpui_windows/src/events.rs`,
+  `crates/gpui-ce/gpui_windows/src/platform.rs`, and
+  `crates/gpui-ce/gpui_windows/src/window.rs` share one platform-owned draw coordinator across all
+  windows. A nested Windows paint validates the update region to prevent a `WM_PAINT` busy loop;
+  the existing vsync thread invalidates all windows again on the next tick. External redraw wakeups
+  use one coalesced posted message per window so input-triggered redraws do not depend on
+  low-priority `WM_PAINT`. Requests made during a coordinated draw do not post another message:
+  the existing vsync provider invalidates windows for the next frame. Reposting from an animation
+  callback would keep the posted-message queue nonempty and starve Win32 hardware input.
+  Forced device-recovery renders remain pending until a draw acquires the coordinator.
+- Synchronous draw helpers in `crates/gpui-ce/gpui/src/app.rs`,
+  `crates/gpui-ce/gpui/src/app/test_app.rs`,
+  `crates/gpui-ce/gpui/src/app/test_context.rs`, and
+  `crates/gpui-ce/gpui/src/elements/div.rs` clear through the same App-validated token. Product
+  benchmark and test helpers in `oxide-ui`, `oxide-editor`,
+  `oxide-ide`, and `oxide-app` pass their App context through the same API.
+
+Arena unit tests cover nested clear deferral and unbalanced scopes. A GPUI integration test opens
+a second window during the outer window's paint and proves that elements allocated before the
+nested draw remain valid afterward. A Windows-only unit test covers coordinator lease release.
+The behavior is an independent implementation informed by `zed-industries/zed#60295`; do not
+reduce it to a window-local boolean because the safety invariant spans arena allocation, generic
+frame dispatch, presentation, IME updates, and multiple windows.
+
+### Metal intermediate texture lifetime
+
+`crates/gpui-ce/gpui_apple/src/metal_renderer.rs` allocates its full-window intermediate
+textures lazily. Preserve these lifecycle rules:
+
+- updating the drawable size records the valid size and invalidates intermediates created for a
+  previous size, but does not immediately allocate replacements;
+- an ordinary scene renders directly to the drawable without path, scene-color, blur, or filter
+  group intermediates;
+- path and multisample intermediates are allocated only when the scene contains paths;
+- the full-resolution scene-color target, half-resolution blur ping/pong targets, and bounded
+  full-resolution filter-group targets are allocated together only when a scene contains a
+  backdrop filter or content-filter boundary;
+- headless rendering follows the same allocation and size-invalidation rules;
+- `intermediate_textures_follow_scene_demand_and_resize` must continue to cover an ordinary
+  scene, independent path and filter allocation, resize invalidation, and recreation at the new
+  size.
+
+The reason for this patch is memory proportional to the drawable area. The previous lifecycle
+created the path target, scene-color target, every filter-group target, and both blur targets
+whenever the window size changed, including at initial window creation. Most terminal frames do
+not use paths or filters, so those private Metal textures reserved substantial unified memory
+while idle and amplified the per-window and per-session memory difference observed on macOS.
+Allocation must therefore remain demand-driven; a vendor refresh must not restore eager creation
+merely to simplify resize handling.
+
+### macOS text-system feature
+
+`crates/oxide-gpui-platform/Cargo.toml` must enable the vendored
+`gpui_platform/font-kit` feature through the `gpui-pre-platform` package alias.
+The target already forwards this feature to its macOS backend. Without it,
+both the previous CE source and the target construct
+`NoopTextSystem` on macOS: layout surfaces and SVG assets remain visible, but
+all glyph-backed text and icons disappear.
+
+### Compact terminal line paint cache
+
+Terminal row caches retain `Arc<LineLayout>` rather than `ShapedLine`, whose
+32-entry inline decoration storage is too large for hundreds of cached rows.
+`crates/gpui-ce/gpui/src/text_system/line.rs`, `scene.rs`, and `window.rs`
+provide a separate `LinePaintCache` that retains prepared atlas tiles and
+relative glyph bounds without putting decorations back into the layout cache.
+
+The prepared batch key includes the atlas allocation identity, resource
+generation, scale factor, line height, device-pixel phase, foreground
+decorations, and subpixel mode. Preserve every component: omitting atlas
+identity can reuse tiles after moving a pane between windows, while omitting
+generation can replay tiles invalidated by device recovery. Prepared batches
+must also remain one replay operation so GPUI view caching does not expand them
+into persistent per-glyph paint operations. `LineLayout::paint_cached_in_current_layer` lets the
+terminal group adjacent style runs under one row-scoped layer; callers must establish a bounded
+layer before using it so draw ordering does not collapse across unrelated rows.
+
+### Scheduler-owned animation clock
+
+`crates/gpui-ce/gpui/src/elements/animation.rs` advances ordinary and spring
+animations with the platform background executor's clock. Production platforms
+still use monotonic wall time, while `TestAppContext` can advance the same clock
+deterministically. Do not restore direct `Instant::now` or `Instant::elapsed`
+calls in these element paths: doing so disconnects animation state from GPUI's
+timer scheduler and makes retargeting, pause, and resume tests timing-dependent.
+
+### Anonymous hover updates
+
+Anonymous elements with hover styles in `src/elements/div.rs` retain the painted hover state
+in their mouse listener and notify the owning view on transitions. Session Manager rows use
+these elements without IDs. The regression checks their painted backgrounds when entering,
+moving between, and leaving rows, including repeated movement without extra redraws inside a row.
+
+### Nested scroll ownership
+
+oxide contains nested ordinary overflow regions and virtual lists. Preserve the event
+ownership rules in `crates/gpui-ce/gpui/src/elements/div.rs` and
+`crates/gpui-ce/gpui/src/elements/list.rs`:
+
+- the innermost hovered scroll region consumes a wheel event when its offset changes;
+- an event continues bubbling only when that region is already at its boundary;
+- virtual-list scrolling reports whether it actually moved so the event handler can apply the
+  same rule.
+
+Without this patch, one macOS trackpad event can move both a child and its scrollable ancestor,
+which makes the GPUI-CE build feel substantially more sensitive than the previous GPUI build.
+
+### SVG font sources and character fallback
+
+`crates/gpui-ce/gpui/src/svg_renderer.rs` loads only the font asset paths returned
+by `AssetSource::list("fonts")`. The application supplies JetBrainsMono and
+MapleMono regular faces through `NativeAssets`; MapleMono uses the existing
+decompression path. Do not restore hard-coded IBM Plex Sans or Lilex asset
+requirements. Missing generic families resolve to available faces, while valid
+system mappings remain intact. The enriched database is initialized once per
+renderer and shared by its clones.
+
+Emoji retain their platform-specific selection. Other missing characters search
+available system and application faces with matching text metrics preferred,
+preserving database order within each matching group. Previously tried
+fonts and fonts without the requested glyph are excluded. Successful fallback
+uses debug logging; asset listing/loading failures and usvg's unresolved-glyph
+warnings remain visible.
+
+`crates/gpui-ce/gpui_macos/src/text_system.rs` logs successful PostScript-name
+deduplication at debug level. Invalid-font and missing-required-glyph diagnostics
+remain warnings.
+
+### Zero-area SVG paint semantics
+
+`crates/gpui-ce/gpui/src/window.rs` treats SVG bounds that become empty after device-pixel
+snapping as a successful no-op before consulting the sprite atlas or SVG rasterizer. Product
+layout transitions can intentionally collapse a clipping viewport to zero while its content
+remains mounted, so an empty paint has no visible work and is not a renderer failure. Keep the
+lower-level SVG rasterizer's strict positive-size invariant for direct callers; the no-op belongs
+at the window paint boundary, where logical layout bounds have been snapped to device pixels.
+
+### Bounded text and input lock lifetimes
+
+Preserve the explicit temporary bindings that release internal locks before processing owned
+results or entering later dispatch work:
+
+- `crates/gpui-ce/gpui_macos/src/text_system.rs` releases the font database read lock before
+  extending the family-name result;
+- `crates/gpui-ce/gpui_macos/src/window.rs` releases the window-state lock before returning from
+  the input method command branches;
+- `crates/gpui-ce/gpui/src/text_system/line_layout.rs` releases the previous-frame cache lock
+  before promoting a cached line or shaping a replacement.
+
+These are semantic lock-scope safeguards migrated from the previous GPUI vendor tree. Do not
+collapse the bindings back into `if let` scrutinee temporaries during cleanup.
+
+### macOS frame callbacks during window teardown
+
+`crates/gpui-ce/gpui_macos/src/window.rs` marks the window closed and disposes of its
+frame source before renderer destruction or asynchronous AppKit close. The native close
+entry point also stops the frame source immediately. Display-link startup must reject
+closed windows.
+
+Display-link ticks, layer redraws, and synchronous activation redraws share a callback
+runner that checks closure before and after invoking application code. A callback may
+remove its own window: in that case, discard it and do not access the renderer or restart
+the frame source. Deferred activation work follows the same closed-window boundary.
+Regression tests cover closure during a frame, release of callback captures, late frame
+delivery, and continued callback reuse for an open window.
+
+Preserve these teardown boundaries across vendor refreshes (see #599).
+
+### Windows DirectWrite callback and glyph readback safety
+
+`crates/gpui-ce/gpui_windows/src/direct_write.rs` carries the Windows text-rendering hardening
+landed in `zed-industries/zed@89e8a4b9ec7e` after the historical GPUI-CE baseline:
+
+- the renderer context passed to `IDWriteTextLayout::Draw` is a mutable binding and the callback
+  pointer is derived from `&raw mut`, because `DrawGlyphRun` appends shaped runs and advances the
+  measured width through that pointer;
+- DirectWrite glyph arrays are converted with a null-aware helper, so a zero-length null array is
+  accepted without constructing an invalid Rust slice and a nonzero null array is rejected;
+- draw-local font-face cache entries retain the DirectWrite callback face whose COM identity
+  supplies the pointer-address key, preventing a released fallback face address from being reused
+  for a different CJK face and resolving glyph IDs through the wrong cached font;
+- color-glyph staging textures are unmapped immediately after their rows are copied.
+
+The mutable-pointer provenance fix prevents optimized Windows builds from treating callback writes
+as undefined behavior, which can otherwise surface as missing, stale, or misplaced terminal glyphs.
+The pristine gpui-pre 0.3.7 source already contains mutable callback-pointer
+provenance, null-aware glyph-array conversion, and staging-texture unmapping.
+Those parts use upstream equivalents. Its font-face cache still stores only
+the resolved font ID under a pointer-address key; retaining the callback COM
+face identity remains an oxide local patch. Check these parts separately
+when refreshing instead of treating the entire category as already upstream.
+
+### DynamicTexture and renderer resource generations
+
+oxide remote desktop requires one stable mutable BGRA framebuffer instead
+of rebuilding many immutable `RenderImage` tiles.
+
+Core changes:
+
+- `crates/gpui-ce/gpui/src/assets.rs`
+  - defines `DynamicTextureId`, hidden `DynamicTextureParams`, and
+    `DynamicTexture` with a stable identity and fixed device-pixel size;
+- `crates/gpui-ce/gpui/src/platform.rs`
+  - adds `AtlasKey::DynamicTexture` as a polychrome atlas entry;
+  - adds `PlatformAtlas::update` for relative dirty-region uploads;
+  - adds `PlatformAtlas::resource_generation` for GPU-resource invalidation;
+- `crates/gpui-ce/gpui/src/window.rs`
+  - validates positive dimensions, bounds, overflow, and exact four-byte BGRA
+    upload length;
+  - exposes `update_dynamic_texture`, `paint_dynamic_texture`,
+    `drop_dynamic_texture`, and `renderer_resource_generation`;
+  - records the atlas generation used by every rendered scene, forces a full
+    repaint after a generation change, and refuses to present a stale scene;
+  - creates a blank stable atlas entry when an update precedes first paint;
+- `crates/gpui-ce/gpui/src/platform/test/window.rs`
+  - records dynamic texture allocations and uploads in the test atlas;
+  - exposes a controllable test resource generation.
+
+The public upload contract is strict:
+
+- the texture size and update size are expressed in device pixels;
+- bytes are tightly packed BGRA, four bytes per pixel;
+- update bounds are relative to the dynamic texture origin;
+- the region must fit entirely inside the texture;
+- the byte length must equal `width * height * 4`;
+- a dynamic texture has a dedicated backend allocation and is painted as one
+  polychrome sprite.
+
+Backend changes:
+
+- `crates/gpui-ce/gpui_wgpu/src/wgpu_atlas.rs`
+  - uses exact-size dedicated WGPU allocations for dynamic textures;
+  - queues and validates sub-region uploads;
+  - advances `resource_generation` whenever atlas resources are invalidated,
+    including device recovery;
+- `crates/gpui-ce/gpui_macos/src/metal_atlas.rs`
+  - uses exact-size dedicated Metal textures and relative region uploads;
+  - currently returns generation `0` because the Metal atlas is not recreated
+    by the current backend;
+- `crates/gpui-ce/gpui_windows/src/directx_atlas.rs`
+  - uses exact-size dedicated Direct3D textures and `UpdateSubresource`-style
+    relative region uploads;
+  - clears ordinary and dynamic atlas resources through one reset path on
+    device loss and advances `resource_generation` exactly once per reset;
+- `crates/gpui-ce/gpui/src/platform/test/window.rs`
+  - provides the deterministic headless implementation used by GPUI tests.
+
+Any future backend that replaces or clears resources behind a stable
+`DynamicTexture` identity must advance `resource_generation`. Returning `0` is
+valid only when the backend does not expose such replacement through this
+contract. A refresh must not silently turn a real reset into a permanent
+generation of zero.
+
+### WGPU backend selection and recovery
+
+The locally patched WGPU path carries oxide-specific VM and recovery behavior:
+
+- `crates/gpui-ce/gpui_wgpu/src/wgpu_context.rs`
+  - recognizes the case-insensitive
+    `oxide_GPU_BACKEND=auto|vulkan|opengl` contract and safely falls back
+    to auto after warning about an invalid value;
+  - recognizes `oxide_GPU_DEVICE_ID` as an optional four-digit hexadecimal
+    PCI device override and ignores an invalid value after reporting it;
+  - keeps auto mode ordered across Vulkan and GL and permits CPU adapters as
+    the final fallback;
+  - ranks explicit device, compositor match, device type, and backend in a
+    deterministic order;
+  - tests real surface configuration before accepting an adapter;
+- `crates/gpui-ce/gpui_wgpu/src/wgpu_renderer.rs`
+  - coordinates device recovery across windows;
+  - uses exponential retry backoff from 100 milliseconds to 5 seconds without
+    sleeping on the render thread;
+  - stops after 12 consecutive failures and emits one actionable terminal
+    diagnostic instead of retrying forever;
+  - clears recoverable frame resources without terminating the application;
+  - recreates resources transactionally and notifies the atlas only after a
+    replacement context succeeds;
+- `crates/gpui-ce/gpui_wgpu/src/gpui_wgpu.rs`
+  - exports the recovery status contract consumed by platform render loops;
+- `crates/gpui-ce/gpui_linux/src/linux/wayland/client.rs`,
+  `crates/gpui-ce/gpui_linux/src/linux/x11/client.rs`, and
+  `crates/gpui-ce/gpui_windows/src/window.rs`
+  - initialize the shared WGPU context and recovery state through the
+    oxide recovery-aware context wrapper;
+- `crates/gpui-ce/gpui_linux/src/linux/wayland/window.rs` and
+  `crates/gpui-ce/gpui_linux/src/linux/x11/window.rs`
+  - request another frame after recovered or deferred attempts and stop the
+    automatic frame loop after terminal recovery exhaustion;
+- `crates/gpui-ce/gpui_wgpu/src/wgpu_atlas.rs`
+  - drops stale uploads and advances the renderer resource generation when the
+    WGPU resources are cleared or replaced.
+
+Do not restore the old hard-coded `ZED_DEVICE_ID` environment-variable
+contract. The product-facing names are intentionally scoped to oxide.
+
+Inherited diagnostic controls were not all product-renamed in the previous
+source. Both that source and the migration target retain `ZED_HEADLESS`,
+`ZED_MEASUREMENTS`, and `ZED_ALLOW_ROOT`. Keep the implemented names;
+do not add oxide aliases or remove inherited behavior merely to match the
+previous ledger's inaccurate description. Renderer-specific oxide GPU
+selection and font support overrides remain separate local contracts.
+
+### Linux display-backend startup selection
+
+The previous ledger incorrectly claimed a Wayland-initialization fallback to
+X11. The original code and the target select one backend in
+`gpui_linux/src/linux.rs`; choosing Wayland calls `WaylandClient::new()`
+without an initialization-error fallback to X11. This migration preserves the
+implemented selection behavior. It does not implement the previously described
+fallback or claim that a missing Wayland global is recovered through X11.
+Any future startup fallback is a separate behavioral change requiring native
+evidence and an explicit patch.
+
+### Wayland window-state restoration
+
+`gpui_linux/src/linux/wayland/window.rs` preserves the application's saved outer
+size on the first floating-window configure, using `FrameLoop::Unconfigured`
+to identify startup. Later interactive resizes use the compositor's dimensions
+and decoration insets; maximized, fullscreen, and tiled windows retain the
+compositor's sizing authority. Popup and layer-shell surfaces must not receive
+the startup-size override.
+
+Maximized/fullscreen transitions notify GPUI's bounds observer even when the
+pixel size is unchanged or an interactive resize is throttled. Release window
+state and callback borrows before invoking application callbacks.
+
+Keep these behaviors when refreshing the vendor code: losing the initial-size
+override regressed the earlier #456 fix in #597. The configure-size tests cover
+startup suggestions, unspecified sizes, unmaximize, ordinary resize, and
+compositor-constrained windows.
+
+### Hidden system cursor
+
+Remote desktop must be able to hide the local system pointer while painting a
+remote cursor. Preserve `CursorStyle::None` across the full platform split:
+
+- `crates/gpui-ce/gpui/src/platform.rs` defines the public variant;
+- `crates/gpui-ce/gpui/src/window.rs` exposes the resolved cursor under the
+  test-support feature so product interaction tests observe the painted result;
+- `crates/gpui-ce/gpui_linux/src/linux/wayland.rs` and
+  `crates/gpui-ce/gpui_linux/src/linux/wayland/client.rs` preserve explicit hiding
+  across Wayland pointer events;
+- `crates/gpui-ce/gpui_linux/src/linux/x11/client.rs` uses the cached transparent X11
+  cursor;
+- `crates/gpui-ce/gpui_linux/src/linux/platform.rs` rejects accidental generic mapping
+  after the Linux clients have handled the variant;
+- `crates/gpui-ce/gpui_macos/src/window.rs` hides the AppKit cursor and avoids restoring
+  a visible cursor region;
+- `crates/gpui-ce/gpui_windows/src/util.rs` maps the variant to a null Win32 cursor
+  handle.
+
+### Virtual GPU metadata
+
+oxide render policy must distinguish virtual adapters from CPU software
+rasterizers and physical GPUs.
+
+- `crates/gpui-ce/gpui/src/gpui.rs` adds the serde-defaulted
+  `GpuSpecs::is_virtual_gpu` field;
+- `crates/gpui-ce/gpui_wgpu/src/wgpu_renderer.rs` maps WGPU
+  `DeviceType::VirtualGpu` directly;
+- `crates/gpui-ce/gpui_windows/src/directx_renderer.rs` recognizes the maintained PCI
+  vendor ID set for common hypervisor adapters;
+- `crates/oxide-gpui-platform/src/rendering.rs` converts the metadata into
+  product render-policy input;
+- `crates/oxide-render-policy/src/lib.rs` maps `VirtualGpu` to the low-power
+  automatic policy rather than treating it as software emulation.
+
+Do not infer virtual status from a device-name substring in product code. Add a
+well-scoped backend detector and a focused test when a new backend needs virtual
+adapter classification.
+
+### UniformList overscan
+
+`crates/gpui-ce/gpui/src/elements/uniform_list.rs` adds `with_overscan` and expands the
+visible range by a bounded number of rows on both sides. The default is zero,
+which preserves upstream behavior. Keep the clamping and edge-range unit test;
+this patch prevents empty edges during fast scrolling without changing the
+list's ownership of scrolling.
+
+### Timer and Corner compatibility exports
+
+`crates/gpui-ce/gpui/src/gpui.rs` temporarily re-exports:
+
+- `smol::Timer` as `gpui::Timer` for existing asynchronous delays;
+- `geometry::Anchor` as `gpui::Corner` for existing anchored overlays.
+
+These aliases are migration compatibility layers, not new GPUI abstractions.
+Remove either alias only after all oxide call sites have moved to the
+gpui-pre API and the full workspace builds without it.
+
+## Product-Owned Remote Desktop Integration
+
+Remote desktop behavior belongs to oxide product crates and must not be
+moved into the vendored GPUI crates:
+
+- `crates/oxide-remote-desktop/src/state.rs`
+  - owns the CPU BGRA framebuffer, stable `DynamicTexture`, dirty rectangles,
+    upload sequencing, and retired-texture collection;
+  - keeps the remote protocol's texture generation separate from the renderer
+    resource generation;
+  - schedules one full-frame re-upload when the renderer resource generation
+    changes, confirms it only after a successful upload, and retries failures;
+- `crates/oxide-remote-desktop/src/view.rs`
+  - reads `Window::renderer_resource_generation`, drains uploads during paint,
+    updates dirty regions, and paints one dynamic texture;
+  - applies `CursorStyle::None` when the remote cursor should replace the local
+    pointer;
+- `crates/oxide-app/src/workspace/remote_desktop/session.rs`
+  - drops retired or session-owned dynamic textures during reconnect,
+    replacement, failure, disconnect, and close paths.
+
+Cursor images remain ordinary immutable images. Only the changing desktop
+framebuffer uses `DynamicTexture`.
+
+## Refresh Procedure
+
+Refresh only in an isolated migration branch or worktree.
+
+1. Select the gpui-pre publication version and obtain the six pristine registry
+   archives. Verify their registry checksums and Zed metadata before importing.
+2. Update only the six recorded local patch directories. Keep other package
+   dependencies registry-resolved; do not import unrelated application crates,
+   examples, font assets, Blade code, or an assumed fixed dependency closure.
+3. Reconcile each local patch above with the candidate source and preserve
+   GPUI-CE attribution for carried community features. Record a verified
+   upstream equivalent instead of silently losing a product contract.
+4. Review WGPU, Metal, Direct3D, headless atlas, and cursor behavior independently.
+   A core trait change does not prove all native backends implement it.
+5. Adapt product API calls in product crates. Keep remote desktop framebuffer
+   ownership outside the framework and verify stable dynamic texture identity.
+6. Resolve Cargo.lock, refresh legal notices and package checks, and run the
+   relevant framework, product, and target-native validations.
+7. Inspect the final diff against both the previous vendor snapshot and the
+   pristine registry source. Record actual validation results separately from
+   the intended patch inventory.
+
+## Verification
+
+Verify package metadata, root patch mappings, locked local resolutions, and
+license copies:
+
+```sh
+python3 scripts/quality/verify_gpui_vendor.py
+python3 scripts/quality/verify_gpui_vendor.py --registry-archives /path/to/pristine-archives
+```
+
+The archive directory contains `<package-name>.crate` files for the six listed
+packages. The optional `--gpui-ce-checkout` argument verifies the retained
+historical root and Apache licenses against the recorded CE commit.
+
+```sh
+cargo fmt --check
+cargo check --locked -p gpui-pre -p gpui-pre-platform -p gpui-pre-wgpu
+cargo test --locked -p gpui-pre --lib
+cargo test --locked -p gpui-pre-wgpu --lib
+cargo check --locked -p oxide-app
+cargo test --locked -p oxide-remote-desktop --lib
+cargo test --locked -p oxide-render-policy --lib
+git diff --check
+```
+
+Run platform backends on their matching host: `gpui-pre-macos` on macOS,
+`gpui-pre-windows` on Windows, and `gpui-pre-linux` with its configured
+display dependencies on Linux or FreeBSD. Verify notices with
+`python3 scripts/release/generate_third_party_notices.py --check` and the native
+packaging helper suites.
+
+The remote desktop regression suite must prove full-frame creation, dirty-region
+application, texture identity reuse, renderer-generation full refresh, retry
+after upload failure, and texture retirement. VM qualification remains a
+separate runtime gate: exercise Vulkan and OpenGL fallback on representative
+VMware, VirtualBox, Hyper-V, and QEMU/virtio configurations. Compilation alone
+does not verify driver compatibility.

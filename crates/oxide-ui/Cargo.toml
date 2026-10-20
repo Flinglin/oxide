@@ -1,0 +1,15 @@
+[lints]
+workspace = true
+
+[package]
+name = "oxide-ui"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+gpui.workspace = true
+oxide-theme = { path = "../oxide-theme" }
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }

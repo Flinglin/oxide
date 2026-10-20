@@ -1,0 +1,130 @@
+// Copyright (C) 2026 AnalyseDeCircuit
+// SPDX-License-Identifier: GPL-3.0-only
+
+//! GPUI adapters for pure settings model types.
+//!
+//! The page model enums live in `oxide-settings-model`; this module keeps
+//! only view-layer mapping to GPUI anchors.
+
+pub use oxide_settings_model::{
+    SettingsBackgroundTabIcon, SettingsInput, SettingsKeybindingScopeFilter, SettingsSelect,
+    SettingsSlider, SettingsTab, SettingsTabIcon, TerminalSettingsPage,
+};
+use oxide_ui::select::SelectAnchorId;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ActiveSurface {
+    Terminal,
+    Settings,
+}
+
+pub fn settings_tab_from_ai_section(section: &str) -> Option<SettingsTab> {
+    match section {
+        "general" => Some(SettingsTab::General),
+        "portable" => Some(SettingsTab::Portable),
+        "terminal" => Some(SettingsTab::Terminal),
+        "appearance" => Some(SettingsTab::Appearance),
+        "local" | "local_terminal" => Some(SettingsTab::Terminal),
+        "connections" | "connection_manager" => Some(SettingsTab::Connections),
+        "privilege" | "privilege_credentials" | "sudo" | "su" => Some(SettingsTab::Privilege),
+        "ssh" | "ssh_keys" => Some(SettingsTab::Connections),
+        "reconnect" => Some(SettingsTab::Connections),
+        "sftp" => Some(SettingsTab::Sftp),
+        "ide" => Some(SettingsTab::Ide),
+        "keybindings" | "keyboard" => Some(SettingsTab::Keybindings),
+        "help" => Some(SettingsTab::Help),
+        _ => None,
+    }
+}
+
+pub fn terminal_settings_page_from_ai_section(section: &str) -> Option<TerminalSettingsPage> {
+    match section {
+        "local" | "local_terminal" => Some(TerminalSettingsPage::Local),
+        _ => None,
+    }
+}
+
+pub trait SettingsSelectAnchorExt {
+    fn anchor_id(self) -> SelectAnchorId;
+}
+
+impl SettingsSelectAnchorExt for SettingsSelect {
+    fn anchor_id(self) -> SelectAnchorId {
+        match self {
+            Self::PluginMarketplaceSort => SelectAnchorId::PluginMarketplaceSort,
+            Self::Language => SelectAnchorId::SettingsLanguage,
+            Self::UpdateChannel => SelectAnchorId::SettingsUpdateChannel,
+            Self::UpdateProxyMode => SelectAnchorId::SettingsUpdateProxyMode,
+            Self::UpdateProxyProtocol => SelectAnchorId::SettingsUpdateProxyProtocol,
+            Self::AppearanceTheme => SelectAnchorId::SettingsAppearanceTheme,
+            Self::AppearanceTerminalTheme => SelectAnchorId::SettingsAppearanceTerminalTheme,
+            Self::AppearanceThemeLight => SelectAnchorId::SettingsAppearanceThemeLight,
+            Self::AppearanceThemeDark => SelectAnchorId::SettingsAppearanceThemeDark,
+            Self::AppearanceTerminalThemeLight => {
+                SelectAnchorId::SettingsAppearanceTerminalThemeLight
+            }
+            Self::AppearanceTerminalThemeDark => {
+                SelectAnchorId::SettingsAppearanceTerminalThemeDark
+            }
+            Self::AppearanceDensity => SelectAnchorId::SettingsAppearanceDensity,
+            Self::AppearanceAnimation => SelectAnchorId::SettingsAppearanceAnimation,
+            Self::AppearanceRenderProfile => SelectAnchorId::SettingsAppearanceRenderProfile,
+            Self::AppearanceFrostedGlass => SelectAnchorId::SettingsAppearanceFrostedGlass,
+            Self::AppearanceBackgroundFit => SelectAnchorId::SettingsAppearanceBackgroundFit,
+            Self::CustomThemeDuplicate => SelectAnchorId::SettingsCustomThemeDuplicate,
+            Self::IdeFontFamily => SelectAnchorId::SettingsIdeFontFamily,
+            Self::IdeCjkFontFamily => SelectAnchorId::SettingsIdeCjkFontFamily,
+            Self::TerminalFontFamily => SelectAnchorId::SettingsTerminalFontFamily,
+            Self::TerminalCjkFontFamily => SelectAnchorId::SettingsTerminalCjkFontFamily,
+            Self::TerminalEncoding => SelectAnchorId::SettingsTerminalEncoding,
+            Self::TerminalBackspaceSequence => SelectAnchorId::SettingsTerminalBackspaceSequence,
+            Self::TerminalDeleteSequence => SelectAnchorId::SettingsTerminalDeleteSequence,
+            Self::TerminalSessionLogFileMode => SelectAnchorId::SettingsTerminalSessionLogFileMode,
+            Self::TerminalCursorStyle => SelectAnchorId::SettingsTerminalCursorStyle,
+            Self::RemoteShellIntegrationMode => SelectAnchorId::SettingsRemoteShellIntegrationMode,
+            Self::TerminalTriggerMatchMode => SelectAnchorId::SettingsTerminalTriggerMatchMode,
+            Self::TerminalTriggerAction => SelectAnchorId::SettingsTerminalTriggerAction,
+            Self::TerminalTriggerProcessMode => SelectAnchorId::SettingsTerminalTriggerProcessMode,
+            Self::TerminalTriggerQuickCommand => {
+                SelectAnchorId::SettingsTerminalTriggerQuickCommand
+            }
+            Self::TerminalTriggerTiming => SelectAnchorId::SettingsTerminalTriggerTiming,
+            Self::TerminalTriggerScope => SelectAnchorId::SettingsTerminalTriggerScope,
+            Self::IdeAgentMode => SelectAnchorId::SettingsIdeAgentMode,
+            Self::LocalShell => SelectAnchorId::SettingsLocalShell,
+            Self::LocalShellSemanticScheme(index) => {
+                SelectAnchorId::SettingsLocalShellSemanticScheme(index)
+            }
+            Self::LocalPrivilegeKind => SelectAnchorId::SettingsLocalPrivilegeKind,
+            Self::ConnectionIdleTimeout => SelectAnchorId::SettingsConnectionIdleTimeout,
+            Self::ReconnectMaxAttempts => SelectAnchorId::SettingsReconnectMaxAttempts,
+            Self::ReconnectBaseDelay => SelectAnchorId::SettingsReconnectBaseDelay,
+            Self::ReconnectMaxDelay => SelectAnchorId::SettingsReconnectMaxDelay,
+            Self::NetworkApplicationProxyMode => {
+                SelectAnchorId::SettingsNetworkApplicationProxyMode
+            }
+            Self::NetworkProxyProtocol => SelectAnchorId::SettingsNetworkProxyProtocol,
+            Self::NetworkProxyAuth => SelectAnchorId::SettingsNetworkProxyAuth,
+            Self::SftpPresentation => SelectAnchorId::SettingsSftpPresentation,
+            Self::SftpProtocol => SelectAnchorId::SettingsSftpProtocol,
+            Self::SftpConcurrent => SelectAnchorId::SettingsSftpConcurrent,
+            Self::SftpDirectoryParallelism => SelectAnchorId::SettingsSftpDirectoryParallelism,
+            Self::SftpConflict => SelectAnchorId::SettingsSftpConflict,
+            Self::TerminalSemanticScheme => SelectAnchorId::SettingsTerminalSemanticScheme,
+            Self::SemanticSchemeRuleClass(index) => {
+                SelectAnchorId::SettingsSemanticSchemeRuleClass(index)
+            }
+            Self::SemanticSchemeRuleContext(index) => {
+                SelectAnchorId::SettingsSemanticSchemeRuleContext(index)
+            }
+            Self::HighlightRuleSet => SelectAnchorId::SettingsHighlightRuleSet,
+            Self::HighlightPreset => SelectAnchorId::SettingsHighlightPreset,
+            Self::HighlightRenderMode(index) => SelectAnchorId::SettingsHighlightRenderMode(index),
+            Self::HighlightMatchScope(index) => SelectAnchorId::SettingsHighlightMatchScope(index),
+            Self::ConnectionImportSource => SelectAnchorId::SettingsConnectionImportSource,
+            Self::ConnectionImportDuplicateStrategy => {
+                SelectAnchorId::SettingsConnectionImportDuplicateStrategy
+            }
+        }
+    }
+}

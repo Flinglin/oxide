@@ -1,0 +1,2336 @@
+use super::*;
+use gpui::point;
+use oxide_ui::scroll::ScrollableElement;
+use oxide_ui::{
+    modal::overlay_content_boundary,
+    select::{select_option, select_option_action, select_panel_overlay_popup_with_max_height},
+};
+use zeroize::Zeroizing;
+mod text_workbench;
+use text_workbench::PluginTextWorkbench;
+
+const NATIVE_PLUGIN_UI_LIST_OVERSCAN: usize = 8;
+const NATIVE_PLUGIN_UI_MAX_VISIBLE_ROWS: usize = 8;
+const NATIVE_PLUGIN_UI_TABLE_COLUMN_WIDTH: f32 = 120.0;
+const NATIVE_PLUGIN_UI_TABLE_COLUMN_MIN_WIDTH: f32 = 64.0;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct NativePluginUiControlContext {
+    pub plugin_id: String,
+    pub surface_kind: String,
+    pub surface_id: String,
+    pub section_id: String,
+    pub control_id: String,
+    pub control_kind: String,
+}
+
+enum NativePluginUiControlDraft {
+    Text(Zeroizing<String>),
+    Value(serde_json::Value),
+}
+
+struct NativePluginUiControlState {
+    context: NativePluginUiControlContext,
+    draft: NativePluginUiControlDraft,
+    source_signature: u64,
+    render_generation: u64,
+    select_options: Vec<plugin_host::NativePluginDeclarativeUiOption>,
+}
+
+#[derive(Default)]
+pub(super) struct NativePluginUiState {
+    controls: HashMap<u64, NativePluginUiControlState>,
+    workbenches: HashMap<u64, Entity<PluginTextWorkbench>>,
+    pub focused_input: Option<u64>,
+    pub(in crate::workspace) open_select: Option<u64>,
+    select_window: Option<gpui::WindowId>,
+    select_anchors: HashMap<(gpui::WindowId, u64), OverlayAnchor>,
+    render_generation: u64,
+}
+
+impl NativePluginUiState {
+    pub(in crate::workspace) fn begin_surface_render(&mut self) -> u64 {
+        self.render_generation = self.render_generation.wrapping_add(1);
+        self.render_generation
+    }
+
+    pub(in crate::workspace) fn sync_control(
+        &mut self,
+        context: NativePluginUiControlContext,
+        control: &plugin_host::NativePluginDeclarativeUiControl,
+        render_generation: u64,
+    ) -> u64 {
+        let key = native_plugin_ui_control_key(&context);
+        let source_signature = native_plugin_ui_source_signature(control.value.as_ref());
+        match self.controls.get_mut(&key) {
+            Some(state) => {
+                state.context = context;
+                state.render_generation = render_generation;
+                state.select_options = control.options.clone().unwrap_or_default();
+                if state.source_signature != source_signature {
+                    state.draft = native_plugin_ui_control_source_draft(control);
+                    state.source_signature = source_signature;
+                }
+            }
+            None => {
+                self.controls.insert(
+                    key,
+                    NativePluginUiControlState {
+                        context,
+                        draft: native_plugin_ui_control_source_draft(control),
+                        source_signature,
+                        render_generation,
+                        select_options: control.options.clone().unwrap_or_default(),
+                    },
+                );
+            }
+        }
+        key
+    }
+
+    pub(in crate::workspace) fn finish_surface_render(
+        &mut self,
+        plugin_id: &str,
+        surface_kind: &str,
+        surface_id: &str,
+        render_generation: u64,
+    ) {
+        self.controls.retain(|_, state| {
+            state.context.plugin_id != plugin_id
+                || state.context.surface_kind != surface_kind
+                || state.context.surface_id != surface_id
+                || state.render_generation == render_generation
+        });
+        self.clear_stale_focus();
+    }
+
+    pub(in crate::workspace) fn remove_surface(
+        &mut self,
+        plugin_id: &str,
+        surface_kind: &str,
+        surface_id: &str,
+    ) {
+        // Destroying a surface drops its zeroizing drafts immediately instead
+        // of retaining hidden password text until workspace shutdown.
+        self.controls.retain(|_, state| {
+            state.context.plugin_id != plugin_id
+                || state.context.surface_kind != surface_kind
+                || state.context.surface_id != surface_id
+        });
+        self.clear_stale_focus();
+    }
+
+    pub(in crate::workspace) fn remove_plugin(&mut self, plugin_id: &str) {
+        // Runtime deactivation invalidates every declarative surface for the plugin.
+        self.controls
+            .retain(|_, state| state.context.plugin_id != plugin_id);
+        self.clear_stale_focus();
+    }
+
+    fn clear_stale_focus(&mut self) {
+        self.workbenches
+            .retain(|key, _| self.controls.contains_key(key));
+        self.select_anchors
+            .retain(|(_, key), _| self.controls.contains_key(key));
+        if self
+            .focused_input
+            .is_some_and(|key| !self.controls.contains_key(&key))
+        {
+            self.focused_input = None;
+        }
+        if self
+            .open_select
+            .is_some_and(|key| !self.controls.contains_key(&key))
+        {
+            self.open_select = None;
+        }
+    }
+
+    pub(super) fn context(&self, key: u64) -> Option<&NativePluginUiControlContext> {
+        self.controls.get(&key).map(|state| &state.context)
+    }
+
+    pub(super) fn text(&self, key: u64) -> Option<&str> {
+        match &self.controls.get(&key)?.draft {
+            NativePluginUiControlDraft::Text(value) => Some(value.as_str()),
+            NativePluginUiControlDraft::Value(_) => None,
+        }
+    }
+
+    pub(in crate::workspace) fn value(&self, key: u64) -> Option<serde_json::Value> {
+        match &self.controls.get(&key)?.draft {
+            NativePluginUiControlDraft::Text(value) => {
+                Some(serde_json::Value::String(value.to_string()))
+            }
+            NativePluginUiControlDraft::Value(value) => Some(value.clone()),
+        }
+    }
+
+    pub(super) fn text_mut(&mut self, key: u64) -> Option<&mut String> {
+        match &mut self.controls.get_mut(&key)?.draft {
+            NativePluginUiControlDraft::Text(value) => Some(value),
+            NativePluginUiControlDraft::Value(_) => None,
+        }
+    }
+
+    pub(in crate::workspace) fn set_value(&mut self, key: u64, value: serde_json::Value) -> bool {
+        let Some(state) = self.controls.get_mut(&key) else {
+            return false;
+        };
+        state.draft = NativePluginUiControlDraft::Value(value);
+        true
+    }
+}
+
+fn native_plugin_ui_control_key(context: &NativePluginUiControlContext) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    context.plugin_id.hash(&mut hasher);
+    context.surface_kind.hash(&mut hasher);
+    context.surface_id.hash(&mut hasher);
+    context.section_id.hash(&mut hasher);
+    context.control_id.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn native_plugin_ui_source_signature(value: Option<&serde_json::Value>) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    serde_json::to_string(value.unwrap_or(&serde_json::Value::Null))
+        .unwrap_or_default()
+        .hash(&mut hasher);
+    hasher.finish()
+}
+
+fn native_plugin_ui_control_source_draft(
+    control: &plugin_host::NativePluginDeclarativeUiControl,
+) -> NativePluginUiControlDraft {
+    if matches!(control.kind.as_str(), "text" | "password" | "number") {
+        NativePluginUiControlDraft::Text(Zeroizing::new(native_plugin_control_value_label(control)))
+    } else {
+        NativePluginUiControlDraft::Value(control.value.clone().unwrap_or(serde_json::Value::Null))
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct NativePluginSidebarPanelSelection {
+    // Native keeps the selected plugin panel as data instead of encoding it in
+    // a string key, but it represents Tauri's `plugin:<pluginId>:<panelId>`.
+    pub plugin_id: String,
+    pub panel_id: String,
+}
+
+impl WorkspaceApp {
+    fn native_plugin_text_workbench(
+        &mut self,
+        plugin_id: &str,
+        surface_kind: &str,
+        surface_id: &str,
+        section_id: &str,
+        control: &plugin_host::NativePluginDeclarativeUiControl,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<PluginTextWorkbench>> {
+        let plugin = self
+            .plugin_entity
+            .read(cx)
+            .registry()
+            .plugins()
+            .iter()
+            .find(|plugin| plugin.manifest.id == plugin_id)?
+            .clone();
+        if !matches!(
+            plugin.runtime_plan,
+            plugin_host::NativePluginRuntimePlan::Wasm { .. }
+        ) {
+            return None;
+        }
+        let context = native_plugin_ui_control_context(
+            plugin_id,
+            surface_kind,
+            surface_id,
+            section_id,
+            control,
+        );
+        let key =
+            self.update_plugin_ui_state(cx, |ui| ui.sync_control(context, control, generation));
+        if let Some(view) = self.plugin_ui_state(cx).workbenches.get(&key).cloned() {
+            view.update(cx, |view, cx| {
+                view.update_definition(
+                    plugin,
+                    control.clone(),
+                    self.theme_tokens,
+                    self.i18n.clone(),
+                    cx,
+                )
+            });
+            return Some(view);
+        }
+        let runtime = self.forwarding_runtime.clone();
+        let tokens = self.theme_tokens;
+        let view = cx.new(|cx| {
+            PluginTextWorkbench::new(
+                plugin,
+                control.clone(),
+                runtime,
+                tokens,
+                self.i18n.clone(),
+                cx,
+            )
+        });
+        self.update_plugin_ui_state(cx, |ui| {
+            ui.workbenches.insert(key, view.clone());
+        });
+        Some(view)
+    }
+
+    pub(super) fn open_native_plugin_text_workbench(
+        &mut self,
+        plugin_id: &str,
+        tab_id: &str,
+        control_id: &str,
+        text: Zeroizing<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(mut view) = self
+            .plugin_entity
+            .read(cx)
+            .registry()
+            .contributions()
+            .runtime_tab_view(plugin_id, tab_id)
+        else {
+            return;
+        };
+        localize_native_plugin_schema(&mut view.schema, self.i18n.locale());
+        // The input target is declared by the owning plugin, never resolved from the active pane.
+        let mut candidates = vec![("root", view.schema.controls.as_slice())];
+        candidates.extend(
+            view.schema
+                .sections
+                .iter()
+                .map(|section| (section.id.as_str(), section.controls.as_slice())),
+        );
+        fn find<'a>(
+            controls: &'a [plugin_host::NativePluginDeclarativeUiControl],
+            id: &str,
+        ) -> Option<&'a plugin_host::NativePluginDeclarativeUiControl> {
+            for control in controls {
+                if control.kind == "textWorkbench" && control.id.as_deref() == Some(id) {
+                    return Some(control);
+                }
+                if let Some(found) = find(&control.children, id) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        let Some((section, control)) = candidates.iter().find_map(|(section, controls)| {
+            find(controls, control_id).map(|control| (*section, control.clone()))
+        }) else {
+            return;
+        };
+        let generation = self.update_plugin_ui_state(cx, NativePluginUiState::begin_surface_render);
+        let Some(editor) = self.native_plugin_text_workbench(
+            plugin_id, "tab", tab_id, section, &control, generation, cx,
+        ) else {
+            return;
+        };
+        editor.update(cx, |editor, cx| editor.set_input(text, cx));
+        let _ = self.open_native_plugin_tab(plugin_id, tab_id, cx);
+    }
+
+    pub(in crate::workspace) fn plugin_ui_state<'a>(&self, cx: &'a App) -> &'a NativePluginUiState {
+        // IME and render adapters access the Entity-owned control state without
+        // keeping a second workspace copy of secret-bearing drafts.
+        self.plugin_entity.read(cx).ui_state()
+    }
+
+    pub(in crate::workspace) fn update_plugin_ui_state<R>(
+        &self,
+        cx: &mut Context<Self>,
+        update: impl FnOnce(&mut NativePluginUiState) -> R,
+    ) -> R {
+        self.plugin_entity
+            .update(cx, |plugins, _cx| update(plugins.ui_state_mut()))
+    }
+
+    pub(super) fn open_native_plugin_tab(
+        &mut self,
+        plugin_id: &str,
+        tab_id: &str,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        self.bootstrap_native_plugin_runtime(cx);
+        let contribution = self
+            .plugin_entity
+            .read(cx)
+            .registry()
+            .contributions()
+            .tab_contribution(plugin_id, tab_id)
+            .ok_or_else(|| format!("Plugin tab \"{plugin_id}:{tab_id}\" is not declared"))?;
+        let existing_tab_id = self.tabs(cx).iter().find_map(|tab| match &tab.kind {
+            TabKind::Plugin {
+                plugin_id: existing_plugin_id,
+                tab_id: existing_tab_id,
+            } if existing_plugin_id == plugin_id && existing_tab_id == tab_id => Some(tab.id),
+            _ => None,
+        });
+        let tab_id_value = if let Some(existing_tab_id) = existing_tab_id {
+            existing_tab_id
+        } else {
+            let tab_id_value = self.alloc_tab_id(cx);
+            self.insert_and_change_active_tab(
+                Tab {
+                    id: tab_id_value,
+                    kind: TabKind::Plugin {
+                        plugin_id: plugin_id.to_string(),
+                        tab_id: tab_id.to_string(),
+                    },
+                    title: contribution.definition.title,
+                    title_source: TabTitleSource::Static,
+                    root_pane: None,
+                    active_pane_id: None,
+                },
+                cx,
+            );
+            tab_id_value
+        };
+        if self.focus_detached_tab_window(tab_id_value, cx) {
+            return Ok(());
+        }
+        self.set_main_window_active_tab(Some(tab_id_value), cx);
+        self.active_surface = ActiveSurface::Terminal;
+        self.needs_active_pane_focus = false;
+        self.persist_sidebar_settings(cx);
+        cx.notify();
+        Ok(())
+    }
+
+    pub(super) fn render_native_plugin_tab_surface(
+        &mut self,
+        plugin_id: &str,
+        tab_id: &str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.bootstrap_native_plugin_runtime(cx);
+        let theme = self.theme_tokens.ui;
+        let contribution = self
+            .plugin_entity
+            .read(cx)
+            .registry()
+            .contributions()
+            .tab_contribution(plugin_id, tab_id);
+        let mut runtime_view = self
+            .plugin_entity
+            .read(cx)
+            .registry()
+            .contributions()
+            .runtime_tab_view(plugin_id, tab_id);
+        if let Some(view) = &mut runtime_view {
+            localize_native_plugin_schema(&mut view.schema, self.i18n.locale());
+        }
+        let title = runtime_view
+            .as_ref()
+            .map(|view| {
+                view.schema
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| view.title.clone())
+            })
+            .or_else(|| {
+                contribution
+                    .as_ref()
+                    .map(|entry| entry.definition.title.clone())
+            })
+            .unwrap_or_else(|| tab_id.to_string());
+
+        let description = runtime_view
+            .as_ref()
+            .and_then(|view| view.schema.description.clone());
+        let body = match runtime_view {
+            Some(view) => self.render_native_plugin_declarative_schema(
+                plugin_id,
+                "tab",
+                &view.tab_id,
+                &view.schema,
+                cx,
+            ),
+            None => self.render_native_plugin_missing_view(
+                "Register a declarative tab schema before opening this plugin tab.",
+            ),
+        };
+        div()
+            .size_full()
+            .min_h_0()
+            .bg(self.workspace_chrome_background(theme.bg))
+            .text_color(rgb(theme.text))
+            .child(
+                div()
+                    .id("native-plugin-tab-scroll")
+                    .size_full()
+                    .min_w_0()
+                    .overflow_y_scrollbar()
+                    .on_scroll_wheel(cx.listener(|this, _event, _window, cx| {
+                        this.close_native_plugin_select(cx);
+                    }))
+                    .child(
+                        // Scrollable moves its own styles onto the viewport; page
+                        // spacing belongs to a content child inside that viewport.
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .p(px(self.theme_tokens.metrics.settings_content_padding))
+                            .flex()
+                            .flex_col()
+                            .gap(px(self.theme_tokens.metrics.settings_page_gap))
+                            .child(oxide_ui::page_header(
+                                &self.theme_tokens,
+                                title,
+                                description,
+                                None,
+                            ))
+                            .child(div().w_full().h(px(1.0)).flex_none().bg(rgb(theme.border)))
+                            .child(body),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    pub(super) fn render_native_plugin_sidebar_content(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.bootstrap_native_plugin_runtime(cx);
+        let theme = self.theme_tokens.ui;
+        let Some(selection) = self.plugin_manager_state(cx).active_sidebar_panel.clone() else {
+            return self.render_plugin_sidebar_placeholder();
+        };
+        let panels = self
+            .plugin_entity
+            .read(cx)
+            .registry()
+            .contributions()
+            .runtime_sidebar_panels();
+        let Some(panel) = panels.iter().find(|panel| {
+            panel.plugin_id == selection.plugin_id && panel.panel_id == selection.panel_id
+        }) else {
+            return self.render_plugin_sidebar_placeholder();
+        };
+
+        // Tauri renders exactly the selected plugin panel component under
+        // `sidebarActiveSection === "plugin:<pluginId>:<panelId>"`. Do not add
+        // a native panel header here; the plugin-provided schema owns its body.
+        div()
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .overflow_y_scrollbar()
+            .on_scroll_wheel(cx.listener(|this, _event, _window, cx| {
+                this.close_native_plugin_select(cx);
+            }))
+            .px_2()
+            .py_2()
+            .flex()
+            .flex_col()
+            .gap(px(10.0))
+            .bg(rgb(theme.bg_panel))
+            .child(self.render_native_plugin_declarative_schema(
+                &panel.plugin_id,
+                "sidebarPanel",
+                &panel.panel_id,
+                &panel.schema,
+                cx,
+            ))
+            .into_any_element()
+    }
+
+    fn render_native_plugin_missing_view(&self, message: &str) -> AnyElement {
+        let theme = self.theme_tokens.ui;
+        div()
+            .w_full()
+            .min_h(px(180.0))
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(8.0))
+            .text_center()
+            .text_color(rgb(theme.text_muted))
+            .child(Self::render_lucide_icon(
+                LucideIcon::Puzzle,
+                28.0,
+                rgb(theme.text_muted),
+            ))
+            .child(
+                div()
+                    .max_w(px(420.0))
+                    .text_size(px(self.theme_tokens.metrics.ui_text_sm))
+                    .child(message.to_string()),
+            )
+            .into_any_element()
+    }
+
+    fn render_native_plugin_declarative_schema(
+        &mut self,
+        plugin_id: &str,
+        surface_kind: &str,
+        surface_id: &str,
+        schema: &plugin_host::NativePluginDeclarativeUiSchema,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let render_generation =
+            self.update_plugin_ui_state(cx, NativePluginUiState::begin_surface_render);
+        let mut body = div()
+            .w_full()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .gap(px(self.theme_tokens.spacing.three));
+        if let Some(title) = &schema.title
+            && surface_kind != "tab"
+        {
+            let mut options = oxide_ui::SectionHeaderOptions::new();
+            if let Some(description) = &schema.description {
+                options = options.description(description.clone());
+            }
+            body = body.child(oxide_ui::section_header(
+                &self.theme_tokens,
+                title.clone(),
+                options,
+                None,
+                None,
+            ));
+        }
+        if !schema.controls.is_empty() {
+            body = body.child(self.render_native_plugin_declarative_controls(
+                plugin_id,
+                surface_kind,
+                surface_id,
+                "root",
+                &schema.controls,
+                render_generation,
+                cx,
+            ));
+        }
+        for section in &schema.sections {
+            body = body.child(self.render_native_plugin_declarative_section(
+                plugin_id,
+                surface_kind,
+                surface_id,
+                section,
+                render_generation,
+                cx,
+            ));
+        }
+        self.update_plugin_ui_state(cx, |ui| {
+            ui.finish_surface_render(plugin_id, surface_kind, surface_id, render_generation);
+        });
+        body.on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _event, _window, cx| {
+                this.blur_native_plugin_ui_input(cx);
+                this.update_plugin_ui_state(cx, |ui| ui.open_select = None);
+                cx.notify();
+            }),
+        )
+        .into_any_element()
+    }
+
+    fn render_native_plugin_declarative_section(
+        &mut self,
+        plugin_id: &str,
+        surface_kind: &str,
+        surface_id: &str,
+        section: &plugin_host::NativePluginDeclarativeUiSection,
+        render_generation: u64,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let mut section_el = div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(self.theme_tokens.spacing.two));
+        if let Some(title) = &section.title {
+            let mut options = oxide_ui::SectionHeaderOptions::new().compact();
+            if let Some(description) = &section.description {
+                options = options.description(description.clone());
+            }
+            section_el = section_el.child(oxide_ui::section_header(
+                &self.theme_tokens,
+                title.clone(),
+                options,
+                None,
+                None,
+            ));
+        }
+        section_el
+            .child(self.render_native_plugin_declarative_controls(
+                plugin_id,
+                surface_kind,
+                surface_id,
+                &section.id,
+                &section.controls,
+                render_generation,
+                cx,
+            ))
+            .into_any_element()
+    }
+
+    fn render_native_plugin_declarative_controls(
+        &mut self,
+        plugin_id: &str,
+        surface_kind: &str,
+        surface_id: &str,
+        section_id: &str,
+        controls: &[plugin_host::NativePluginDeclarativeUiControl],
+        render_generation: u64,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let mut group = div().w_full().flex().flex_col().gap(px(8.0));
+        for control in controls {
+            group = group.child(self.render_native_plugin_declarative_control(
+                plugin_id,
+                surface_kind,
+                surface_id,
+                section_id,
+                control,
+                render_generation,
+                cx,
+            ));
+        }
+        group.into_any_element()
+    }
+
+    fn render_native_plugin_declarative_control(
+        &mut self,
+        plugin_id: &str,
+        surface_kind: &str,
+        surface_id: &str,
+        section_id: &str,
+        control: &plugin_host::NativePluginDeclarativeUiControl,
+        render_generation: u64,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        match control.kind.as_str() {
+            "textWorkbench" => self
+                .native_plugin_text_workbench(
+                    plugin_id,
+                    surface_kind,
+                    surface_id,
+                    section_id,
+                    control,
+                    render_generation,
+                    cx,
+                )
+                .map(|view| div().w_full().min_w_0().child(view).into_any_element())
+                .unwrap_or_else(|| div().into_any_element()),
+            "stack" | "row" | "columns" | "actionRow" | "card" | "toolbar" => self
+                .render_native_plugin_layout_control(
+                    plugin_id,
+                    surface_kind,
+                    surface_id,
+                    section_id,
+                    control,
+                    render_generation,
+                    cx,
+                ),
+            "button" | "iconButton" | "icon-button" => self.render_native_plugin_button_control(
+                plugin_id,
+                surface_kind,
+                surface_id,
+                section_id,
+                control,
+                false,
+                cx,
+            ),
+            "text" | "password" | "number" => self.render_native_plugin_input_control(
+                plugin_id,
+                surface_kind,
+                surface_id,
+                section_id,
+                control,
+                render_generation,
+                cx,
+            ),
+            "checkbox" => self.render_native_plugin_checkbox_control(
+                plugin_id,
+                surface_kind,
+                surface_id,
+                section_id,
+                control,
+                render_generation,
+                cx,
+            ),
+            "select" => self.render_native_plugin_select_control(
+                plugin_id,
+                surface_kind,
+                surface_id,
+                section_id,
+                control,
+                render_generation,
+                cx,
+            ),
+            "radioGroup" | "radio-group" => self.render_native_plugin_radio_control(
+                plugin_id,
+                surface_kind,
+                surface_id,
+                section_id,
+                control,
+                render_generation,
+                cx,
+            ),
+            "segmentedControl" | "segmented-control" => self
+                .render_native_plugin_segmented_control(
+                    plugin_id,
+                    surface_kind,
+                    surface_id,
+                    section_id,
+                    control,
+                    render_generation,
+                    cx,
+                ),
+            "slider" => self.render_native_plugin_slider_control(
+                plugin_id,
+                surface_kind,
+                surface_id,
+                section_id,
+                control,
+                render_generation,
+                cx,
+            ),
+            "alert" => self.render_native_plugin_alert_control(control),
+            "divider" => self.render_native_plugin_divider_control(),
+            "markdown" => self.render_native_plugin_text_block_control(control, false),
+            "code" | "codeBlock" | "code-block" => {
+                self.render_native_plugin_text_block_control(control, true)
+            }
+            "statusBadge" | "status-badge" | "badge" => {
+                self.render_native_plugin_status_badge(control)
+            }
+            "progress" => self.render_native_plugin_progress_control(control),
+            "table" => self.render_native_plugin_table_control(control),
+            "list" => self.render_native_plugin_list_control(control),
+            "emptyState" | "empty-state" => self.render_native_plugin_empty_state_control(control),
+            "keyValue" | "key-value" | "keyValueRow" | "key-value-row" => {
+                self.render_native_plugin_key_value_control(control)
+            }
+            _ => self.render_native_plugin_text_block_control(control, false),
+        }
+    }
+
+    fn render_native_plugin_button_control(
+        &mut self,
+        plugin_id: &str,
+        surface_kind: &str,
+        surface_id: &str,
+        section_id: &str,
+        control: &plugin_host::NativePluginDeclarativeUiControl,
+        full_width: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let actionable = plugin_host::native_plugin_declarative_control_is_actionable(control);
+        let label = if control.loading {
+            format!("{}…", native_plugin_control_label(control, ""))
+        } else {
+            native_plugin_control_label(control, "")
+        };
+        let context = native_plugin_ui_control_context(
+            plugin_id,
+            surface_kind,
+            surface_id,
+            section_id,
+            control,
+        );
+        let value = control.value.clone().unwrap_or(serde_json::Value::Null);
+        let icon_name = control.icon.as_deref().map(LucideIcon::from_plugin_name);
+        if matches!(control.kind.as_str(), "iconButton" | "icon-button") {
+            let tooltip = label;
+            return self.workspace_tooltip_icon_button(
+                icon_name.unwrap_or(LucideIcon::Puzzle),
+                self.theme_tokens.metrics.ui_menu_icon_size,
+                rgb(self.theme_tokens.ui.text),
+                oxide_ui::IconButtonOptions {
+                    size: native_plugin_button_icon_size(
+                        &self.theme_tokens,
+                        control.size.as_deref(),
+                    ),
+                    disabled: !actionable,
+                    loading: control.loading,
+                    idle_opacity: 1.0,
+                    ..oxide_ui::IconButtonOptions::compact(native_plugin_button_icon_size(
+                        &self.theme_tokens,
+                        control.size.as_deref(),
+                    ))
+                },
+                tooltip,
+                "native-plugin-icon-button",
+                false,
+                cx.listener(move |this, _event, _window, cx| {
+                    this.blur_native_plugin_ui_input(cx);
+                    this.dispatch_native_plugin_ui_control_event(
+                        context.clone(),
+                        "click",
+                        value.clone(),
+                        cx,
+                    );
+                    cx.stop_propagation();
+                }),
+                cx.entity(),
+            );
+        }
+        let icon = icon_name.map(|icon| {
+            Self::render_lucide_icon(
+                icon,
+                self.theme_tokens.metrics.ui_menu_icon_size,
+                rgb(self.theme_tokens.ui.text),
+            )
+        });
+        let button = oxide_ui::toolbar_button(
+            &self.theme_tokens,
+            label,
+            icon,
+            oxide_ui::ToolbarButtonOptions {
+                button: native_plugin_button_options(control),
+                has_background: true,
+                loading: control.loading,
+                ..oxide_ui::ToolbarButtonOptions::default()
+            },
+        )
+        .when(full_width, |button| {
+            button.w_full().min_w_0().justify_start().truncate()
+        });
+
+        if actionable {
+            button
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _event, _window, cx| {
+                        this.blur_native_plugin_ui_input(cx);
+                        // Button activation is delivered as data to the plugin
+                        // runtime; plugin code never runs on the GPUI event stack.
+                        this.dispatch_native_plugin_ui_control_event(
+                            context.clone(),
+                            "click",
+                            value.clone(),
+                            cx,
+                        );
+                        cx.stop_propagation();
+                    }),
+                )
+                .into_any_element()
+        } else {
+            button.into_any_element()
+        }
+    }
+
+    fn render_native_plugin_input_control(
+        &mut self,
+        plugin_id: &str,
+        surface_kind: &str,
+        surface_id: &str,
+        section_id: &str,
+        control: &plugin_host::NativePluginDeclarativeUiControl,
+        render_generation: u64,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let context = native_plugin_ui_control_context(
+            plugin_id,
+            surface_kind,
+            surface_id,
+            section_id,
+            control,
+        );
+        let (key, value, focused) = self.update_plugin_ui_state(cx, |ui| {
+            let key = ui.sync_control(context, control, render_generation);
+            let value = Zeroizing::new(ui.text(key).unwrap_or_default().to_string());
+            (key, value, ui.focused_input == Some(key))
+        });
+        let target = WorkspaceImeTarget::PluginControl {
+            key,
+            secret: control.kind == "password",
+        };
+        let marked = self.marked_text_for_target(target, cx).map(str::to_string);
+        let selected_range = self.ime_selected_range_for_target(target, cx);
+        let input = oxide_ui::input::input(
+            &self.theme_tokens,
+            oxide_ui::input::InputView {
+                value: value.as_str(),
+                placeholder: control.placeholder.clone().unwrap_or_default(),
+                focused,
+                caret_visible: self.input_caret.visible(),
+                input_type: if control.kind == "password" {
+                    oxide_ui::input::InputType::Password
+                } else {
+                    oxide_ui::input::InputType::Text
+                },
+                selected_all: self.selected_ime_target == Some(target),
+                selected_range,
+                marked_text: marked.as_deref(),
+                disabled: control.disabled,
+            },
+        )
+        .id(("native-plugin-input", key));
+        let input = if control.disabled {
+            input
+        } else {
+            input
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                        this.update_plugin_ui_state(cx, |ui| {
+                            ui.focused_input = Some(key);
+                            ui.open_select = None;
+                        });
+                        this.begin_ime_selection_from_mouse_down(target, event, window, cx);
+                        this.show_active_input_caret(cx);
+                        cx.stop_propagation();
+                        cx.notify();
+                    }),
+                )
+                .on_mouse_move(
+                    cx.listener(move |this, event: &MouseMoveEvent, window, cx| {
+                        if this.plugin_ui_state(cx).focused_input == Some(key) {
+                            this.update_ime_selection_drag_from_mouse_move(event, window, cx);
+                        }
+                    }),
+                )
+        };
+        let view = cx.entity();
+        let anchored = oxide_ui::text_input::text_input_anchor_probe(
+            target.anchor_id(),
+            input,
+            move |anchor, _window, cx| {
+                let _ = view.update(cx, |this, _| this.update_text_input_anchor(anchor));
+            },
+        );
+        self.render_native_plugin_form_field(control, anchored)
+    }
+
+    fn render_native_plugin_checkbox_control(
+        &mut self,
+        plugin_id: &str,
+        surface_kind: &str,
+        surface_id: &str,
+        section_id: &str,
+        control: &plugin_host::NativePluginDeclarativeUiControl,
+        render_generation: u64,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let context = native_plugin_ui_control_context(
+            plugin_id,
+            surface_kind,
+            surface_id,
+            section_id,
+            control,
+        );
+        let (key, checked) = self.update_plugin_ui_state(cx, |ui| {
+            let key = ui.sync_control(context, control, render_generation);
+            let checked = ui
+                .value(key)
+                .as_ref()
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            (key, checked)
+        });
+        let checkbox = oxide_ui::checkbox_with(
+            &self.theme_tokens,
+            native_plugin_control_label(control, ""),
+            checked,
+            oxide_ui::CheckboxOptions {
+                focused: false,
+                disabled: control.disabled,
+            },
+        );
+        if control.disabled {
+            checkbox.into_any_element()
+        } else {
+            checkbox
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _event, _window, cx| {
+                        this.set_native_plugin_ui_control_value(
+                            key,
+                            serde_json::Value::Bool(!checked),
+                            cx,
+                        );
+                        cx.stop_propagation();
+                    }),
+                )
+                .into_any_element()
+        }
+    }
+
+    fn render_native_plugin_select_control(
+        &mut self,
+        plugin_id: &str,
+        surface_kind: &str,
+        surface_id: &str,
+        section_id: &str,
+        control: &plugin_host::NativePluginDeclarativeUiControl,
+        render_generation: u64,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let context = native_plugin_ui_control_context(
+            plugin_id,
+            surface_kind,
+            surface_id,
+            section_id,
+            control,
+        );
+        let (key, value, open) = self.update_plugin_ui_state(cx, |ui| {
+            let key = ui.sync_control(context, control, render_generation);
+            (
+                key,
+                ui.value(key).unwrap_or(serde_json::Value::Null),
+                ui.open_select == Some(key),
+            )
+        });
+        let options = control.options.clone().unwrap_or_default();
+        let selected_label = options
+            .iter()
+            .find(|option| option.value == value)
+            .map(|option| option.label.clone());
+        let trigger = oxide_ui::select::select_trigger_with_focus_visible(
+            &self.theme_tokens,
+            selected_label
+                .clone()
+                .or_else(|| control.placeholder.clone())
+                .unwrap_or_default(),
+            selected_label.is_none(),
+            control.disabled,
+            open,
+        );
+        let trigger = if control.disabled {
+            trigger
+        } else {
+            trigger.on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _event, window, cx| {
+                    this.blur_native_plugin_ui_input(cx);
+                    this.update_plugin_ui_state(cx, |ui| {
+                        ui.select_window = Some(window.window_handle().window_id());
+                        ui.open_select = if ui.open_select == Some(key) {
+                            None
+                        } else {
+                            Some(key)
+                        };
+                    });
+                    cx.stop_propagation();
+                    cx.notify();
+                }),
+            )
+        };
+        let workspace = cx.entity();
+        let trigger = select_anchor_probe(
+            SelectAnchorId::NativePluginControl(key),
+            trigger,
+            move |anchor, window, cx| {
+                let window_id = window.window_handle().window_id();
+                let _ = workspace.update(cx, |this, cx| {
+                    let changed = this.update_plugin_ui_state(cx, |ui| {
+                        let previous = ui.select_anchors.insert((window_id, key), anchor);
+                        ui.open_select == Some(key)
+                            && ui.select_window == Some(window_id)
+                            && previous != Some(anchor)
+                    });
+                    if changed {
+                        cx.notify();
+                    }
+                });
+            },
+        );
+        self.render_native_plugin_form_field(control, trigger)
+    }
+
+    pub(in crate::workspace) fn close_native_plugin_select(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let changed = self.update_plugin_ui_state(cx, |ui| ui.open_select.take().is_some());
+        if changed {
+            cx.notify();
+        }
+        changed
+    }
+
+    pub(in crate::workspace) fn render_native_plugin_select_overlay(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let window_id = window.window_handle().window_id();
+        let (key, anchor, options, value) = {
+            let ui = self.plugin_ui_state(cx);
+            let key = ui.open_select?;
+            if ui.select_window != Some(window_id) {
+                return None;
+            }
+            let anchor = *ui.select_anchors.get(&(window_id, key))?;
+            let options = ui.controls.get(&key)?.select_options.clone();
+            (key, anchor, options, ui.value(key))
+        };
+        let mut popup = select_panel_overlay_popup_with_max_height(
+            &self.theme_tokens,
+            f32::from(anchor.bounds.size.width).max(self.theme_tokens.metrics.ui_select_min_width),
+            self.theme_tokens.metrics.ui_select_max_height,
+        );
+        for option in options {
+            let selected = value.as_ref() == Some(&option.value);
+            popup = popup.child(select_option_action(
+                select_option(&self.theme_tokens, option.label, selected),
+                false,
+                false,
+                cx.listener(move |this, _event, _window, cx| {
+                    this.close_native_plugin_select(cx);
+                    this.set_native_plugin_ui_control_value(key, option.value.clone(), cx);
+                    cx.stop_propagation();
+                }),
+            ));
+        }
+        Some(
+            popover_backdrop()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _event, window, cx| {
+                        this.dismiss_transient_workspace_overlays_from_outside_pointer(window, cx);
+                        cx.stop_propagation();
+                    }),
+                )
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(|this, _event, window, cx| {
+                        this.dismiss_transient_workspace_overlays_from_outside_pointer(window, cx);
+                        cx.stop_propagation();
+                    }),
+                )
+                .child(
+                    deferred(
+                        anchored()
+                            .anchor(Corner::TopLeft)
+                            .position(anchor.bounds.bottom_left())
+                            .offset(point(
+                                px(0.0),
+                                px(self.theme_tokens.metrics.settings_select_popup_gap),
+                            ))
+                            .position_mode(AnchoredPositionMode::Window)
+                            .child(overlay_content_boundary(popup)),
+                    )
+                    .with_priority(oxide_ui::modal::TAURI_POPOVER_LAYER_PRIORITY),
+                )
+                .into_any_element(),
+        )
+    }
+
+    fn render_native_plugin_radio_control(
+        &mut self,
+        plugin_id: &str,
+        surface_kind: &str,
+        surface_id: &str,
+        section_id: &str,
+        control: &plugin_host::NativePluginDeclarativeUiControl,
+        render_generation: u64,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let context = native_plugin_ui_control_context(
+            plugin_id,
+            surface_kind,
+            surface_id,
+            section_id,
+            control,
+        );
+        let (key, value) = self.update_plugin_ui_state(cx, |ui| {
+            let key = ui.sync_control(context, control, render_generation);
+            (key, ui.value(key).unwrap_or(serde_json::Value::Null))
+        });
+        let mut group = oxide_ui::radio_group::radio_group(&self.theme_tokens);
+        for option in control.options.clone().unwrap_or_default() {
+            let selected = option.value == value;
+            let option_value = option.value.clone();
+            let row = div()
+                .flex()
+                .items_center()
+                .gap(px(self.theme_tokens.spacing.two))
+                .child(oxide_ui::radio_group::radio_group_item(
+                    &self.theme_tokens,
+                    selected,
+                    control.disabled,
+                ))
+                .child(option.label)
+                .when(!control.disabled, |row| {
+                    row.cursor_pointer().on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _event, _window, cx| {
+                            this.set_native_plugin_ui_control_value(key, option_value.clone(), cx);
+                            cx.stop_propagation();
+                        }),
+                    )
+                });
+            group = group.child(row);
+        }
+        self.render_native_plugin_form_field(control, group)
+    }
+
+    fn render_native_plugin_segmented_control(
+        &mut self,
+        plugin_id: &str,
+        surface_kind: &str,
+        surface_id: &str,
+        section_id: &str,
+        control: &plugin_host::NativePluginDeclarativeUiControl,
+        render_generation: u64,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let context = native_plugin_ui_control_context(
+            plugin_id,
+            surface_kind,
+            surface_id,
+            section_id,
+            control,
+        );
+        let (key, value) = self.update_plugin_ui_state(cx, |ui| {
+            let key = ui.sync_control(context, control, render_generation);
+            (key, ui.value(key).unwrap_or(serde_json::Value::Null))
+        });
+        let options = control.options.clone().unwrap_or_default();
+        let active_index = options
+            .iter()
+            .position(|option| option.value == value)
+            .unwrap_or(0);
+        let mut items = Vec::with_capacity(options.len());
+        for (index, option) in options.into_iter().enumerate() {
+            let option_value = option.value.clone();
+            let item = oxide_ui::segmented_control_item(
+                &self.theme_tokens,
+                option.label,
+                index == active_index,
+            );
+            let item = if control.disabled {
+                item.opacity(0.5)
+            } else {
+                item.on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _event, _window, cx| {
+                        this.set_native_plugin_ui_control_value(key, option_value.clone(), cx);
+                        cx.stop_propagation();
+                    }),
+                )
+            };
+            items.push(item.into_any_element());
+        }
+        let segmented = oxide_ui::segmented_control(
+            &self.theme_tokens,
+            ("native-plugin-segmented", key),
+            oxide_ui::SegmentedControlOptions::new(active_index, active_index, items.len()),
+            items,
+        );
+        self.render_native_plugin_form_field(control, segmented)
+    }
+
+    fn render_native_plugin_slider_control(
+        &mut self,
+        plugin_id: &str,
+        surface_kind: &str,
+        surface_id: &str,
+        section_id: &str,
+        control: &plugin_host::NativePluginDeclarativeUiControl,
+        render_generation: u64,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let context = native_plugin_ui_control_context(
+            plugin_id,
+            surface_kind,
+            surface_id,
+            section_id,
+            control,
+        );
+        let key = self.update_plugin_ui_state(cx, |ui| {
+            ui.sync_control(context, control, render_generation)
+        });
+        let min = control.min.unwrap_or(0.0) as f32;
+        let max = control.max.unwrap_or(100.0).max(f64::from(min)) as f32;
+        let step = control.step.unwrap_or(1.0).max(f64::EPSILON) as f32;
+        let value = self
+            .plugin_ui_state(cx)
+            .value(key)
+            .as_ref()
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(f64::from(min)) as f32;
+        let target = WorkspaceImeTarget::PluginControl { key, secret: false };
+        let slider = oxide_ui::slider::slider(
+            &self.theme_tokens,
+            oxide_ui::slider::SliderView {
+                min,
+                max,
+                value,
+                disabled: control.disabled,
+            },
+        )
+        .h(px(self.theme_tokens.metrics.ui_control_height));
+        let slider = if control.disabled {
+            slider
+        } else {
+            slider
+                .cursor_pointer()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
+                        this.set_native_plugin_slider_from_pointer(
+                            key,
+                            target,
+                            event.position.x,
+                            min,
+                            max,
+                            step,
+                            cx,
+                        );
+                        cx.stop_propagation();
+                    }),
+                )
+                .on_mouse_move(
+                    cx.listener(move |this, event: &MouseMoveEvent, _window, cx| {
+                        if event.pressed_button == Some(MouseButton::Left) {
+                            this.set_native_plugin_slider_from_pointer(
+                                key,
+                                target,
+                                event.position.x,
+                                min,
+                                max,
+                                step,
+                                cx,
+                            );
+                            cx.stop_propagation();
+                        }
+                    }),
+                )
+        };
+        let view = cx.entity();
+        let anchored = oxide_ui::text_input::text_input_anchor_probe(
+            target.anchor_id(),
+            slider,
+            move |anchor, _window, cx| {
+                let _ = view.update(cx, |this, _| this.update_text_input_anchor(anchor));
+            },
+        );
+        self.render_native_plugin_form_field(control, anchored)
+    }
+
+    fn render_native_plugin_layout_control(
+        &mut self,
+        plugin_id: &str,
+        surface_kind: &str,
+        surface_id: &str,
+        section_id: &str,
+        control: &plugin_host::NativePluginDeclarativeUiControl,
+        render_generation: u64,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let gap = native_plugin_layout_gap(&self.theme_tokens, control.gap.as_deref());
+        let mut children = Vec::with_capacity(control.children.len());
+        for (index, child) in control.children.iter().enumerate() {
+            if control.kind == "actionRow" && index == 0 && child.kind == "button" {
+                children.push(self.render_native_plugin_button_control(
+                    plugin_id,
+                    surface_kind,
+                    surface_id,
+                    section_id,
+                    child,
+                    true,
+                    cx,
+                ));
+                continue;
+            }
+            children.push(self.render_native_plugin_declarative_control(
+                plugin_id,
+                surface_kind,
+                surface_id,
+                section_id,
+                child,
+                render_generation,
+                cx,
+            ));
+        }
+        let layout = match control.kind.as_str() {
+            "columns" => div()
+                .w_full()
+                .min_w_0()
+                .flex()
+                .flex_wrap()
+                .items_start()
+                .gap(px(gap))
+                .children(
+                    children
+                        .into_iter()
+                        .map(|child| div().min_w_0().flex_1().flex_basis(px(360.0)).child(child)),
+                )
+                .into_any_element(),
+            "actionRow" => {
+                let mut children = children.into_iter();
+                oxide_ui::action_slot_row(
+                    &self.theme_tokens,
+                    oxide_ui::ActionSlotRowOptions::new()
+                        .gap(gap)
+                        .trailing_gap(gap),
+                    None,
+                    children.next().unwrap_or_else(|| div().into_any_element()),
+                    children.collect(),
+                )
+                .into_any_element()
+            }
+            "row" => div()
+                .w_full()
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .items_center()
+                .gap(px(gap))
+                .children(children)
+                .into_any_element(),
+            "card" => oxide_ui::semantic_surface(
+                &self.theme_tokens,
+                native_plugin_card_surface_options(control),
+            )
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(gap))
+            .children(children)
+            .into_any_element(),
+            "toolbar" => oxide_ui::semantic_surface(
+                &self.theme_tokens,
+                oxide_ui::SurfaceOptions::new(oxide_ui::SurfaceKind::InsetGroup)
+                    .padding(oxide_ui::SurfacePadding::Compact),
+            )
+            .w_full()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap(px(gap))
+            .children(children)
+            .into_any_element(),
+            _ => div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .gap(px(gap))
+                .children(children)
+                .into_any_element(),
+        };
+        if let Some(title) = &control.label {
+            let mut options = oxide_ui::SectionHeaderOptions::new().compact();
+            if let Some(description) = &control.description {
+                options = options.description(description.clone());
+            }
+            div()
+                .w_full()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(self.theme_tokens.spacing.two))
+                .child(oxide_ui::section_header(
+                    &self.theme_tokens,
+                    title.clone(),
+                    options,
+                    None,
+                    None,
+                ))
+                .child(layout)
+                .into_any_element()
+        } else {
+            layout
+        }
+    }
+
+    fn render_native_plugin_alert_control(
+        &self,
+        control: &plugin_host::NativePluginDeclarativeUiControl,
+    ) -> AnyElement {
+        let tone = native_plugin_ui_state_tone(control.tone.as_deref());
+        oxide_ui::state_notice(
+            &self.theme_tokens,
+            tone,
+            Self::render_lucide_icon(
+                LucideIcon::from_plugin_name(control.icon.as_deref().unwrap_or("info")),
+                self.theme_tokens.metrics.ui_menu_icon_size,
+                rgb(native_plugin_ui_tone_color(
+                    &self.theme_tokens,
+                    control.tone.as_deref(),
+                )),
+            ),
+            native_plugin_control_label(control, ""),
+            control.description.clone(),
+        )
+        .into_any_element()
+    }
+
+    fn render_native_plugin_form_field(
+        &self,
+        control: &plugin_host::NativePluginDeclarativeUiControl,
+        input: impl IntoElement,
+    ) -> AnyElement {
+        let mut field = div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(self.theme_tokens.spacing.one));
+        if let Some(label) = control.label.clone() {
+            field = field.child(oxide_ui::form_field(&self.theme_tokens, label, input));
+        } else {
+            field = field.child(input);
+        }
+        field
+            .when_some(control.description.clone(), |field, description| {
+                field.child(
+                    div()
+                        .text_size(px(self.theme_tokens.metrics.ui_text_xs))
+                        .text_color(rgb(self.theme_tokens.ui.text_muted))
+                        .child(description),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn set_native_plugin_ui_control_value(
+        &mut self,
+        key: u64,
+        value: serde_json::Value,
+        cx: &mut Context<Self>,
+    ) {
+        self.blur_native_plugin_ui_input(cx);
+        let context = self.update_plugin_ui_state(cx, |ui| {
+            let context = ui.context(key).cloned()?;
+            ui.set_value(key, value.clone()).then_some(context)
+        });
+        let Some(context) = context else {
+            return;
+        };
+        self.dispatch_native_plugin_ui_control_event(context, "change", value, cx);
+        cx.notify();
+    }
+
+    fn blur_native_plugin_ui_input(&mut self, cx: &mut Context<Self>) {
+        let was_focused = self.update_plugin_ui_state(cx, |ui| ui.focused_input.take().is_some());
+        if was_focused {
+            self.clear_ime_selection();
+        }
+    }
+
+    pub(super) fn dispatch_native_plugin_ui_input_event(
+        &mut self,
+        key: u64,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(context) = self.plugin_ui_state(cx).context(key).cloned() else {
+            return;
+        };
+        let value = if context.control_kind == "password" {
+            let approved = self.native_plugin_ui_secret_event_is_approved(&context.plugin_id, cx);
+            let Some(password) = self.plugin_ui_state(cx).text(key) else {
+                return;
+            };
+            native_plugin_password_event_value(password, approved)
+        } else {
+            let Some(value) = self.plugin_ui_state(cx).value(key) else {
+                return;
+            };
+            value
+        };
+        // The event is sent only to the plugin that owns this explicitly
+        // focused surface; host-owned password drafts remain zeroizing.
+        self.dispatch_native_plugin_ui_control_event(context, "input", value, cx);
+    }
+
+    fn native_plugin_ui_secret_event_is_approved(
+        &self,
+        plugin_id: &str,
+        cx: &Context<Self>,
+    ) -> bool {
+        self.plugin_entity
+            .read(cx)
+            .registry()
+            .plugins()
+            .iter()
+            .find(|plugin| plugin.manifest.id == plugin_id)
+            .is_some_and(|plugin| {
+                plugin
+                    .config
+                    .approved_capabilities
+                    .iter()
+                    .any(|capability| {
+                        capability
+                            == oxide_plugin_host_api::capabilities::NATIVE_PLUGIN_CAPABILITY_CREDENTIALS_RAW_READ
+                    })
+            })
+    }
+
+    pub(super) fn native_plugin_ui_control_is_visible(&self, key: u64, cx: &App) -> bool {
+        let Some(context) = self.plugin_ui_state(cx).context(key).cloned() else {
+            return false;
+        };
+        match context.surface_kind.as_str() {
+            "tab" => self.active_content_tab(cx).is_some_and(|tab| {
+                matches!(
+                    &tab.kind,
+                    TabKind::Plugin { plugin_id, tab_id }
+                        if plugin_id == &context.plugin_id && tab_id == &context.surface_id
+                )
+            }),
+            "sidebarPanel" => {
+                self.effective_sidebar_panel_section() == NavItem::Extensions
+                    && self
+                        .plugin_manager_state(cx)
+                        .active_sidebar_panel
+                        .as_ref()
+                        .is_some_and(|selection| {
+                            selection.plugin_id == context.plugin_id
+                                && selection.panel_id == context.surface_id
+                        })
+            }
+            _ => false,
+        }
+    }
+
+    fn dispatch_native_plugin_ui_control_event(
+        &mut self,
+        context: NativePluginUiControlContext,
+        event_type: &str,
+        value: serde_json::Value,
+        cx: &mut Context<Self>,
+    ) {
+        self.dispatch_native_plugin_event(
+            context.plugin_id,
+            plugin_host::NATIVE_PLUGIN_UI_EVENT,
+            serde_json::json!({
+                "type": event_type,
+                "componentKind": context.control_kind,
+                "surfaceKind": context.surface_kind,
+                "surfaceId": context.surface_id,
+                "sectionId": context.section_id,
+                "controlId": context.control_id,
+                "value": value,
+            }),
+            cx,
+        );
+    }
+
+    fn set_native_plugin_slider_from_pointer(
+        &mut self,
+        key: u64,
+        target: WorkspaceImeTarget,
+        pointer_x: Pixels,
+        min: f32,
+        max: f32,
+        step: f32,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(anchor) = self.text_input_anchors.get(target.anchor_id()) else {
+            return;
+        };
+        let width = f32::from(anchor.bounds.size.width).max(1.0);
+        let fraction = (f32::from(pointer_x - anchor.bounds.left()) / width).clamp(0.0, 1.0);
+        let raw = min + (max - min) * fraction;
+        let value = min + ((raw - min) / step).round() * step;
+        self.set_native_plugin_ui_control_value(
+            key,
+            serde_json::json!(f64::from(value.clamp(min, max))),
+            cx,
+        );
+    }
+
+    fn render_native_plugin_divider_control(&self) -> AnyElement {
+        oxide_ui::separator::separator(
+            &self.theme_tokens,
+            oxide_ui::separator::SeparatorOrientation::Horizontal,
+        )
+        .into_any_element()
+    }
+
+    fn render_native_plugin_text_block_control(
+        &self,
+        control: &plugin_host::NativePluginDeclarativeUiControl,
+        code: bool,
+    ) -> AnyElement {
+        let text = native_plugin_control_text(control);
+        if !code {
+            let mut options = self.localized_markdown_options();
+            // Plugin markdown may format supplied text but cannot use the host
+            // renderer to read local files or trigger background image fetches.
+            options.enable_async_images = false;
+            options.allowed_image_schemes.clear();
+            options.allowed_link_schemes = vec!["http", "https", "mailto"];
+            return oxide_markdown::markdown_with_options(&self.theme_tokens, &text, &options);
+        }
+        oxide_ui::semantic_surface(
+            &self.theme_tokens,
+            oxide_ui::SurfaceOptions::new(oxide_ui::SurfaceKind::InsetGroup)
+                .padding(oxide_ui::SurfacePadding::Compact),
+        )
+        .w_full()
+        .text_size(px(self.theme_tokens.metrics.ui_text_sm))
+        .text_color(rgb(self.theme_tokens.ui.text))
+        .font_family(settings_mono_font_family(self.settings_store.settings()))
+        .child(text)
+        .into_any_element()
+    }
+
+    fn render_native_plugin_status_badge(
+        &self,
+        control: &plugin_host::NativePluginDeclarativeUiControl,
+    ) -> AnyElement {
+        let mut options =
+            oxide_ui::StatusPillOptions::new(native_plugin_ui_status_tone(control.tone.as_deref()));
+        if control.size.as_deref() == Some("small") {
+            options = options.compact();
+        }
+        if control.strong {
+            options = options.strong();
+        }
+        oxide_ui::status_pill(
+            &self.theme_tokens,
+            native_plugin_control_label(control, ""),
+            options,
+        )
+        .into_any_element()
+    }
+
+    fn render_native_plugin_progress_control(
+        &self,
+        control: &plugin_host::NativePluginDeclarativeUiControl,
+    ) -> AnyElement {
+        let raw_value = control
+            .value
+            .as_ref()
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(0.0) as f32;
+        let progress = if raw_value <= 1.0 {
+            raw_value * 100.0
+        } else {
+            raw_value
+        };
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(self.theme_tokens.spacing.one))
+            .when_some(
+                self.render_native_plugin_control_label(control),
+                |view, label| view.child(label),
+            )
+            .child(oxide_ui::progress::progress(
+                &self.theme_tokens,
+                Some(progress),
+                control.indeterminate,
+            ))
+            .into_any_element()
+    }
+
+    fn render_native_plugin_table_control(
+        &self,
+        control: &plugin_host::NativePluginDeclarativeUiControl,
+    ) -> AnyElement {
+        let rows = Arc::new(control.rows.clone().unwrap_or_default());
+        let row_count = rows.len();
+        let metrics = oxide_ui::TauriTableMetrics::from_tokens(&self.theme_tokens);
+        let spec =
+            TauriVirtualListSpec::new(px(metrics.row_min_height), NATIVE_PLUGIN_UI_LIST_OVERSCAN);
+        let state = tauri_virtual_list_state(row_count, ListAlignment::Top, spec);
+        let height = native_plugin_virtual_list_height(row_count, metrics.row_min_height)
+            + metrics.header_min_height;
+        let columns = Arc::new(native_plugin_table_columns(control));
+        let colors = native_plugin_table_colors(&self.theme_tokens);
+        let tokens = self.theme_tokens;
+        let mut header = oxide_ui::tauri_table_header(&self.theme_tokens, colors, metrics);
+        if columns.is_empty() {
+            header = header.child(
+                div()
+                    .flex_1()
+                    .child(native_plugin_control_label(control, "")),
+            );
+        } else {
+            for (_, label, _) in columns.iter() {
+                header = header.child(div().min_w_0().flex_1().truncate().child(label.clone()));
+            }
+        }
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .when_some(
+                self.render_native_plugin_control_label(control),
+                |view, label| view.child(label),
+            )
+            .child(
+                div()
+                    .h(px(height))
+                    .w_full()
+                    .rounded(px(self.theme_tokens.radii.md))
+                    .border_1()
+                    .border_color(rgb(self.theme_tokens.ui.border))
+                    .overflow_hidden()
+                    .child(header)
+                    .child(tauri_virtual_list(
+                        state,
+                        spec,
+                        move |index, _window, _cx| {
+                            let row = rows.get(index).cloned().unwrap_or(serde_json::Value::Null);
+                            native_plugin_table_row_element(
+                                row,
+                                columns.clone(),
+                                tokens,
+                                colors,
+                                metrics,
+                            )
+                        },
+                    )),
+            )
+            .into_any_element()
+    }
+
+    fn render_native_plugin_list_control(
+        &self,
+        control: &plugin_host::NativePluginDeclarativeUiControl,
+    ) -> AnyElement {
+        let rows = Arc::new(control.rows.clone().unwrap_or_default());
+        let row_count = rows.len();
+        let row_height =
+            self.theme_tokens.metrics.ui_button_sm_height + self.theme_tokens.spacing.one;
+        let spec = TauriVirtualListSpec::new(px(row_height), NATIVE_PLUGIN_UI_LIST_OVERSCAN);
+        let state = tauri_virtual_list_state(row_count, ListAlignment::Top, spec);
+        let height = native_plugin_virtual_list_height(row_count, row_height);
+        let tokens = self.theme_tokens;
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .when_some(
+                self.render_native_plugin_control_label(control),
+                |view, label| view.child(label),
+            )
+            .child(
+                div()
+                    .h(px(height))
+                    .w_full()
+                    .rounded(px(self.theme_tokens.radii.md))
+                    .border_1()
+                    .border_color(rgb(self.theme_tokens.ui.border))
+                    .overflow_hidden()
+                    .child(tauri_virtual_list(
+                        state,
+                        spec,
+                        move |index, _window, _cx| {
+                            let row = rows.get(index).cloned().unwrap_or(serde_json::Value::Null);
+                            native_plugin_list_row_element(row, tokens)
+                        },
+                    )),
+            )
+            .into_any_element()
+    }
+
+    fn render_native_plugin_empty_state_control(
+        &self,
+        control: &plugin_host::NativePluginDeclarativeUiControl,
+    ) -> AnyElement {
+        oxide_ui::empty_state(
+            &self.theme_tokens,
+            Self::render_lucide_icon(
+                LucideIcon::from_plugin_name(control.icon.as_deref().unwrap_or("inbox")),
+                self.theme_tokens.metrics.activity_icon_glyph_size,
+                rgb(self.theme_tokens.ui.accent),
+            ),
+            native_plugin_control_label(control, ""),
+            control.description.clone(),
+            None,
+        )
+        .min_h(px(self.theme_tokens.metrics.ui_button_lg_height * 2.0))
+        .into_any_element()
+    }
+
+    fn render_native_plugin_key_value_control(
+        &self,
+        control: &plugin_host::NativePluginDeclarativeUiControl,
+    ) -> AnyElement {
+        let theme = self.theme_tokens.ui;
+        div()
+            .w_full()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap(px(10.0))
+            .text_size(px(self.theme_tokens.metrics.ui_text_sm))
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(rgb(theme.text_muted))
+                    .child(native_plugin_control_label(control, "")),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .max_w(px(220.0))
+                    .truncate()
+                    .text_color(rgb(theme.text))
+                    .child(native_plugin_control_value_label(control)),
+            )
+            .into_any_element()
+    }
+
+    fn render_native_plugin_control_label(
+        &self,
+        control: &plugin_host::NativePluginDeclarativeUiControl,
+    ) -> Option<AnyElement> {
+        let label = control.label.clone()?;
+        Some(
+            div()
+                .text_size(px(self.theme_tokens.metrics.ui_text_xs))
+                .text_color(rgb(self.theme_tokens.ui.text_muted))
+                .child(label)
+                .into_any_element(),
+        )
+    }
+}
+
+pub(super) fn localize_native_plugin_schema(
+    schema: &mut plugin_host::NativePluginDeclarativeUiSchema,
+    locale: oxide_i18n::Locale,
+) {
+    use oxide_i18n::Locale;
+    let locale = match locale {
+        Locale::De => "de",
+        Locale::En => "en",
+        Locale::EsEs => "es-ES",
+        Locale::FrFr => "fr-FR",
+        Locale::It => "it",
+        Locale::Ja => "ja",
+        Locale::Ko => "ko",
+        Locale::PtBr => "pt-BR",
+        Locale::Vi => "vi",
+        Locale::ZhCn => "zh-CN",
+        Locale::ZhTw => "zh-TW",
+    };
+    let Some(messages) = schema
+        .translations
+        .get(locale)
+        .or_else(|| schema.translations.get("en"))
+        .cloned()
+    else {
+        return;
+    };
+    schema.translations.clear();
+    fn translate(value: &mut serde_json::Value, messages: &HashMap<String, String>) {
+        match value {
+            serde_json::Value::String(text) => {
+                if let Some(translated) = text.strip_prefix('@').and_then(|key| messages.get(key)) {
+                    *text = translated.clone();
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    translate(item, messages)
+                }
+            }
+            serde_json::Value::Object(items) => {
+                for item in items.values_mut() {
+                    translate(item, messages)
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Ok(mut value) = serde_json::to_value(&*schema) {
+        translate(&mut value, &messages);
+        if let Ok(localized) = serde_json::from_value(value) {
+            *schema = localized;
+        }
+    }
+}
+
+fn native_plugin_ui_control_context(
+    plugin_id: &str,
+    surface_kind: &str,
+    surface_id: &str,
+    section_id: &str,
+    control: &plugin_host::NativePluginDeclarativeUiControl,
+) -> NativePluginUiControlContext {
+    NativePluginUiControlContext {
+        plugin_id: plugin_id.to_string(),
+        surface_kind: surface_kind.to_string(),
+        surface_id: surface_id.to_string(),
+        section_id: section_id.to_string(),
+        control_id: control.id.clone().unwrap_or_else(|| control.kind.clone()),
+        control_kind: control.kind.clone(),
+    }
+}
+
+fn native_plugin_button_options(
+    control: &plugin_host::NativePluginDeclarativeUiControl,
+) -> oxide_ui::button::ButtonOptions {
+    let variant = match control.variant.as_deref() {
+        Some("secondary") => oxide_ui::button::ButtonVariant::Secondary,
+        Some("outline") => oxide_ui::button::ButtonVariant::Outline,
+        Some("ghost") => oxide_ui::button::ButtonVariant::Ghost,
+        Some("destructive") => oxide_ui::button::ButtonVariant::Destructive,
+        Some("link") => oxide_ui::button::ButtonVariant::Link,
+        _ => oxide_ui::button::ButtonVariant::Default,
+    };
+    let size = match control.size.as_deref() {
+        Some("small") => oxide_ui::button::ButtonSize::Sm,
+        Some("large") => oxide_ui::button::ButtonSize::Lg,
+        Some("icon") => oxide_ui::button::ButtonSize::Icon,
+        _ => oxide_ui::button::ButtonSize::Default,
+    };
+    oxide_ui::button::ButtonOptions {
+        variant,
+        size,
+        radius: oxide_ui::button::ButtonRadius::Md,
+        disabled: control.disabled || control.loading,
+    }
+}
+
+fn native_plugin_button_icon_size(tokens: &ThemeTokens, size: Option<&str>) -> f32 {
+    match size {
+        Some("small") => tokens.metrics.ui_button_sm_height,
+        Some("large") => tokens.metrics.ui_button_lg_height,
+        _ => tokens.metrics.ui_button_icon_size,
+    }
+}
+
+fn native_plugin_layout_gap(tokens: &ThemeTokens, gap: Option<&str>) -> f32 {
+    match gap {
+        Some("none") => 0.0,
+        Some("compact") => tokens.spacing.one,
+        Some("spacious") => tokens.spacing.three * 2.0,
+        _ => tokens.spacing.three,
+    }
+}
+
+fn native_plugin_card_surface_options(
+    control: &plugin_host::NativePluginDeclarativeUiControl,
+) -> oxide_ui::SurfaceOptions {
+    let kind = match control.variant.as_deref() {
+        Some("inset") => oxide_ui::SurfaceKind::InsetGroup,
+        Some("inspector") => oxide_ui::SurfaceKind::Inspector,
+        _ => oxide_ui::SurfaceKind::Panel,
+    };
+    oxide_ui::SurfaceOptions::new(kind)
+}
+
+fn native_plugin_ui_state_tone(tone: Option<&str>) -> oxide_ui::UiStateTone {
+    match tone {
+        Some("success") => oxide_ui::UiStateTone::Success,
+        Some("warning") => oxide_ui::UiStateTone::Warning,
+        Some("error") => oxide_ui::UiStateTone::Error,
+        Some("neutral") => oxide_ui::UiStateTone::Muted,
+        _ => oxide_ui::UiStateTone::Accent,
+    }
+}
+
+fn native_plugin_ui_status_tone(tone: Option<&str>) -> oxide_ui::StatusTone {
+    match tone {
+        Some("accent") => oxide_ui::StatusTone::Accent,
+        Some("success") => oxide_ui::StatusTone::Success,
+        Some("warning") => oxide_ui::StatusTone::Warning,
+        Some("error") => oxide_ui::StatusTone::Error,
+        Some("info") => oxide_ui::StatusTone::Info,
+        _ => oxide_ui::StatusTone::Neutral,
+    }
+}
+
+fn native_plugin_ui_tone_color(tokens: &ThemeTokens, tone: Option<&str>) -> u32 {
+    match tone {
+        Some("success") => tokens.ui.success,
+        Some("warning") => tokens.ui.warning,
+        Some("error") => tokens.ui.error,
+        Some("info") => tokens.ui.info,
+        Some("neutral") => tokens.ui.text_muted,
+        _ => tokens.ui.accent,
+    }
+}
+
+fn native_plugin_control_label(
+    control: &plugin_host::NativePluginDeclarativeUiControl,
+    fallback: &str,
+) -> String {
+    control
+        .label
+        .clone()
+        .or_else(|| control.id.clone())
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+fn native_plugin_control_text(control: &plugin_host::NativePluginDeclarativeUiControl) -> String {
+    control
+        .text
+        .clone()
+        .or_else(|| control.value.as_ref().map(native_plugin_ui_value_label))
+        .unwrap_or_default()
+}
+
+fn native_plugin_control_value_label(
+    control: &plugin_host::NativePluginDeclarativeUiControl,
+) -> String {
+    control
+        .value
+        .as_ref()
+        .map(native_plugin_ui_value_label)
+        .unwrap_or_default()
+}
+
+fn native_plugin_ui_value_label(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => String::new(),
+        serde_json::Value::String(value) => value.clone(),
+        serde_json::Value::Bool(value) => value.to_string(),
+        serde_json::Value::Number(value) => value.to_string(),
+        _ => serde_json::to_string(value).unwrap_or_default(),
+    }
+}
+
+fn native_plugin_virtual_list_height(row_count: usize, row_height: f32) -> f32 {
+    let visible_rows = row_count.clamp(1, NATIVE_PLUGIN_UI_MAX_VISIBLE_ROWS);
+    visible_rows as f32 * row_height
+}
+
+fn native_plugin_list_row_element(value: serde_json::Value, tokens: ThemeTokens) -> AnyElement {
+    oxide_ui::entity_list_row(
+        &tokens,
+        oxide_ui::EntityListRowOptions::new().compact(),
+        None,
+        div()
+            .min_w_0()
+            .truncate()
+            .text_size(px(tokens.metrics.ui_text_sm))
+            .text_color(rgb(tokens.ui.text))
+            .child(native_plugin_ui_value_label(&value))
+            .into_any_element(),
+        None,
+        Vec::new(),
+        Vec::new(),
+    )
+    .into_any_element()
+}
+
+fn native_plugin_table_row_element(
+    value: serde_json::Value,
+    columns: Arc<Vec<(String, String, String)>>,
+    tokens: ThemeTokens,
+    colors: oxide_ui::TauriTableColors,
+    metrics: oxide_ui::TauriTableMetrics,
+) -> AnyElement {
+    let mut row = oxide_ui::tauri_table_row(colors, metrics, false);
+    if columns.is_empty() {
+        return row
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .truncate()
+                    .text_size(px(tokens.metrics.ui_text_sm))
+                    .text_color(rgb(tokens.ui.text))
+                    .child(native_plugin_ui_value_label(&value)),
+            )
+            .into_any_element();
+    }
+    for (index, (column, _, style)) in columns.iter().enumerate() {
+        let label = value
+            .get(column)
+            .map(native_plugin_ui_value_label)
+            .unwrap_or_default();
+        let cell_style = match style.as_str() {
+            "mono" => oxide_ui::TauriTableCellStyle::MetaMono,
+            "meta" => oxide_ui::TauriTableCellStyle::Meta,
+            _ if index == 0 => oxide_ui::TauriTableCellStyle::Primary,
+            _ => oxide_ui::TauriTableCellStyle::Meta,
+        };
+        row = row.child(oxide_ui::tauri_table_cell(
+            &tokens,
+            &oxide_ui::TauriTableCellOptions {
+                width: NATIVE_PLUGIN_UI_TABLE_COLUMN_WIDTH,
+                min_width: NATIVE_PLUGIN_UI_TABLE_COLUMN_MIN_WIDTH,
+                flexible: true,
+                padding_left: 0.0,
+                primary_text_size: tokens.metrics.ui_text_sm,
+                meta_text_size: tokens.metrics.ui_text_xs,
+                mono_font: Some(SharedString::from(tokens.metrics.font_family)),
+            },
+            cell_style,
+            label,
+        ));
+    }
+    row.into_any_element()
+}
+
+fn native_plugin_table_columns(
+    control: &plugin_host::NativePluginDeclarativeUiControl,
+) -> Vec<(String, String, String)> {
+    if let Some(columns) = &control.column_defs {
+        return columns
+            .iter()
+            .map(|column| {
+                (
+                    column.key.clone(),
+                    column.label.clone(),
+                    column.style.clone().unwrap_or_else(|| "meta".to_string()),
+                )
+            })
+            .collect();
+    }
+    control
+        .columns
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|column| (column.clone(), column, "meta".to_string()))
+        .collect()
+}
+
+fn native_plugin_table_colors(tokens: &ThemeTokens) -> oxide_ui::TauriTableColors {
+    oxide_ui::TauriTableColors {
+        header_border: rgb(tokens.ui.border),
+        header_bg: rgb(tokens.ui.bg_sunken),
+        row_border: rgba((tokens.ui.border << 8) | 0x66),
+        row_hover_bg: rgb(tokens.ui.bg_hover),
+        row_selected_bg: rgb(tokens.ui.bg_active),
+    }
+}
+
+fn native_plugin_password_event_value(
+    password: &str,
+    raw_access_approved: bool,
+) -> serde_json::Value {
+    if raw_access_approved {
+        // The owning plugin explicitly requested and received raw-credential
+        // approval; this is the single plaintext handoff out of host UI state.
+        serde_json::Value::String(password.to_string())
+    } else {
+        serde_json::json!({
+            "present": !password.is_empty(),
+            "redacted": true,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::native_plugin_password_event_value;
+
+    #[test]
+    fn plugin_schema_localizes_owned_labels_without_changing_command_identity() {
+        let mut schema=serde_json::from_value(serde_json::json!({"title":"@title","translations":{"en":{"title":"Tools","run":"Run"},"zh-CN":{"title":"工具箱","run":"执行"}},"controls":[{"kind":"textWorkbench","id":"text","options":[{"label":"@run","value":{"command":"base64.encode"}}]}]})).unwrap();
+        super::localize_native_plugin_schema(&mut schema, oxide_i18n::Locale::ZhCn);
+        assert_eq!(schema.title.as_deref(), Some("工具箱"));
+        let option = &schema.controls[0].options.as_ref().unwrap()[0];
+        assert_eq!(option.label, "执行");
+        assert_eq!(option.value["command"], "base64.encode");
+    }
+
+    #[test]
+    fn password_event_is_redacted_without_sensitive_approval() {
+        let representative_secret = "plugin-secret-value";
+        let payload = native_plugin_password_event_value(representative_secret, false);
+
+        assert_eq!(payload["present"], true);
+        assert_eq!(payload["redacted"], true);
+        assert!(!payload.to_string().contains(representative_secret));
+    }
+}

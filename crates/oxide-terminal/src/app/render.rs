@@ -1,0 +1,3070 @@
+use std::{path::PathBuf, sync::Arc, time::Instant};
+
+use gpui::{
+    Anchor, AnchoredPositionMode, AnyElement, App, ClipboardItem, Context, ExternalPaths,
+    FocusHandle, Focusable, FontWeight, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    Render, SharedString, Window, anchored, deferred, div, point, prelude::*, px, rgb, rgba,
+};
+use oxide_terminal_core::{
+    DetectedModemProtocol, ModemTransferDirection, SerialControlLine, SerialDisplayMode,
+    SerialFlowControl, SerialLineEnding, SerialParity, SerialSendMode, SerialSessionConfig,
+    TermMode, TerminalCommandMark, TerminalCursorShape, TerminalLifecycle, TerminalSessionKind,
+    TerminalSnapshot, TmuxAction, TmuxUiState,
+};
+use oxide_ui::button::{
+    ButtonRadius, ContextChipOptions, IconButtonOptions, context_chip, icon_button,
+};
+use oxide_ui::confirm::{ConfirmDialogVariant, ConfirmDialogView, confirm_dialog};
+use oxide_ui::context_menu::{
+    ContextMenuItemKind, context_menu_action, context_menu_backdrop, context_menu_content,
+    context_menu_event_boundary, context_menu_item, context_menu_item_with_shortcut,
+    context_menu_separator,
+};
+use oxide_ui::menu::menu_content;
+use oxide_ui::modal::{TAURI_POPOVER_LAYER_PRIORITY, overlay_content_boundary};
+use oxide_ui::progress::progress;
+use oxide_ui::scroll::ScrollableElement;
+use oxide_ui::separator::{SeparatorOrientation, separator};
+
+use super::{
+    BACKGROUND_IMAGE_COMPLETION_POLL_INTERVAL, ImageRenderCache, ModemProgressState,
+    SmoothScrollSnapshotCache, TerminalCommandNavigationDirection, TerminalContextAction,
+    TerminalContextMenu, TerminalPane, TerminalPaneEvent, TmuxPromptKind, TmuxPromptState,
+    command_mark_ui_available,
+};
+use crate::background_cache::background_display_target;
+use crate::terminal_ui::*;
+use crate::terminal_view::*;
+
+// Bound stale frames under continuous output when the parser repeatedly wins the lock.
+const MAX_SNAPSHOT_DEFER_DURATION: std::time::Duration = std::time::Duration::from_millis(32);
+
+const TERMINAL_CONTEXT_MENU_WIDTH: f32 = 220.0;
+const TERMINAL_CONTROL_ROW_HEIGHT: f32 = 34.0;
+const SERIAL_CONTROL_BUTTON_RADIUS: f32 = 999.0;
+// Keep diagnostic chrome away from the prompt and command text at the left edge.
+const TERMINAL_PERFORMANCE_OVERLAY_INSET: f32 = 8.0;
+const TERMINAL_AUTOSUGGEST_MAX_WIDTH: f32 = 440.0;
+
+fn terminal_autosuggest_hints(labels: &TerminalAutosuggestLabels, macos: bool) -> (String, String) {
+    let (select, run, remove) = if macos {
+        ("⌥↑/↓", "Return", "⇧⌦")
+    } else {
+        ("Alt+↑/↓", "Enter", "Shift+Delete")
+    };
+    (
+        labels
+            .navigation_hint
+            .replace("{{select}}", select)
+            .replace("{{run}}", run),
+        labels
+            .dismiss_hint
+            .replace("{{dismiss}}", "Esc")
+            .replace("{{remove}}", remove),
+    )
+}
+
+fn terminal_autosuggest_bounds(
+    anchor: super::TerminalCursorAnchor,
+    terminal_top: f32,
+    desired_height: f32,
+) -> Option<gpui::Bounds<gpui::Pixels>> {
+    let margin = 8.0;
+    let gap = 4.0;
+    let width = (anchor.container_width - margin * 2.0).min(TERMINAL_AUTOSUGGEST_MAX_WIDTH);
+    let below = (anchor.container_height - anchor.y - anchor.line_height - gap - margin).max(0.0);
+    let above = (anchor.y - gap - margin).max(0.0);
+    let use_below = below >= desired_height || below >= above;
+    let height = desired_height.min(if use_below { below } else { above });
+    if width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    let left = anchor.x.clamp(
+        margin,
+        (anchor.container_width - width - margin).max(margin),
+    );
+    let top = terminal_top
+        + if use_below {
+            anchor.y + anchor.line_height + gap
+        } else {
+            anchor.y - gap - height
+        };
+    Some(gpui::Bounds::new(
+        point(px(left), px(top)),
+        gpui::size(px(width), px(height)),
+    ))
+}
+
+fn terminal_autosuggest_highlight_ranges(
+    command: &str,
+    query: &str,
+) -> Vec<std::ops::Range<usize>> {
+    // GPUI highlights use UTF-8 byte offsets. Preserve the original character's
+    // range when Unicode lowercasing expands it into multiple code points.
+    let mut normalized = zeroize::Zeroizing::new(String::new());
+    let mut source_ranges = Vec::new();
+    for (start, ch) in command.char_indices() {
+        for lower in ch.to_lowercase() {
+            normalized.push(lower);
+            source_ranges.push(start..start + ch.len_utf8());
+        }
+    }
+    let query = zeroize::Zeroizing::new(query.to_lowercase());
+    let matched: Vec<_> = if let Some(start) = normalized.find(query.as_str()) {
+        let first = normalized[..start].chars().count();
+        source_ranges
+            .iter()
+            .skip(first)
+            .take(query.chars().count())
+            .cloned()
+            .collect()
+    } else {
+        let mut remaining = query.chars().peekable();
+        normalized
+            .chars()
+            .zip(&source_ranges)
+            .filter_map(|(ch, range)| {
+                if remaining.peek() == Some(&ch) {
+                    remaining.next();
+                    Some(range.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    };
+    let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
+    for range in matched {
+        if let Some(last) = ranges.last_mut()
+            && range.start <= last.end
+        {
+            last.end = last.end.max(range.end);
+        } else {
+            ranges.push(range);
+        }
+    }
+    ranges
+}
+
+fn quote_posix_shell_word(value: &str) -> String {
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('\'');
+    for character in value.chars() {
+        if character == '\'' {
+            // Re-enter single quotes after emitting one literal quote outside them.
+            quoted.push_str("'\\''");
+        } else {
+            quoted.push(character);
+        }
+    }
+    quoted.push('\'');
+    quoted
+}
+
+fn external_paths_for_local_terminal(paths: &[PathBuf]) -> Option<String> {
+    if paths.is_empty() {
+        return None;
+    }
+
+    let mut input = String::new();
+    for (index, path) in paths.iter().enumerate() {
+        // Refuse lossy conversion because inserting a different path is worse than ignoring it.
+        let path = path.to_str()?;
+        if index > 0 {
+            input.push(' ');
+        }
+        input.push_str(&quote_posix_shell_word(path));
+    }
+    input.push(' ');
+    Some(input)
+}
+
+const TERMINAL_VISUAL_BELL_OVERLAY_ALPHA: u8 = 0x66;
+
+fn terminal_pane_base_is_transparent(has_window_background: bool) -> bool {
+    // Content-scoped images paint inside the pane above its fallback color.
+    // A window-scoped image always needs a transparent pane base, including
+    // visual-bell frames, so ordinary shell BEL events cannot hide the image.
+    has_window_background
+}
+
+fn terminal_visual_bell_overlay_color(bell_background: u32) -> u32 {
+    serial_color_alpha(bell_background, TERMINAL_VISUAL_BELL_OVERLAY_ALPHA)
+}
+
+fn terminal_cursor_shape_for_render(
+    terminal_shape: TerminalCursorShape,
+    preferred_shape: TerminalCursorShape,
+) -> TerminalCursorShape {
+    // Full-screen applications place the cursor in arbitrary scratch cells before hiding it.
+    // Preserve that protocol state while still applying the user's shape to visible cursors.
+    if terminal_shape == TerminalCursorShape::Hidden {
+        TerminalCursorShape::Hidden
+    } else {
+        preferred_shape
+    }
+}
+
+impl Focusable for TerminalPane {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl Render for TerminalPane {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.metrics_dirty {
+            self.metrics = TerminalMetrics::measure_with_preferences(window, &self.preferences);
+            self.metrics_dirty = false;
+        }
+        if self.snapshot_dirty {
+            // Hidden panes keep their emulator state current without copying the full grid. The
+            // first visible render after activation materializes exactly one latest snapshot.
+            let snapshot_started = Instant::now();
+            #[cfg(feature = "bench")]
+            let backend_snapshot_started = Instant::now();
+            let allow_defer = self.snapshot_deferred_since.is_none_or(|since| {
+                snapshot_started.duration_since(since) < MAX_SNAPSHOT_DEFER_DURATION
+            });
+            let next = self
+                .terminal
+                .lock()
+                .try_render_snapshot(&self.snapshot, allow_defer);
+            #[cfg(feature = "bench")]
+            {
+                self.benchmark_backend_snapshot_micros = backend_snapshot_started
+                    .elapsed()
+                    .as_micros()
+                    .min(u128::from(u64::MAX))
+                    as u64;
+            }
+            if let Some((snapshot, selection, mode)) = next {
+                self.render_mode = mode;
+                if snapshot.display_offset == 0 {
+                    self.clear_smooth_scroll_remainder();
+                }
+                #[cfg(feature = "bench")]
+                let snapshot_state_started = Instant::now();
+                self.snapshot = self.stamp_snapshot_with_selection(snapshot, selection);
+                #[cfg(feature = "bench")]
+                {
+                    self.benchmark_snapshot_state_micros = snapshot_state_started
+                        .elapsed()
+                        .as_micros()
+                        .min(u128::from(u64::MAX))
+                        as u64;
+                }
+                self.snapshot_dirty = false;
+                self.render_stats.snapshot_micros = snapshot_started
+                    .elapsed()
+                    .as_micros()
+                    .min(u128::from(u64::MAX))
+                    as u64;
+            } else {
+                // The final wakeup may already have been drained. Keep damage pending and
+                // retry next frame even if the producer stops before releasing the lock.
+                self.snapshot_deferred_since.get_or_insert(snapshot_started);
+                window.request_animation_frame();
+            }
+        }
+        if self.preferences.show_performance_overlay {
+            // Element timings are published after prepaint and paint, so the pane displays the
+            // most recently completed frame without scheduling an extra diagnostic repaint.
+            let performance = self.layout_cache.lock().performance();
+            self.render_stats.layout_micros = performance.layout_micros;
+            self.render_stats.paint_micros = performance.paint_micros;
+            self.render_stats.layout_cache_hit_percent = performance.cache_hit_percent;
+        }
+        let scrollbar_display_offset = self.smooth_scroll_display_offset();
+        let (mut snapshot, smooth_scroll_y_offset, viewport_rows) =
+            self.render_snapshot_for_smooth_scroll();
+        snapshot.cursor_shape =
+            terminal_cursor_shape_for_render(snapshot.cursor_shape, self.preferences.cursor_shape);
+        // Mode belongs to the displayed grid; re-reading it would wait for the parser again.
+        let terminal_mode = self.render_mode;
+        let tmux_state = self.terminal.lock().tmux_state();
+        let tmux_message = tmux_state.as_ref().and_then(|state| {
+            (state.message_generation > self.dismissed_tmux_message_generation)
+                .then(|| {
+                    state
+                        .message
+                        .clone()
+                        .map(|message| (state.message_generation, message))
+                })
+                .flatten()
+        });
+        let terminal_top = if tmux_state.is_some() || self.is_serial_transport() {
+            self.terminal_control_bar_height()
+        } else {
+            0.0
+        };
+        let decode_images = self
+            .preferences
+            .render_policy
+            .terminal_graphics
+            .decode_images;
+        let image_requests = self
+            .image_cache
+            .take_preparation_requests(&snapshot.images, decode_images);
+        if !image_requests.is_empty() {
+            let worker_requests = image_requests.clone();
+            let preparation_task = cx.background_executor().spawn(async move {
+                let started = Instant::now();
+                let prepared = worker_requests
+                    .into_iter()
+                    .filter_map(ImageRenderCache::prepare_snapshot)
+                    .collect();
+                (prepared, started.elapsed())
+            });
+            cx.spawn(async move |weak, cx| {
+                let (prepared, elapsed) = preparation_task.await;
+                let _ = weak.update(cx, |this, cx| {
+                    this.image_cache
+                        .finish_preparations(&image_requests, prepared);
+                    this.render_stats.image_prepare_micros =
+                        elapsed.as_micros().min(u128::from(u64::MAX)) as u64;
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+        let rendered_images = self
+            .image_cache
+            .cached_images(&snapshot.images, decode_images);
+        self.drop_retired_images(window, cx);
+        let row_timestamps = self
+            .terminal_timestamps_enabled
+            .then(|| self.row_timestamps.clone());
+        let search_matches = self.current_search_matches();
+        let selection_highlight_query = self.selection_highlight_query();
+
+        let background = self.preferences.background.clone().filter(|_background| {
+            // Keep terminal repaint frames off the filesystem hot path; image
+            // fallback and the background loader handle missing files.
+            self.preferences.render_policy.allow_background_images
+        });
+        let background_display = self
+            .bounds
+            .map(|bounds| background_display_target(bounds.size, window.scale_factor()))
+            .unwrap_or_else(|| {
+                // The viewport bounds are only known after the first layout pass,
+                // so fall back to the window content area.
+                background_display_target(window.bounds().size, window.scale_factor())
+            });
+        let background_layer = background.as_ref().map(|background| {
+            terminal_background_layer(
+                background.clone(),
+                if oxide_background::is_streaming_source(&background.path) {
+                    None
+                } else {
+                    self.background_image_cache
+                        .render_background_image(background, background_display)
+                },
+                window,
+                cx,
+            )
+        });
+        self.ensure_background_image_completion_poll(cx);
+        let transparent_pane_base =
+            terminal_pane_base_is_transparent(self.preferences.transparent_background);
+        let bell_flash_layer = self.bell_flash.then(|| {
+            // Keep the flash above image backgrounds but below terminal text.
+            // This preserves visual feedback without replacing the background.
+            div()
+                .absolute()
+                .top_0()
+                .right_0()
+                .bottom_0()
+                .left_0()
+                .bg(rgba(terminal_visual_bell_overlay_color(
+                    self.theme.bell_background,
+                )))
+        });
+        let command_mark_ui_visible =
+            command_mark_ui_available(self.settings.command_marks_enabled, terminal_mode);
+        if self.command_marks_render_cache_dirty {
+            self.command_marks_render_cache = Arc::from(self.command_marks.clone());
+            self.command_marks_render_cache_dirty = false;
+        }
+        let selected_command_mark_id = if command_mark_ui_visible {
+            self.selected_command_mark_id.clone()
+        } else {
+            None
+        };
+        let hovered_command_mark_id = if command_mark_ui_visible {
+            self.hovered_command_mark_id.clone()
+        } else {
+            None
+        };
+        let performance_metrics_enabled = self.preferences.show_performance_overlay;
+        #[cfg(feature = "bench")]
+        let performance_metrics_enabled =
+            performance_metrics_enabled || self.benchmark_performance_metrics_enabled;
+        let autosuggest_overlay = {
+            let candidates = self.terminal_autosuggest_candidates();
+            (!candidates.is_empty())
+                .then(|| self.render_terminal_autosuggest_overlay(candidates, terminal_top, cx))
+        };
+        let terminal_element = TerminalElement::new_with_images_and_bidi(
+            snapshot,
+            rendered_images,
+            self.selection.filter(|s| !s.is_empty()),
+            self.metrics.clone(),
+            self.theme.clone(),
+            self.cursor_visible,
+            self.marked_text.clone(),
+            self.search_query.clone(),
+            search_matches,
+            self.selected_search_match,
+            self.hovered_link.clone(),
+            self.settings.bidi_enabled,
+            Some(TerminalElementInput {
+                focus_handle: self.focus_handle.clone(),
+                view: cx.entity(),
+                last_viewport_bounds: self.bounds,
+                last_viewport_scale_factor_bits: self.viewport_scale_factor_bits,
+            }),
+        )
+        .marked_text_caret(self.marked_text_caret_utf16)
+        .detect_file_paths_as_links(self.settings.detect_file_paths_as_links)
+        .precomputed_search_matches()
+        .selection_highlight_query(selection_highlight_query)
+        .command_marks(
+            if command_mark_ui_visible {
+                self.command_marks_render_cache.clone()
+            } else {
+                Arc::from([])
+            },
+            selected_command_mark_id,
+            hovered_command_mark_id,
+        )
+        .highlight_rules(self.preferences.highlight_rules.clone())
+        .transient_command_highlight(
+            self.command_context_highlighting_enabled
+                .then(|| self.command_fact_ledger.transient_command_highlight())
+                .flatten(),
+        )
+        .semantic_configuration(
+            self.semantic_coloring_enabled() && !terminal_mode.contains(TermMode::ALT_SCREEN),
+            self.preferences.semantic_scheme.clone(),
+            self.preferences.semantic_shell,
+        )
+        .row_timestamps(row_timestamps)
+        .transparent_background(background.is_some() || self.preferences.transparent_background)
+        .ghost_text(self.terminal_ghost_text())
+        .viewport_rows(viewport_rows)
+        .scrollbar_display_offset(scrollbar_display_offset)
+        .scroll_y_offset(smooth_scroll_y_offset)
+        .scroll_x_offset(self.horizontal_scroll_offset_px)
+        .performance_metrics_enabled(performance_metrics_enabled)
+        .command_mark_gutter_width(if command_mark_ui_visible {
+            self.command_mark_gutter_width()
+        } else {
+            0.0
+        })
+        .layout_cache(self.layout_cache.clone());
+        let accepts_external_path_drop =
+            cfg!(target_os = "macos") && self.session_kind() == TerminalSessionKind::LocalPty;
+        div()
+            .id("terminal-pane")
+            .size_full()
+            .relative()
+            .bg(if transparent_pane_base {
+                rgba(0x00000000)
+            } else {
+                rgb(self.theme.background)
+            })
+            .text_color(rgb(self.theme.foreground))
+            .font_family(SharedString::from(self.preferences.font_family.clone()))
+            .text_size(self.metrics.font_size)
+            .line_height(self.metrics.line_height)
+            .track_focus(&self.focus_handle)
+            .can_drop(move |drag, _window, _cx| {
+                accepts_external_path_drop && drag.is::<ExternalPaths>()
+            })
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                if !cfg!(target_os = "macos")
+                    || this.session_kind() != TerminalSessionKind::LocalPty
+                {
+                    return;
+                }
+                let Some(input) = external_paths_for_local_terminal(paths.paths()) else {
+                    return;
+                };
+
+                window.focus(&this.focus_handle, cx);
+                this.paste_text(&input, cx);
+                cx.stop_propagation();
+            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    window.focus(&this.focus_handle, cx);
+                    this.handle_mouse_down(event, cx);
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Middle,
+                cx.listener(|this, event: &MouseDownEvent, _window, cx| {
+                    this.handle_mouse_down(event, cx);
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    window.focus(&this.focus_handle, cx);
+                    let mode = this.terminal.lock().mode();
+                    if mouse_mode(mode, event.modifiers.shift) {
+                        this.handle_mouse_down(event, cx);
+                    } else if this.right_click_paste_requested(mode, event.modifiers) {
+                        window.prevent_default();
+                        this.handle_mouse_down(event, cx);
+                    } else {
+                        window.prevent_default();
+                        this.open_terminal_context_menu(event, cx);
+                    }
+                }),
+            )
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                this.handle_mouse_move(event, cx);
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+                    this.handle_mouse_up(event, cx);
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Middle,
+                cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+                    this.handle_mouse_up(event, cx);
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Right,
+                cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+                    this.handle_mouse_up(event, cx);
+                }),
+            )
+            .on_key_down(cx.listener(|this, event, window, cx| {
+                if this.handle_key(event, cx) {
+                    // Terminal-owned shortcuts and control keys must not fall
+                    // through to GPUI defaults after being sent to the PTY.
+                    window.prevent_default();
+                    cx.stop_propagation();
+                }
+            }))
+            .on_key_up(cx.listener(|this, event, _window, cx| {
+                this.handle_key_up(event, cx);
+            }))
+            .on_scroll_wheel(cx.listener(|this, event, _window, cx| {
+                this.handle_scroll(event, cx);
+            }))
+            .when_some(background_layer, |pane, background| pane.child(background))
+            .when_some(bell_flash_layer, |pane, flash| pane.child(flash))
+            .child(
+                div()
+                    .absolute()
+                    // The element's inset bounds are shared by painting, hit testing and PTY sizing.
+                    .top(px(terminal_top + self.preferences.padding_vertical))
+                    .left(px(self.preferences.padding_horizontal))
+                    .right(px(self.preferences.padding_horizontal))
+                    .bottom(px(self.preferences.padding_vertical))
+                    .overflow_hidden()
+                    .child(terminal_element),
+            )
+            .when(self.is_serial_transport(), |pane| {
+                pane.child(self.render_serial_control_bar(cx))
+            })
+            .when_some(tmux_state, |pane, state| {
+                pane.child(self.render_tmux_control_bar(&state, cx))
+            })
+            .when_some(tmux_message, |pane, message| {
+                pane.child(self.render_tmux_message(message, cx))
+            })
+            .when_some(self.tmux_prompt.clone(), |pane, prompt| {
+                pane.child(self.render_tmux_prompt_overlay(&prompt, cx))
+            })
+            .when(self.pending_paste.is_some(), |pane| {
+                pane.child(self.render_paste_overlay(window, cx))
+            })
+            .when(
+                self.kitty_file_transmission_confirm_open && self.pending_paste.is_none(),
+                |pane| pane.child(self.render_kitty_file_transmission_confirm(cx)),
+            )
+            .when_some(self.modem_progress.clone(), |pane, transfer| {
+                pane.child(self.render_modem_progress_overlay(transfer, cx))
+            })
+            .when_some(self.context_menu.clone(), |pane, menu| {
+                pane.child(self.render_terminal_context_menu(menu, cx))
+            })
+            .when_some(autosuggest_overlay, |pane, overlay| pane.child(overlay))
+            .when(self.preferences.show_performance_overlay, |pane| {
+                pane.child(self.render_terminal_performance_overlay())
+            })
+            .when(
+                command_mark_ui_visible && self.settings.command_marks_show_hover_actions,
+                |pane| {
+                    pane.when_some(self.selected_command_mark(), |pane, mark| {
+                        pane.child(self.render_command_mark_actions(mark, cx))
+                    })
+                },
+            )
+    }
+}
+
+impl TerminalPane {
+    fn render_terminal_autosuggest_overlay(
+        &self,
+        candidates: Vec<crate::command_facts::TerminalAutosuggestCandidate>,
+        terminal_top: f32,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(anchor) = self.cursor_anchor() else {
+            return div().into_any_element();
+        };
+        let tokens = &self.theme.tokens;
+        let labels = &self.preferences.autosuggest_labels;
+        let (navigation_hint, dismiss_hint) =
+            terminal_autosuggest_hints(labels, cfg!(target_os = "macos"));
+        let query = zeroize::Zeroizing::new(self.input_tracker.state().value);
+        let row_height = tokens.metrics.ui_text_sm + tokens.metrics.ui_menu_item_padding_y * 2.0;
+        let header_height = 28.0;
+        let footer_height = 44.0;
+        let has_long_command = candidates
+            .iter()
+            .any(|candidate| candidate.command.chars().count() > 48);
+        let desired_height = header_height
+            + footer_height
+            + row_height * candidates.len() as f32
+            + if has_long_command { 64.0 } else { 0.0 };
+        let Some(bounds) =
+            terminal_autosuggest_bounds(anchor, terminal_top, desired_height.min(360.0))
+        else {
+            return div().into_any_element();
+        };
+        let height = f32::from(bounds.size.height);
+        if height < header_height + footer_height + row_height {
+            return div().into_any_element();
+        }
+        // Reserve detail space for this result set, so changing selection never moves the rows.
+        let preview_height =
+            if has_long_command && height >= header_height + footer_height + row_height + 64.0 {
+                64.0
+            } else {
+                0.0
+            };
+        let selected = self
+            .autosuggest_selected_index
+            .filter(|index| *index < candidates.len());
+        let preview =
+            (preview_height > 0.0).then(|| candidates[selected.unwrap_or(0)].command.clone());
+        let mut rows = div()
+            .id("terminal-autosuggest-list")
+            .w_full()
+            .h(px(height
+                - header_height
+                - footer_height
+                - preview_height
+                - 2.0))
+            .flex_none()
+            .overflow_y_scroll()
+            .track_scroll(&self.autosuggest_scroll);
+        for (index, candidate) in candidates.iter().enumerate() {
+            let active = selected == Some(index);
+            let fill_command = zeroize::Zeroizing::new(candidate.command.clone());
+            let remove_command = zeroize::Zeroizing::new(candidate.command.clone());
+            let highlights = terminal_autosuggest_highlight_ranges(&candidate.command, &query)
+                .into_iter()
+                .map(|range| {
+                    (
+                        range,
+                        gpui::HighlightStyle {
+                            color: Some(rgb(tokens.ui.accent).into()),
+                            ..Default::default()
+                        },
+                    )
+                });
+            rows = rows.child(
+                div()
+                    .id(("terminal-autosuggest-row", index))
+                    .group("terminal-autosuggest-row")
+                    .w_full()
+                    .h(px(row_height))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .px(px(10.0))
+                    .border_l_2()
+                    .border_color(if active {
+                        rgb(tokens.ui.accent)
+                    } else {
+                        rgba(0x00000000)
+                    })
+                    .bg(if active {
+                        rgb(tokens.ui.bg_active)
+                    } else {
+                        rgba(0x00000000)
+                    })
+                    .text_size(px(tokens.metrics.ui_text_sm))
+                    .line_height(px(20.0))
+                    .cursor_pointer()
+                    .hover(|row| row.bg(rgb(tokens.ui.bg_hover)))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _, cx| {
+                            this.fill_terminal_autosuggest_command(&fill_command, false, cx);
+                            cx.stop_propagation();
+                        }),
+                    )
+                    .child(
+                        gpui::svg()
+                            .path("lucide/history.svg")
+                            .size(px(14.0))
+                            .flex_none()
+                            .text_color(rgb(tokens.ui.text_muted)),
+                    )
+                    .child(
+                        div().flex_1().min_w_0().truncate().child(
+                            gpui::StyledText::new(candidate.command.clone())
+                                .with_highlights(highlights),
+                        ),
+                    )
+                    .child(
+                        div()
+                            .id(("terminal-autosuggest-remove", index))
+                            .size(px(20.0))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(tokens.radii.sm))
+                            .when(!active, |button| {
+                                button
+                                    .invisible()
+                                    .group_hover("terminal-autosuggest-row", |style| {
+                                        style.visible()
+                                    })
+                            })
+                            .hover(|button| button.bg(rgb(tokens.ui.bg_hover)))
+                            .child(
+                                gpui::svg()
+                                    .path("lucide/trash-2.svg")
+                                    .size(px(13.0))
+                                    .text_color(rgb(tokens.ui.text_muted)),
+                            )
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _, _, cx| {
+                                    this.remove_terminal_autosuggest_command(&remove_command, cx);
+                                    cx.stop_propagation();
+                                }),
+                            ),
+                    ),
+            );
+        }
+        let menu = menu_content(tokens)
+            .p_0()
+            .w(bounds.size.width)
+            .min_w_0()
+            .h(bounds.size.height)
+            .flex()
+            .flex_col()
+            .line_height(px(18.0))
+            .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+            .child(
+                div()
+                    .h(px(header_height))
+                    .flex_none()
+                    .px(px(12.0))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .border_b_1()
+                    .border_color(rgb(tokens.ui.border))
+                    .text_size(px(tokens.metrics.ui_text_xs))
+                    .text_color(rgb(tokens.ui.text_muted))
+                    .child(labels.history_source.clone())
+                    .child(
+                        labels
+                            .matches
+                            .replace("{{count}}", &candidates.len().to_string()),
+                    ),
+            )
+            .child(rows)
+            .when_some(preview, |menu, command| {
+                menu.child(
+                    div()
+                        .id(("terminal-autosuggest-preview", selected.unwrap_or(0)))
+                        .h(px(preview_height))
+                        .flex_none()
+                        .w_full()
+                        .overflow_y_scroll()
+                        .border_t_1()
+                        .border_color(rgb(tokens.ui.border))
+                        .px(px(12.0))
+                        .py(px(6.0))
+                        .text_size(px(tokens.metrics.ui_text_xs))
+                        .whitespace_normal()
+                        .child(div().w_full().child(command)),
+                )
+            })
+            .child(
+                div()
+                    .h(px(footer_height))
+                    .flex_none()
+                    .w_full()
+                    .overflow_hidden()
+                    .border_t_1()
+                    .border_color(rgb(tokens.ui.border))
+                    .px(px(12.0))
+                    .py(px(4.0))
+                    .text_size(px(10.0))
+                    .line_height(px(16.0))
+                    .text_color(rgb(tokens.ui.text_muted))
+                    .child(div().truncate().child(navigation_hint))
+                    .child(div().truncate().child(dismiss_hint)),
+            );
+        div()
+            .absolute()
+            .left(bounds.origin.x)
+            .top(bounds.origin.y)
+            .child(overlay_content_boundary(menu))
+            .into_any_element()
+    }
+
+    fn drop_retired_images(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for image in self.image_cache.take_retired_images() {
+            // GPUI keeps painted RenderImage values in the window sprite atlas
+            // until the owner explicitly drops the image id.
+            cx.drop_image(image, Some(window));
+        }
+        for image in self.background_image_cache.take_retired_images() {
+            // Background blur images use the same atlas path as terminal images.
+            cx.drop_image(image, Some(window));
+        }
+    }
+
+    fn send_tmux_action(&mut self, action: TmuxAction, cx: &mut Context<Self>) {
+        if self.terminal.lock().tmux_action(action).unwrap_or(false) {
+            self.snapshot_dirty = true;
+            cx.notify();
+        }
+    }
+
+    fn open_tmux_prompt(&mut self, kind: TmuxPromptKind, value: String, cx: &mut Context<Self>) {
+        self.tmux_prompt = Some(TmuxPromptState { kind, value });
+        self.marked_text = None;
+        cx.notify();
+    }
+
+    pub(super) fn cancel_tmux_prompt(&mut self, cx: &mut Context<Self>) {
+        self.tmux_prompt = None;
+        self.marked_text = None;
+        cx.notify();
+    }
+
+    pub(super) fn submit_tmux_prompt(&mut self, cx: &mut Context<Self>) {
+        let Some(prompt) = self.tmux_prompt.take() else {
+            return;
+        };
+        let input_is_empty = match &prompt.kind {
+            TmuxPromptKind::Command => prompt.value.trim().is_empty(),
+            _ => prompt.value.is_empty(),
+        };
+        if input_is_empty {
+            self.tmux_prompt = Some(prompt);
+            return;
+        }
+        let action = match prompt.kind {
+            TmuxPromptKind::RenameSession(id) => TmuxAction::RenameSession {
+                id,
+                name: prompt.value,
+            },
+            TmuxPromptKind::RenameWindow(id) => TmuxAction::RenameWindow {
+                id,
+                name: prompt.value,
+            },
+            TmuxPromptKind::Command => TmuxAction::RunCommand(prompt.value),
+        };
+        self.marked_text = None;
+        self.send_tmux_action(action, cx);
+    }
+
+    fn render_tmux_control_bar(&self, state: &TmuxUiState, cx: &mut Context<Self>) -> AnyElement {
+        let labels = &self.preferences.tmux_labels;
+        let mut information = Vec::<AnyElement>::new();
+        let mut controls = Vec::<AnyElement>::new();
+        information.push(self.render_terminal_toolbar_status(if state.ready {
+            labels.tmux.clone()
+        } else {
+            format!("{} · {}", labels.tmux, labels.initializing)
+        }));
+        for session in &state.sessions {
+            let session_id = session.id;
+            information.push(
+                self.render_terminal_toolbar_action(
+                    format!("${session_id} {}", session.name),
+                    state.ready,
+                    session.active,
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _event: &MouseDownEvent, window, cx| {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                        this.send_tmux_action(TmuxAction::SelectSession(session_id), cx);
+                    }),
+                )
+                .into_any_element(),
+            );
+        }
+        if let Some(session) = state.sessions.iter().find(|session| session.active) {
+            let session_id = session.id;
+            let session_name = session.name.clone();
+            controls.push(
+                self.render_terminal_toolbar_action(
+                    labels.rename_session.clone(),
+                    state.ready,
+                    false,
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _event: &MouseDownEvent, window, cx| {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                        this.open_tmux_prompt(
+                            TmuxPromptKind::RenameSession(session_id),
+                            session_name.clone(),
+                            cx,
+                        );
+                    }),
+                )
+                .into_any_element(),
+            );
+        }
+        for tmux_window in &state.windows {
+            let window_id = tmux_window.id;
+            information.push(
+                self.render_terminal_toolbar_action(
+                    format!(
+                        "{}:{}{}",
+                        tmux_window.index, tmux_window.name, tmux_window.flags
+                    ),
+                    state.ready,
+                    tmux_window.active,
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _event: &MouseDownEvent, window, cx| {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                        this.send_tmux_action(TmuxAction::SelectWindow(window_id), cx);
+                    }),
+                )
+                .into_any_element(),
+            );
+        }
+        if let Some(tmux_window) = state.windows.iter().find(|window| window.active) {
+            let window_id = tmux_window.id;
+            let window_name = tmux_window.name.clone();
+            controls.push(
+                self.render_terminal_toolbar_action(
+                    labels.rename_window.clone(),
+                    state.ready,
+                    false,
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _event: &MouseDownEvent, window, cx| {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                        this.open_tmux_prompt(
+                            TmuxPromptKind::RenameWindow(window_id),
+                            window_name.clone(),
+                            cx,
+                        );
+                    }),
+                )
+                .into_any_element(),
+            );
+        }
+        controls.push(
+            self.render_terminal_toolbar_action(labels.command.clone(), state.ready, false)
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _event: &MouseDownEvent, window, cx| {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                        this.open_tmux_prompt(TmuxPromptKind::Command, String::new(), cx);
+                    }),
+                )
+                .into_any_element(),
+        );
+
+        let actions = [
+            (
+                labels.previous_window.clone(),
+                TmuxAction::PreviousWindow,
+                true,
+            ),
+            (labels.next_window.clone(), TmuxAction::NextWindow, true),
+            (labels.new_session.clone(), TmuxAction::NewSession, true),
+            (
+                labels.close_session.clone(),
+                TmuxAction::CloseSession,
+                state.sessions.len() > 1,
+            ),
+            (labels.new_window.clone(), TmuxAction::NewWindow, true),
+            (
+                labels.split_horizontal.clone(),
+                TmuxAction::SplitHorizontal,
+                true,
+            ),
+            (
+                labels.split_vertical.clone(),
+                TmuxAction::SplitVertical,
+                true,
+            ),
+            (
+                labels.resize_left.clone(),
+                TmuxAction::ResizePaneLeft,
+                state.pane_count > 1,
+            ),
+            (
+                labels.resize_right.clone(),
+                TmuxAction::ResizePaneRight,
+                state.pane_count > 1,
+            ),
+            (
+                labels.resize_up.clone(),
+                TmuxAction::ResizePaneUp,
+                state.pane_count > 1,
+            ),
+            (
+                labels.resize_down.clone(),
+                TmuxAction::ResizePaneDown,
+                state.pane_count > 1,
+            ),
+            (
+                labels.close_pane.clone(),
+                TmuxAction::ClosePane,
+                state.pane_count > 1,
+            ),
+            (
+                labels.close_window.clone(),
+                TmuxAction::CloseWindow,
+                !state.windows.is_empty(),
+            ),
+            (labels.detach.clone(), TmuxAction::Detach, true),
+        ];
+        if state.pane_in_mode {
+            controls.push(
+                self.render_terminal_toolbar_action(labels.cancel_mode.clone(), state.ready, true)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _event: &MouseDownEvent, window, cx| {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                            this.send_tmux_action(TmuxAction::CancelPaneMode, cx);
+                        }),
+                    )
+                    .into_any_element(),
+            );
+        }
+        for (label, action, enabled) in actions {
+            controls.push(
+                self.render_terminal_toolbar_action(label, state.ready && enabled, false)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _event: &MouseDownEvent, window, cx| {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                            if enabled {
+                                this.send_tmux_action(action.clone(), cx);
+                            }
+                        }),
+                    )
+                    .into_any_element(),
+            );
+        }
+        if let Some(error) = &state.error {
+            information.push(self.render_terminal_toolbar_status(if error.is_empty() {
+                labels.command_failed.clone()
+            } else {
+                format!("{} · {error}", labels.command_failed)
+            }));
+        }
+
+        self.render_terminal_control_bar(
+            self.render_terminal_toolbar_row(information),
+            self.render_terminal_toolbar_row(controls),
+            cx,
+        )
+    }
+
+    fn render_tmux_prompt_overlay(
+        &self,
+        prompt: &TmuxPromptState,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let labels = &self.preferences.tmux_labels;
+        let title = match prompt.kind {
+            TmuxPromptKind::RenameSession(_) => labels.rename_session.clone(),
+            TmuxPromptKind::RenameWindow(_) => labels.rename_window.clone(),
+            TmuxPromptKind::Command => labels.command_prompt.clone(),
+        };
+        let placeholder = match prompt.kind {
+            TmuxPromptKind::Command => labels.command_placeholder.clone(),
+            _ => labels.name_placeholder.clone(),
+        };
+        let mut value = prompt.value.clone();
+        if let Some(marked_text) = &self.marked_text {
+            value.push_str(marked_text);
+        }
+        let input_text = if value.is_empty() { placeholder } else { value };
+        let input_color = if prompt.value.is_empty() && self.marked_text.is_none() {
+            serial_color_alpha(self.theme.foreground, 0x77)
+        } else {
+            self.theme.foreground
+        };
+        let submit_enabled = match &prompt.kind {
+            TmuxPromptKind::Command => !prompt.value.trim().is_empty(),
+            _ => !prompt.value.is_empty(),
+        };
+
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(rgba(0x00000055))
+            .on_mouse_down(MouseButton::Left, |_event, _window, cx: &mut App| {
+                cx.stop_propagation();
+            })
+            .child(
+                div()
+                    .w(px(480.0))
+                    .rounded(px(8.0))
+                    .border_1()
+                    .border_color(rgba(serial_color_alpha(self.theme.foreground, 0x44)))
+                    .bg(rgba(serial_color_alpha(self.theme.background, 0xfa)))
+                    .shadow_lg()
+                    .p(px(16.0))
+                    .child(
+                        div()
+                            .mb(px(12.0))
+                            .text_size(px(14.0))
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(title),
+                    )
+                    .child(
+                        div()
+                            .h(px(36.0))
+                            .px(px(10.0))
+                            .flex()
+                            .items_center()
+                            .rounded(px(4.0))
+                            .border_1()
+                            .border_color(rgba(serial_color_alpha(self.theme.foreground, 0x55)))
+                            .bg(rgba(serial_color_alpha(self.theme.background, 0xff)))
+                            .text_color(rgb(input_color))
+                            .overflow_hidden()
+                            .child(input_text),
+                    )
+                    .child(
+                        div()
+                            .mt(px(14.0))
+                            .flex()
+                            .justify_end()
+                            .gap(px(8.0))
+                            .child(
+                                self.render_serial_control_button(
+                                    labels.cancel.clone(),
+                                    true,
+                                    false,
+                                )
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _event, _window, cx| {
+                                        this.cancel_tmux_prompt(cx);
+                                    }),
+                                ),
+                            )
+                            .child(
+                                self.render_serial_control_button(
+                                    labels.confirm.clone(),
+                                    submit_enabled,
+                                    true,
+                                )
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, _event, _window, cx| {
+                                        if submit_enabled {
+                                            this.submit_tmux_prompt(cx);
+                                        }
+                                    }),
+                                ),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_tmux_message(
+        &self,
+        (generation, message): (u64, String),
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        div()
+            .absolute()
+            .top(px(self.terminal_control_bar_height() + 8.0))
+            .right(px(8.0))
+            .max_w(px(520.0))
+            .rounded(px(6.0))
+            .border_1()
+            .border_color(rgba(serial_color_alpha(self.theme.foreground, 0x44)))
+            .bg(rgba(serial_color_alpha(self.theme.background, 0xf5)))
+            .shadow_lg()
+            .px(px(12.0))
+            .py(px(8.0))
+            .flex()
+            .items_center()
+            .gap(px(10.0))
+            .child(div().flex_1().child(message))
+            .child(
+                div()
+                    .cursor_pointer()
+                    .text_color(rgba(serial_color_alpha(self.theme.foreground, 0x99)))
+                    .child("×")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _event, _window, cx| {
+                            this.dismissed_tmux_message_generation = generation;
+                            cx.notify();
+                        }),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_serial_control_bar(&self, cx: &mut Context<Self>) -> AnyElement {
+        let Some(status) = self.serial_status() else {
+            return div().into_any_element();
+        };
+        let labels = &self.preferences.serial_control_labels;
+        let running = status.lifecycle.is_running();
+        let lifecycle = serial_lifecycle_label(&status.lifecycle, labels);
+        let port_state = match status.port_available {
+            Some(true) => labels.port_available.clone(),
+            Some(false) => labels.port_missing.clone(),
+            None => labels.port_unknown.clone(),
+        };
+        let dtr_label = format!(
+            "{} {}",
+            labels.dtr,
+            if status.control_state.data_terminal_ready {
+                &labels.on
+            } else {
+                &labels.off
+            }
+        );
+        let rts_label = format!(
+            "{} {}",
+            labels.rts,
+            if status.control_state.request_to_send {
+                &labels.on
+            } else {
+                &labels.off
+            }
+        );
+        let send_mode_label = format!(
+            "{} {}",
+            labels.send_mode,
+            serial_send_mode_label(status.runtime_options.send_mode, labels)
+        );
+        let display_mode_label = format!(
+            "{} {}",
+            labels.display_mode,
+            serial_display_mode_label(status.runtime_options.display_mode, labels)
+        );
+        let line_ending_label = format!(
+            "{} {}",
+            labels.line_ending,
+            serial_line_ending_label(status.runtime_options.line_ending, labels)
+        );
+        let output_line_ending_label = format!(
+            "{} {}",
+            labels.output_line_ending,
+            serial_line_ending_label(status.runtime_options.output_line_ending, labels)
+        );
+        let local_echo_label = format!(
+            "{} {}",
+            labels.local_echo,
+            if status.runtime_options.local_echo {
+                &labels.on
+            } else {
+                &labels.off
+            }
+        );
+
+        let information_row = div()
+            .size_full()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(self.theme.tokens.spacing.one))
+            .px(px(10.0))
+            .child(
+                div()
+                    .min_w(px(180.0))
+                    .flex_1()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .truncate()
+                    .text_size(px(12.0))
+                    .text_color(rgb(self.theme.foreground))
+                    .child(format!(
+                        "{} · {} · {} · {}",
+                        labels.serial,
+                        status.config.port_path,
+                        serial_config_summary(&status.config, labels),
+                        lifecycle
+                    )),
+            )
+            .child(self.render_terminal_toolbar_separator())
+            .child(self.render_terminal_toolbar_status(port_state));
+        let control_row = div()
+            .size_full()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(self.theme.tokens.spacing.one))
+            .px(px(10.0))
+            .child(
+                self.render_terminal_toolbar_action(
+                    send_mode_label,
+                    true,
+                    matches!(status.runtime_options.send_mode, SerialSendMode::Hex),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _event: &MouseDownEvent, window, cx| {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                        this.cycle_serial_send_mode(cx);
+                    }),
+                ),
+            )
+            .child(self.render_terminal_toolbar_separator())
+            .child(
+                self.render_terminal_toolbar_action(
+                    display_mode_label,
+                    true,
+                    !matches!(status.runtime_options.display_mode, SerialDisplayMode::Text),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _event: &MouseDownEvent, window, cx| {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                        this.cycle_serial_display_mode(cx);
+                    }),
+                ),
+            )
+            .child(self.render_terminal_toolbar_separator())
+            .child(
+                self.render_terminal_toolbar_action(
+                    line_ending_label,
+                    true,
+                    !matches!(status.runtime_options.line_ending, SerialLineEnding::None),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _event: &MouseDownEvent, window, cx| {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                        this.cycle_serial_line_ending(cx);
+                    }),
+                ),
+            )
+            .child(self.render_terminal_toolbar_separator())
+            .child(
+                self.render_terminal_toolbar_action(
+                    output_line_ending_label,
+                    true,
+                    !matches!(
+                        status.runtime_options.output_line_ending,
+                        SerialLineEnding::None
+                    ),
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _event: &MouseDownEvent, window, cx| {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                        this.cycle_serial_output_line_ending(cx);
+                    }),
+                ),
+            )
+            .child(self.render_terminal_toolbar_separator())
+            .child(
+                self.render_terminal_toolbar_action(
+                    local_echo_label,
+                    true,
+                    status.runtime_options.local_echo,
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _event: &MouseDownEvent, window, cx| {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                        this.toggle_serial_local_echo(cx);
+                    }),
+                ),
+            )
+            .child(self.render_terminal_toolbar_separator())
+            .child(
+                self.render_terminal_toolbar_action(labels.refresh.clone(), true, false)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _event: &MouseDownEvent, window, cx| {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                            this.refresh_serial_port_presence(cx);
+                        }),
+                    ),
+            )
+            .child(self.render_terminal_toolbar_separator())
+            .child(
+                self.render_terminal_toolbar_action(labels.send_break.clone(), running, false)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _event: &MouseDownEvent, window, cx| {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                            this.send_serial_break(cx);
+                        }),
+                    ),
+            )
+            .child(self.render_terminal_toolbar_separator())
+            .child(
+                self.render_terminal_toolbar_action(
+                    dtr_label,
+                    running,
+                    status.control_state.data_terminal_ready,
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _event: &MouseDownEvent, window, cx| {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                        let Some(status) = this.serial_status() else {
+                            return;
+                        };
+                        this.set_serial_control_line(
+                            SerialControlLine::DataTerminalReady,
+                            !status.control_state.data_terminal_ready,
+                            cx,
+                        );
+                    }),
+                ),
+            )
+            .child(self.render_terminal_toolbar_separator())
+            .child(
+                self.render_terminal_toolbar_action(
+                    rts_label,
+                    running,
+                    status.control_state.request_to_send,
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _event: &MouseDownEvent, window, cx| {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                        let Some(status) = this.serial_status() else {
+                            return;
+                        };
+                        this.set_serial_control_line(
+                            SerialControlLine::RequestToSend,
+                            !status.control_state.request_to_send,
+                            cx,
+                        );
+                    }),
+                ),
+            );
+
+        let control_row = control_row
+            .child(self.render_terminal_toolbar_separator())
+            .child(
+                self.render_terminal_toolbar_action(
+                    self.preferences.modem_labels.binary_transfer.clone(),
+                    running && !self.modem_prompt_active,
+                    false,
+                )
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                        window.prevent_default();
+                        cx.stop_propagation();
+                        if this.modem_prompt_active || !this.lifecycle().is_running() {
+                            return;
+                        }
+                        window.focus(&this.focus_handle, cx);
+                        this.open_terminal_context_menu(event, cx);
+                        if let Some(menu) = this.context_menu.as_mut() {
+                            menu.serial_transfer_menu = true;
+                        }
+                    }),
+                ),
+            );
+
+        self.render_terminal_control_bar(information_row, control_row, cx)
+    }
+
+    fn terminal_control_bar_height(&self) -> f32 {
+        TERMINAL_CONTROL_ROW_HEIGHT * if self.control_bar_expanded { 2.0 } else { 1.0 }
+    }
+
+    fn render_terminal_control_bar(
+        &self,
+        information: gpui::Div,
+        controls: gpui::Div,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let tokens = self.theme.tokens;
+        let label = if self.control_bar_expanded {
+            self.preferences.control_bar_collapse_label.clone()
+        } else {
+            self.preferences.control_bar_expand_label.clone()
+        };
+        let toggle = icon_button(
+            &tokens,
+            gpui::svg()
+                .path(if self.control_bar_expanded {
+                    "lucide/chevron-down.svg"
+                } else {
+                    "lucide/chevron-right.svg"
+                })
+                .size(px(14.0))
+                .text_color(rgb(tokens.ui.text_muted))
+                .into_any_element(),
+            IconButtonOptions::opaque_toolbar(22.0, ButtonRadius::Sm),
+        )
+        .id("terminal-toolbar-toggle")
+        .flex_none()
+        .ml(px(tokens.spacing.two))
+        .role(gpui::Role::Button)
+        .aria_label(label.clone())
+        .aria_expanded(self.control_bar_expanded)
+        .tooltip(move |_, cx| oxide_ui::tooltip::tooltip_view(tokens, label.clone(), None, cx))
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _, window, cx| {
+                window.prevent_default();
+                cx.stop_propagation();
+                this.control_bar_expanded = !this.control_bar_expanded;
+                cx.notify();
+            }),
+        );
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .h(px(self.terminal_control_bar_height()))
+            .flex()
+            .flex_col()
+            .border_b_1()
+            .border_color(rgba(serial_color_alpha(self.theme.foreground, 0x33)))
+            .bg(rgba(serial_color_alpha(self.theme.background, 0xf0)))
+            .on_mouse_down(MouseButton::Left, |_event, _window, cx: &mut App| {
+                cx.stop_propagation();
+            })
+            .child(
+                div()
+                    .id("terminal-toolbar-information")
+                    .w_full()
+                    .min_h(px(0.0))
+                    .flex_1()
+                    .flex()
+                    .items_center()
+                    .child(toggle)
+                    .child(
+                        div()
+                            .min_w(px(0.0))
+                            .h_full()
+                            .flex_1()
+                            .child(div().size_full().overflow_x_scrollbar().child(information)),
+                    ),
+            )
+            .when(self.control_bar_expanded, |bar| {
+                // The controls own a separate scroll scope and release their height when hidden.
+                bar.child(
+                    div()
+                        .id("terminal-toolbar-controls")
+                        .w_full()
+                        .min_h(px(0.0))
+                        .flex_1()
+                        .child(div().size_full().overflow_x_scrollbar().child(controls)),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn render_terminal_toolbar_row(&self, items: Vec<AnyElement>) -> gpui::Div {
+        let mut row = div()
+            .size_full()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(self.theme.tokens.spacing.one))
+            .px(px(8.0));
+        for (index, item) in items.into_iter().enumerate() {
+            if index > 0 {
+                row = row.child(self.render_terminal_toolbar_separator());
+            }
+            row = row.child(item);
+        }
+        row
+    }
+
+    fn render_terminal_toolbar_separator(&self) -> gpui::Div {
+        separator(&self.theme.tokens, SeparatorOrientation::Vertical).h(px(12.0))
+    }
+
+    fn render_terminal_toolbar_action(
+        &self,
+        label: String,
+        enabled: bool,
+        active: bool,
+    ) -> gpui::Div {
+        context_chip(
+            &self.theme.tokens,
+            ContextChipOptions::new()
+                .disabled(!enabled)
+                .radius(ButtonRadius::Sm)
+                .border_color(rgba(0x00000000))
+                .text_color(rgb(if active {
+                    self.theme.tokens.ui.accent
+                } else {
+                    self.theme.foreground
+                })),
+            None,
+            div().whitespace_nowrap().child(label).into_any_element(),
+            Vec::new(),
+        )
+        .when(!enabled, |control| control.opacity(0.45))
+    }
+
+    fn render_terminal_toolbar_status(&self, label: String) -> AnyElement {
+        div()
+            .flex_none()
+            .whitespace_nowrap()
+            .text_size(px(11.0))
+            .text_color(rgb(self.theme.tokens.ui.text_muted))
+            .child(label)
+            .into_any_element()
+    }
+
+    fn render_serial_control_button(
+        &self,
+        label: String,
+        enabled: bool,
+        active: bool,
+    ) -> gpui::Div {
+        let foreground = if active {
+            self.theme.tokens.ui.accent_text
+        } else {
+            self.theme.foreground
+        };
+        let background = if active {
+            self.theme.tokens.ui.accent
+        } else {
+            self.theme.background
+        };
+        let hover_background = if active {
+            self.theme.tokens.ui.accent_hover
+        } else {
+            background
+        };
+        div()
+            .flex_none()
+            .rounded(px(SERIAL_CONTROL_BUTTON_RADIUS))
+            .border_1()
+            .border_color(rgba(serial_color_alpha(self.theme.foreground, 0x2d)))
+            .bg(rgba(serial_color_alpha(
+                background,
+                if active { 0xff } else { 0x00 },
+            )))
+            .px(px(9.0))
+            .h(px(22.0))
+            .flex()
+            .items_center()
+            .cursor_pointer()
+            .text_size(px(11.0))
+            .text_color(rgba(serial_color_alpha(
+                foreground,
+                if enabled { 0xff } else { 0x66 },
+            )))
+            .when(!enabled, |button| button.opacity(0.45))
+            .hover(move |button| {
+                if enabled {
+                    button.bg(rgba(serial_color_alpha(
+                        hover_background,
+                        if active { 0xff } else { 0x22 },
+                    )))
+                } else {
+                    button
+                }
+            })
+            .child(label)
+    }
+}
+
+fn serial_lifecycle_label(
+    lifecycle: &TerminalLifecycle,
+    labels: &TerminalSerialControlLabels,
+) -> String {
+    match lifecycle {
+        TerminalLifecycle::Running => labels.connected.clone(),
+        TerminalLifecycle::Exited(_) => labels.disconnected.clone(),
+        TerminalLifecycle::Closed => labels.closed.clone(),
+    }
+}
+
+fn serial_config_summary(
+    config: &SerialSessionConfig,
+    labels: &TerminalSerialControlLabels,
+) -> String {
+    format!(
+        "{} {}{}{} · {}",
+        config.baud_rate,
+        config.data_bits,
+        serial_parity_letter(config.parity),
+        config.stop_bits,
+        serial_flow_label(config.flow_control, labels)
+    )
+}
+
+fn serial_parity_letter(parity: SerialParity) -> &'static str {
+    match parity {
+        SerialParity::None => "N",
+        SerialParity::Odd => "O",
+        SerialParity::Even => "E",
+    }
+}
+
+fn serial_flow_label(
+    flow_control: SerialFlowControl,
+    labels: &TerminalSerialControlLabels,
+) -> &str {
+    match flow_control {
+        SerialFlowControl::None => labels.flow_none.as_str(),
+        SerialFlowControl::Software => labels.flow_software.as_str(),
+        SerialFlowControl::Hardware => labels.flow_hardware.as_str(),
+    }
+}
+
+fn serial_send_mode_label(send_mode: SerialSendMode, labels: &TerminalSerialControlLabels) -> &str {
+    match send_mode {
+        SerialSendMode::Text => labels.text_mode.as_str(),
+        SerialSendMode::Hex => labels.hex_mode.as_str(),
+    }
+}
+
+fn serial_display_mode_label(
+    display_mode: SerialDisplayMode,
+    labels: &TerminalSerialControlLabels,
+) -> &str {
+    match display_mode {
+        SerialDisplayMode::Text => labels.text_mode.as_str(),
+        SerialDisplayMode::Hex => labels.hex_mode.as_str(),
+        SerialDisplayMode::Mixed => labels.mixed_mode.as_str(),
+    }
+}
+
+fn serial_line_ending_label(
+    line_ending: SerialLineEnding,
+    labels: &TerminalSerialControlLabels,
+) -> &str {
+    match line_ending {
+        SerialLineEnding::Lf => labels.line_ending_lf.as_str(),
+        SerialLineEnding::CrLf => labels.line_ending_crlf.as_str(),
+        SerialLineEnding::Cr => labels.line_ending_cr.as_str(),
+        SerialLineEnding::None => labels.line_ending_none.as_str(),
+    }
+}
+
+fn serial_color_alpha(rgb_color: u32, alpha: u8) -> u32 {
+    (rgb_color << 8) | u32::from(alpha)
+}
+
+impl TerminalPane {
+    fn ensure_background_image_completion_poll(&mut self, cx: &mut Context<Self>) {
+        if self.background_image_poll_active || !self.background_image_cache.has_pending() {
+            return;
+        }
+        self.background_image_poll_active = true;
+        cx.spawn(async move |weak, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(BACKGROUND_IMAGE_COMPLETION_POLL_INTERVAL)
+                    .await;
+                let Ok(pending) = weak.update(cx, |this, cx| {
+                    let changed = this.background_image_cache.drain_completed();
+                    let pending = this.background_image_cache.has_pending();
+                    if changed {
+                        cx.notify();
+                    }
+                    if !pending {
+                        this.background_image_poll_active = false;
+                    }
+                    pending
+                }) else {
+                    break;
+                };
+                if !pending {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn render_snapshot_for_smooth_scroll(&mut self) -> (TerminalSnapshot, gpui::Pixels, usize) {
+        let snapshot = self.snapshot.clone();
+        let viewport_rows = snapshot.rows;
+        if !self.settings.smooth_scroll {
+            return (snapshot, px(0.0), viewport_rows);
+        }
+
+        let line_height = self.metrics.line_height_f32();
+        if line_height <= f32::EPSILON {
+            return (snapshot, px(0.0), viewport_rows);
+        }
+
+        let visual_display_offset = self.smooth_scroll_display_offset();
+        let base_display_offset = visual_display_offset.ceil() as usize;
+        let y_offset = px((visual_display_offset - base_display_offset as f32) * line_height);
+        let needs_overscan = f32::from(y_offset).abs() > f32::EPSILON;
+        if base_display_offset == snapshot.display_offset && !needs_overscan {
+            return (snapshot, px(0.0), viewport_rows);
+        }
+
+        // Absolute visual positioning lets repeated wheel events accumulate without requiring
+        // one overscan row per pending line. Only the fractional leading row needs clipping.
+        let requested_rows = viewport_rows.saturating_add(usize::from(needs_overscan));
+        let animated_snapshot =
+            self.smooth_scroll_overscan_snapshot(base_display_offset, requested_rows);
+        (animated_snapshot, y_offset, viewport_rows)
+    }
+
+    fn smooth_scroll_overscan_snapshot(
+        &mut self,
+        display_offset: usize,
+        rows: usize,
+    ) -> TerminalSnapshot {
+        if let Some(cached) = &self.smooth_scroll_snapshot_cache
+            && cached.source_generation == self.snapshot.generation
+            && cached.display_offset == display_offset
+            && cached.rows == rows
+        {
+            return cached.snapshot.clone();
+        }
+        let snapshot_started = self.preferences.show_performance_overlay.then(Instant::now);
+        let snapshot = self
+            .terminal
+            .lock()
+            .snapshot_with_display_offset(display_offset, rows);
+        if let Some(snapshot_started) = snapshot_started {
+            // Count only cache misses because cached overscan snapshots do not rebuild terminal
+            // rows and therefore do not represent smooth-scroll snapshot work.
+            self.render_stats.scroll_snapshot_micros = snapshot_started
+                .elapsed()
+                .as_micros()
+                .min(u128::from(u64::MAX))
+                as u64;
+            self.render_stats.scroll_snapshot_count =
+                self.render_stats.scroll_snapshot_count.saturating_add(1);
+        }
+        self.smooth_scroll_snapshot_cache = Some(SmoothScrollSnapshotCache {
+            source_generation: self.snapshot.generation,
+            display_offset,
+            rows,
+            snapshot: snapshot.clone(),
+        });
+        snapshot
+    }
+
+    fn render_terminal_context_menu(
+        &self,
+        menu: TerminalContextMenu,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let origin = self.bounds.map(|bounds| bounds.origin).unwrap_or_default();
+        // Preserve the pointer as the anchor. GPUI fits the measured menu to the
+        // window; pre-clamping an estimated height makes it flip a second time.
+        let position = origin + point(px(menu.x), px(menu.y));
+        let copy_label = self.preferences.command_selection_labels.copy.clone();
+        let copy_command_label = self
+            .preferences
+            .command_selection_labels
+            .copy_command
+            .clone();
+
+        let fill_command_bar_label = self
+            .preferences
+            .command_selection_labels
+            .fill_command_bar
+            .clone();
+        let insert_selection_label = self
+            .preferences
+            .command_selection_labels
+            .insert_selection_into_command
+            .clone();
+        let replace_command_label = self
+            .preferences
+            .command_selection_labels
+            .replace_command_with_selection
+            .clone();
+        let find_label = self.preferences.command_selection_labels.find.clone();
+        let manage_triggers_label = self
+            .preferences
+            .command_selection_labels
+            .manage_triggers
+            .clone();
+        let select_command_label = self
+            .preferences
+            .command_selection_labels
+            .select_command
+            .clone();
+        let previous_command_label = self
+            .preferences
+            .command_selection_labels
+            .previous_command
+            .clone();
+        let next_command_label = self
+            .preferences
+            .command_selection_labels
+            .next_command
+            .clone();
+        let clear_screen_label = self
+            .preferences
+            .command_selection_labels
+            .clear_screen
+            .clone();
+        let clear_screen_shortcut = self
+            .preferences
+            .command_selection_labels
+            .clear_screen_shortcut
+            .clone();
+        let paste_label = self.preferences.paste_labels.paste.clone();
+        let command_mark_id = menu.command_mark_id.clone();
+        let has_command_mark = command_mark_id.is_some();
+        let has_command_text = self.command_mark_has_command_text(command_mark_id.as_deref());
+        let previous_reference_line = menu.reference_line;
+        let next_reference_line = menu.reference_line;
+        let select_command_mark_id = command_mark_id.clone();
+        let copy_command_mark_id = command_mark_id;
+        let free_type_insert_selection_available =
+            self.free_type_context_insert_selection_available(&menu);
+        let free_type_replace_command_available =
+            self.free_type_context_replace_command_available(&menu);
+        let insert_target = menu.target;
+        let replace_target = menu.target;
+        let tokens = &self.theme.tokens;
+        let menu_visible =
+            self.context_menu_presence.phase() == oxide_ui::motion::ExitPhase::Visible;
+        let popup = if menu.serial_transfer_menu {
+            self.render_serial_transfer_menu(cx)
+        } else {
+            context_menu_event_boundary(
+                context_menu_content(tokens)
+                    .w(px(TERMINAL_CONTEXT_MENU_WIDTH))
+                    .children(self.plugin_text_actions.iter().cloned().map(|action| {
+                        self.render_terminal_context_menu_item(
+                            action.label.clone(),
+                            !menu.has_selection,
+                            move |this, _, _, cx| {
+                                this.request_plugin_text_action(action.clone(), cx);
+                            },
+                            cx,
+                        )
+                    }))
+                    .child(self.render_terminal_context_menu_item(
+                        copy_label,
+                        !menu.has_selection,
+                        |this, _event, _window, cx| {
+                            this.copy_selection_from_context_menu(cx);
+                        },
+                        cx,
+                    ))
+                    .child(self.render_terminal_context_menu_item(
+                        copy_command_label,
+                        !has_command_text,
+                        move |this, _event, _window, cx| {
+                            this.dismiss_terminal_context_menu(cx);
+                            this.copy_command_mark_command_to_clipboard(
+                                copy_command_mark_id.as_deref(),
+                                cx,
+                            );
+                        },
+                        cx,
+                    ))
+                    .child(self.render_terminal_context_menu_item(
+                        paste_label,
+                        false,
+                        |this, _event, _window, cx| {
+                            this.dismiss_terminal_context_menu(cx);
+                            this.paste_from_clipboard(cx);
+                        },
+                        cx,
+                    ))
+                    .child(self.render_terminal_context_menu_item(
+                        self.preferences.paste_labels.edit_title.clone(),
+                        false,
+                        |this, _, window, cx| this.edit_clipboard_paste(window, cx),
+                        cx,
+                    ))
+                    .child(self.render_terminal_context_menu_item(
+                        insert_selection_label,
+                        !free_type_insert_selection_available,
+                        move |this, _event, _window, cx| {
+                            this.dismiss_terminal_context_menu(cx);
+                            this.insert_selection_into_free_type_command_from_context_menu(
+                                insert_target,
+                                false,
+                                cx,
+                            );
+                        },
+                        cx,
+                    ))
+                    .child(self.render_terminal_context_menu_item(
+                        replace_command_label,
+                        !free_type_replace_command_available,
+                        move |this, _event, _window, cx| {
+                            this.dismiss_terminal_context_menu(cx);
+                            this.insert_selection_into_free_type_command_from_context_menu(
+                                replace_target,
+                                true,
+                                cx,
+                            );
+                        },
+                        cx,
+                    ))
+                    .child(context_menu_separator(tokens))
+                    .child(self.render_terminal_context_menu_item(
+                        fill_command_bar_label,
+                        !menu.has_selection,
+                        |this, _event, _window, cx| {
+                            this.request_context_action(
+                                TerminalContextAction::FillCommandBarFromSelection,
+                                true,
+                                cx,
+                            );
+                        },
+                        cx,
+                    ))
+                    .child(self.render_terminal_context_menu_item(
+                        find_label,
+                        false,
+                        |this, _event, _window, cx| {
+                            this.request_context_action(
+                                TerminalContextAction::OpenSearch,
+                                false,
+                                cx,
+                            );
+                        },
+                        cx,
+                    ))
+                    .child(self.render_terminal_context_menu_item(
+                        manage_triggers_label,
+                        false,
+                        |this, _event, _window, cx| {
+                            this.request_context_action(
+                                TerminalContextAction::OpenSessionTriggers,
+                                false,
+                                cx,
+                            );
+                        },
+                        cx,
+                    ))
+                    .child(context_menu_separator(tokens))
+                    .child(self.render_terminal_context_menu_item(
+                        select_command_label,
+                        !has_command_mark,
+                        move |this, _event, _window, cx| {
+                            this.dismiss_terminal_context_menu(cx);
+                            this.select_command_mark_by_id(select_command_mark_id.clone(), cx);
+                        },
+                        cx,
+                    ))
+                    .child(self.render_terminal_context_menu_item(
+                        previous_command_label,
+                        !menu.has_previous_command,
+                        move |this, _event, _window, cx| {
+                            this.dismiss_terminal_context_menu(cx);
+                            this.jump_to_command_mark_from_context_menu(
+                                previous_reference_line,
+                                TerminalCommandNavigationDirection::Previous,
+                                cx,
+                            );
+                        },
+                        cx,
+                    ))
+                    .child(self.render_terminal_context_menu_item(
+                        next_command_label,
+                        !menu.has_next_command,
+                        move |this, _event, _window, cx| {
+                            this.dismiss_terminal_context_menu(cx);
+                            this.jump_to_command_mark_from_context_menu(
+                                next_reference_line,
+                                TerminalCommandNavigationDirection::Next,
+                                cx,
+                            );
+                        },
+                        cx,
+                    ))
+                    .child(context_menu_separator(tokens))
+                    .child(self.render_terminal_context_menu_item_with_shortcut(
+                        clear_screen_label,
+                        clear_screen_shortcut,
+                        false,
+                        |this, _event, _window, cx| {
+                            this.dismiss_terminal_context_menu(cx);
+                            this.clear_buffer(cx);
+                        },
+                        cx,
+                    )),
+            )
+        }
+        .debug_selector(|| "terminal-context-menu".into());
+
+        deferred(
+            context_menu_backdrop()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _event: &MouseDownEvent, _window, cx| {
+                        this.dismiss_terminal_context_menu(cx);
+                        cx.stop_propagation();
+                    }),
+                )
+                .on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(|this, _event: &MouseDownEvent, window, cx| {
+                        window.prevent_default();
+                        this.dismiss_terminal_context_menu(cx);
+                        cx.stop_propagation();
+                    }),
+                )
+                .child(
+                    anchored()
+                        .anchor(Anchor::TopLeft)
+                        .position(position)
+                        .position_mode(AnchoredPositionMode::Window)
+                        .child(oxide_ui::motion::fade(
+                            tokens,
+                            "terminal-context-menu-presence",
+                            overlay_content_boundary(popup),
+                            oxide_ui::motion::MotionDuration::Micro,
+                            menu_visible,
+                        )),
+                ),
+        )
+        .with_priority(TAURI_POPOVER_LAYER_PRIORITY)
+        .into_any_element()
+    }
+
+    fn render_serial_transfer_menu(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let tokens = &self.theme.tokens;
+        let modem_labels = self.preferences.modem_labels.clone();
+        context_menu_event_boundary(
+            context_menu_content(tokens)
+                .w(px(TERMINAL_CONTEXT_MENU_WIDTH))
+                .child(self.render_terminal_modem_context_menu_item(
+                    modem_labels.xmodem_upload,
+                    DetectedModemProtocol::Xmodem,
+                    ModemTransferDirection::Upload,
+                    cx,
+                ))
+                .child(self.render_terminal_modem_context_menu_item(
+                    modem_labels.xmodem_receive,
+                    DetectedModemProtocol::Xmodem,
+                    ModemTransferDirection::Download,
+                    cx,
+                ))
+                .child(self.render_terminal_modem_context_menu_item(
+                    modem_labels.ymodem_upload,
+                    DetectedModemProtocol::Ymodem,
+                    ModemTransferDirection::Upload,
+                    cx,
+                ))
+                .child(self.render_terminal_modem_context_menu_item(
+                    modem_labels.ymodem_receive,
+                    DetectedModemProtocol::Ymodem,
+                    ModemTransferDirection::Download,
+                    cx,
+                ))
+                .child(self.render_terminal_modem_context_menu_item(
+                    modem_labels.zmodem_upload,
+                    DetectedModemProtocol::Zmodem,
+                    ModemTransferDirection::Upload,
+                    cx,
+                ))
+                .child(self.render_terminal_modem_context_menu_item(
+                    modem_labels.zmodem_receive,
+                    DetectedModemProtocol::Zmodem,
+                    ModemTransferDirection::Download,
+                    cx,
+                )),
+        )
+    }
+
+    fn render_modem_progress_overlay(
+        &self,
+        transfer: ModemProgressState,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let tokens = &self.theme.tokens;
+        let status_text = transfer
+            .total_text
+            .as_ref()
+            .map(|total| format!("{} / {}", transfer.transferred_text, total))
+            .unwrap_or_else(|| transfer.transferred_text.clone());
+
+        div()
+            .absolute()
+            .right(px(tokens.spacing.three))
+            .bottom(px(tokens.spacing.three))
+            .w(px(320.0))
+            .rounded(px(tokens.radii.md))
+            .border_1()
+            .border_color(rgb(tokens.ui.border))
+            .bg(rgba((tokens.ui.bg_elevated << 8) | 0xf2))
+            .p(px(tokens.spacing.three))
+            .shadow_lg()
+            .child(
+                div()
+                    .flex()
+                    .items_start()
+                    .justify_between()
+                    .gap(px(tokens.spacing.three))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .child(
+                                div()
+                                    .text_size(px(tokens.metrics.ui_text_sm))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(rgb(tokens.ui.text))
+                                    .child(self.preferences.modem_labels.binary_transfer.clone()),
+                            )
+                            .when_some(transfer.file_name, |content, file_name| {
+                                content.child(
+                                    div()
+                                        .mt(px(tokens.spacing.one))
+                                        .truncate()
+                                        .text_size(px(tokens.metrics.ui_text_xs))
+                                        .text_color(rgb(tokens.ui.text_muted))
+                                        .child(file_name),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .mt(px(tokens.spacing.one))
+                                    .text_size(px(tokens.metrics.ui_text_xs))
+                                    .text_color(rgb(tokens.ui.text_muted))
+                                    .child(status_text),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .cursor_pointer()
+                            .rounded(px(tokens.radii.sm))
+                            .border_1()
+                            .border_color(rgb(tokens.ui.border))
+                            .px(px(tokens.metrics.ui_button_sm_padding_x))
+                            .h(px(tokens.metrics.ui_button_sm_height))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_size(px(tokens.metrics.ui_text_sm))
+                            .text_color(rgb(tokens.ui.text))
+                            .hover(|button| button.bg(rgb(tokens.ui.bg_hover)))
+                            .child(self.preferences.paste_labels.cancel.clone())
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _event, _window, cx| {
+                                    this.cancel_active_modem_transfer(cx);
+                                    cx.stop_propagation();
+                                }),
+                            ),
+                    ),
+            )
+            .child(
+                progress(tokens, transfer.percent, transfer.percent.is_none())
+                    .mt(px(tokens.spacing.three)),
+            )
+            .into_any_element()
+    }
+
+    fn render_terminal_context_menu_item_with_shortcut(
+        &self,
+        label: String,
+        shortcut: Option<String>,
+        disabled: bool,
+        listener: impl Fn(&mut Self, &MouseDownEvent, &mut Window, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let disabled =
+            disabled || self.context_menu_presence.phase() == oxide_ui::motion::ExitPhase::Exiting;
+        let item = if let Some(shortcut) = shortcut {
+            context_menu_item_with_shortcut(
+                &self.theme.tokens,
+                label,
+                div()
+                    .text_size(px(self.theme.tokens.metrics.ui_text_xs))
+                    .text_color(rgb(self.theme.tokens.ui.text_muted))
+                    .child(shortcut),
+            )
+        } else {
+            context_menu_item(
+                &self.theme.tokens,
+                label,
+                ContextMenuItemKind::Plain,
+                false,
+                disabled,
+            )
+        }
+        .w_full();
+
+        context_menu_action(
+            item,
+            disabled,
+            false,
+            cx.listener(move |this, event, window, cx| {
+                window.prevent_default();
+                listener(this, event, window, cx);
+                cx.stop_propagation();
+                cx.notify();
+            }),
+        )
+        .into_any_element()
+    }
+
+    fn render_terminal_context_menu_item(
+        &self,
+        label: String,
+        disabled: bool,
+        listener: impl Fn(&mut Self, &MouseDownEvent, &mut Window, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let disabled =
+            disabled || self.context_menu_presence.phase() == oxide_ui::motion::ExitPhase::Exiting;
+        let item = context_menu_item(
+            &self.theme.tokens,
+            label,
+            ContextMenuItemKind::Plain,
+            false,
+            disabled,
+        )
+        .w_full();
+
+        context_menu_action(
+            item,
+            disabled,
+            false,
+            cx.listener(move |this, event, window, cx| {
+                window.prevent_default();
+                listener(this, event, window, cx);
+                cx.stop_propagation();
+                cx.notify();
+            }),
+        )
+        .into_any_element()
+    }
+
+    fn render_terminal_modem_context_menu_item(
+        &self,
+        label: String,
+        protocol: DetectedModemProtocol,
+        direction: ModemTransferDirection,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        self.render_terminal_context_menu_item(
+            label,
+            false,
+            move |this, _event, _window, cx| {
+                this.dismiss_terminal_context_menu(cx);
+                this.start_manual_modem_transfer(protocol, direction, cx);
+            },
+            cx,
+        )
+    }
+
+    fn copy_selection_from_context_menu(&mut self, cx: &mut Context<Self>) {
+        self.dismiss_terminal_context_menu(cx);
+        let _copied = self.copy_selection_to_clipboard_if_present(cx);
+    }
+
+    pub(super) fn request_plugin_text_action(
+        &mut self,
+        action: super::TerminalPluginTextAction,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(text) = self.selected_text_snapshot() else {
+            return;
+        };
+        self.pending_plugin_text = Some((action, zeroize::Zeroizing::new(text)));
+        self.request_context_action(super::TerminalContextAction::PluginTextTool, false, cx);
+    }
+
+    fn request_context_action(
+        &mut self,
+        action: TerminalContextAction,
+        requires_selection: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.dismiss_terminal_context_menu(cx);
+        if requires_selection && self.selected_text_snapshot().is_none() {
+            return;
+        }
+        // Workspace owns AI and command-bar behavior; the terminal only records
+        // the user's menu intent and lets the active-pane owner consume it.
+        self.context_action_requested = Some(action);
+        cx.emit(TerminalPaneEvent::ContextActionRequested);
+        cx.notify();
+    }
+
+    pub(super) fn dismiss_terminal_context_menu(&mut self, cx: &mut Context<Self>) {
+        if self.context_menu.is_none() {
+            return;
+        }
+        let Some(generation) = self.context_menu_presence.begin_exit() else {
+            return;
+        };
+        let delay =
+            oxide_ui::motion::duration(&self.theme.tokens, oxide_ui::motion::MotionDuration::Micro);
+        cx.spawn(async move |weak, cx| {
+            cx.background_executor().timer(delay).await;
+            let _ = weak.update(cx, |this, cx| {
+                if this.context_menu_presence.finish_exit(generation) {
+                    this.context_menu = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn selected_command_mark(&self) -> Option<TerminalCommandMark> {
+        let selected_id = self.selected_command_mark_id.as_deref()?;
+        self.command_marks
+            .iter()
+            .find(|mark| mark.command_id == selected_id)
+            .cloned()
+    }
+
+    fn render_terminal_performance_overlay(&self) -> AnyElement {
+        let stats = self.render_stats;
+        let backend = match self.session_kind() {
+            TerminalSessionKind::LocalPty => "L",
+            TerminalSessionKind::SshPty => "SSH",
+            TerminalSessionKind::Telnet => "TN",
+            TerminalSessionKind::Mosh => "M",
+            TerminalSessionKind::Serial => "SER",
+        };
+        div()
+            .absolute()
+            .top(px(TERMINAL_PERFORMANCE_OVERLAY_INSET))
+            .right(px(TERMINAL_PERFORMANCE_OVERLAY_INSET))
+            .flex()
+            .flex_col()
+            .items_start()
+            .px(px(8.0))
+            .py(px(2.0))
+            .rounded(px(4.0))
+            .border_1()
+            .border_color(rgba(0xffffff33))
+            .bg(rgba(0x0d0f12dd))
+            .text_size(px(10.0))
+            .font_family(SharedString::from(self.preferences.font_family.clone()))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .line_height(px(16.0))
+                    .child(
+                        div()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(rgb(stats.tier.color()))
+                            .child(stats.tier.label()),
+                    )
+                    .child(
+                        div()
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(rgba(0xe6e8eb99))
+                            .child(backend),
+                    )
+                    .child(div().text_color(rgba(0xe6e8eb99)).child("|"))
+                    .child(
+                        div()
+                            .text_color(rgb(self.theme.foreground))
+                            .child(stats.writes_per_sec.to_string()),
+                    )
+                    .child(div().text_color(rgba(0xe6e8eb99)).child("wps"))
+                    .child(div().text_color(rgba(0xe6e8eb99)).child("·"))
+                    .child(
+                        div()
+                            .text_color(rgba(0xe6e8eb99))
+                            .child(format!("{}b", stats.pending_bytes)),
+                    ),
+            )
+            .child(
+                div()
+                    .line_height(px(16.0))
+                    .text_color(rgba(0xe6e8eb99))
+                    .child(format!(
+                        "d{} d95{} db{} dc{} dp{} dl{} l95{}us",
+                        stats.drain_micros,
+                        stats.drain_p95_micros,
+                        stats.drained_bytes,
+                        stats.max_data_chunk_bytes,
+                        stats.output_processing_micros,
+                        stats.terminal_lock_wait_micros,
+                        stats.input_latency_p95_micros,
+                    )),
+            )
+            .child(
+                div()
+                    .line_height(px(16.0))
+                    .text_color(rgba(0xe6e8eb99))
+                    .child(format!(
+                        "s{} ly{} p{} c{}% ss{}#{} q{} i{}",
+                        stats.snapshot_micros,
+                        stats.layout_micros,
+                        stats.paint_micros,
+                        stats.layout_cache_hit_percent,
+                        stats.scroll_snapshot_micros,
+                        stats.scroll_snapshot_count,
+                        stats.search_micros,
+                        stats.image_prepare_micros,
+                    )),
+            )
+            .into_any_element()
+    }
+
+    fn render_command_mark_actions(
+        &self,
+        mark: TerminalCommandMark,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let action_top = self.command_mark_action_top(&mark);
+        let copy_label = self.preferences.command_selection_labels.copy.clone();
+        let _copy_title = self.preferences.command_selection_labels.copy_title.clone();
+
+        div()
+            .absolute()
+            .top(px(action_top))
+            .right(px(10.0))
+            .flex()
+            .gap(px(4.0))
+            .child(
+                div()
+                    .rounded_full()
+                    .border_1()
+                    .border_color(rgba(0x60a5fa59))
+                    .bg(rgba(0x0f172aeb))
+                    .px(px(7.0))
+                    .py(px(3.0))
+                    .text_size(px(10.0))
+                    .line_height(px(10.0))
+                    .text_color(rgb(0xbfdbfe))
+                    .cursor_pointer()
+                    .child(copy_label)
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _event: &MouseDownEvent, window, cx| {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                            this.copy_command_mark_output_to_clipboard(&mark, cx);
+                        }),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn command_mark_action_top(&self, mark: &TerminalCommandMark) -> f32 {
+        let Some(bounds) = self.bounds else {
+            return 0.0;
+        };
+        let viewport_start = self
+            .snapshot
+            .scrollback_lines
+            .saturating_sub(self.snapshot.display_offset);
+        let end_line = self.selectable_command_mark_end_line(mark);
+        let visible_start = mark.start_line.max(viewport_start);
+        let visible_end =
+            end_line.min(viewport_start.saturating_add(self.snapshot.rows.saturating_sub(1)));
+        let start_row = visible_start.saturating_sub(viewport_start);
+        let end_row = visible_end.saturating_sub(viewport_start);
+        let overlay_top = start_row as f32 * self.metrics.line_height_f32();
+        let overlay_bottom = (end_row + 1) as f32 * self.metrics.line_height_f32();
+        let actions_height = 22.0;
+        let gap = 5.0;
+        let viewport_height = f32::from(bounds.size.height);
+        let space_above = overlay_top;
+        let space_below = viewport_height - overlay_bottom;
+        let top = if space_above >= actions_height + gap || space_below < actions_height + gap {
+            overlay_top - actions_height - gap
+        } else {
+            overlay_bottom + gap
+        };
+        self.preferences.padding_vertical
+            + top.clamp(0.0, (viewport_height - actions_height).max(0.0))
+    }
+
+    fn copy_command_mark_output_to_clipboard(
+        &mut self,
+        mark: &TerminalCommandMark,
+        cx: &mut Context<Self>,
+    ) {
+        let output = self.terminal.lock().command_output_text(mark);
+        cx.write_to_clipboard(ClipboardItem::new_string(output));
+    }
+
+    fn render_kitty_file_transmission_confirm(&self, cx: &mut Context<Self>) -> AnyElement {
+        let labels = &self.preferences.kitty_file_transmission_labels;
+        confirm_dialog(
+            &self.theme.tokens,
+            ConfirmDialogView {
+                variant: ConfirmDialogVariant::Danger,
+                title: div().child(labels.title.clone()).into_any_element(),
+                description: Some(div().child(labels.description.clone()).into_any_element()),
+                cancel_label: div().child(labels.cancel.clone()).into_any_element(),
+                confirm_label: div().child(labels.allow.clone()).into_any_element(),
+            },
+            cx.listener(|this, _event, _window, cx| {
+                this.deny_kitty_file_transmission(cx);
+                cx.stop_propagation();
+            }),
+            cx.listener(|this, _event, _window, cx| {
+                this.confirm_kitty_file_transmission(cx);
+                cx.stop_propagation();
+            }),
+        )
+    }
+}
+
+use oxide_background::background_layer as terminal_background_layer;
+
+#[cfg(test)]
+mod tests {
+    use gpui::{AppContext, IntoElement};
+    use std::path::PathBuf;
+
+    use oxide_terminal_core::TerminalCursorShape;
+
+    use super::{external_paths_for_local_terminal, terminal_cursor_shape_for_render};
+
+    struct BackgroundTestView {
+        background: crate::TerminalBackgroundPreferences,
+        image: std::sync::Arc<gpui::RenderImage>,
+    }
+
+    impl gpui::Render for BackgroundTestView {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            oxide_background::background_image_layer(
+                self.background.clone(),
+                Some(self.image.clone()),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn terminal_background_animation_plays_and_pauses(cx: &mut gpui::TestAppContext) {
+        let cx = cx.add_empty_window();
+        cx.update(|window, _| window.activate_window());
+        cx.run_until_parked();
+        assert!(cx.update(|window, _| window.is_window_active()));
+        let image = std::sync::Arc::new(gpui::RenderImage::new(vec![
+            image::Frame::new(image::RgbaImage::from_pixel(
+                1,
+                1,
+                image::Rgba([0, 0, 255, 255]),
+            )),
+            image::Frame::new(image::RgbaImage::from_pixel(
+                1,
+                1,
+                image::Rgba([255, 0, 0, 255]),
+            )),
+        ]));
+        let background = crate::TerminalBackgroundPreferences {
+            path: "animation.gif".into(),
+            opacity: 1.0,
+            blur: 0.0,
+            fit: crate::TerminalBackgroundFit::Cover,
+            alignment: (0.5, 0.5),
+            effect: None,
+            readability: None,
+            limits: Default::default(),
+            scene: Default::default(),
+            on_failure: None,
+        };
+        let view = cx.update(|_, cx| {
+            cx.new(|_| BackgroundTestView {
+                background,
+                image: image.clone(),
+            })
+        });
+        for expected_all_frames in [false, true] {
+            cx.draw(
+                gpui::point(gpui::px(0.0), gpui::px(0.0)),
+                gpui::size(gpui::px(64.0), gpui::px(64.0)),
+                |_, _| view.clone().into_any_element(),
+            );
+            assert_eq!(
+                cx.update(|window, _| window.has_image_atlas_entry(&image)),
+                expected_all_frames
+            );
+        }
+        for reduce_motion in [true, false] {
+            if !reduce_motion {
+                cx.deactivate_window();
+            }
+            cx.update(|window, cx| {
+                cx.set_reduce_motion(reduce_motion);
+                window.drop_image(image.clone()).unwrap();
+            });
+            for _ in 0..2 {
+                cx.draw(
+                    gpui::point(gpui::px(0.0), gpui::px(0.0)),
+                    gpui::size(gpui::px(64.0), gpui::px(64.0)),
+                    |_, _| view.clone().into_any_element(),
+                );
+                // Both frames reached the atlas while playing; a paused
+                // animation must keep painting only its current frame.
+                assert!(!cx.update(|window, _| window.has_image_atlas_entry(&image)));
+            }
+        }
+    }
+
+    struct AutosuggestTestView {
+        pane: gpui::Entity<super::TerminalPane>,
+    }
+
+    struct ControlBarTestView {
+        pane: gpui::Entity<super::TerminalPane>,
+    }
+
+    struct ContextMenuTestView {
+        pane: gpui::Entity<super::TerminalPane>,
+    }
+
+    impl gpui::Render for ContextMenuTestView {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            use gpui::prelude::*;
+            let menu = self.pane.update(cx, |pane, cx| {
+                pane.context_menu
+                    .clone()
+                    .map(|menu| pane.render_terminal_context_menu(menu, cx))
+            });
+            gpui::div().size_full().relative().children(menu)
+        }
+    }
+
+    #[gpui::test]
+    fn context_menu_flips_at_the_pointer_using_its_rendered_size(cx: &mut gpui::TestAppContext) {
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            let pane = cx.new(|cx| {
+                super::TerminalPane::new_recording_playback(80, 24, Default::default(), window, cx)
+                    .unwrap()
+            });
+            cx.observe(&pane, |_, _, cx| cx.notify()).detach();
+            ContextMenuTestView { pane }
+        });
+        cx.simulate_resize(gpui::size(gpui::px(800.0), gpui::px(1000.0)));
+        let pane = cx.update(|_, cx| view.read(cx).pane.clone());
+        for scale in [1.0, 1.5, 2.0] {
+            cx.simulate_scale_factor_change(scale);
+            for (serial_transfer_menu, plugin_action) in
+                [(false, false), (false, true), (true, false)]
+            {
+                for (x, y) in [(100.0, 980.0), (760.0, 980.0), (100.0, 100.0)] {
+                    let pointer = gpui::point(gpui::px(x), gpui::px(y));
+                    pane.update(cx, |pane, cx| {
+                        pane.bounds = Some(gpui::Bounds::new(
+                            gpui::point(gpui::px(40.0), gpui::px(30.0)),
+                            gpui::size(gpui::px(740.0), gpui::px(950.0)),
+                        ));
+                        pane.plugin_text_actions = if plugin_action {
+                            vec![super::super::TerminalPluginTextAction {
+                                plugin_id: "test.tools".into(),
+                                tab_id: "tools".into(),
+                                control_id: "text".into(),
+                                label: "Process selection".into(),
+                            }]
+                        } else {
+                            Vec::new()
+                        };
+                        pane.open_terminal_context_menu(
+                            &gpui::MouseDownEvent {
+                                position: pointer,
+                                button: gpui::MouseButton::Right,
+                                ..Default::default()
+                            },
+                            cx,
+                        );
+                        pane.context_menu.as_mut().unwrap().serial_transfer_menu =
+                            serial_transfer_menu;
+                    });
+                    cx.update(|window, cx| window.draw(cx).clear(cx));
+                    let bounds = cx.debug_bounds("terminal-context-menu").unwrap();
+                    let anchor = gpui::point(
+                        if x > 400.0 {
+                            bounds.right()
+                        } else {
+                            bounds.left()
+                        },
+                        if y > 500.0 {
+                            bounds.bottom()
+                        } else {
+                            bounds.top()
+                        },
+                    );
+                    assert!(
+                        f32::from(anchor.x - pointer.x).abs() <= 1.0
+                            && f32::from(anchor.y - pointer.y).abs() <= 1.0,
+                        "menu {bounds:?} must stay at {pointer:?}; scale={scale}, serial={serial_transfer_menu}, plugin={plugin_action}",
+                    );
+                }
+            }
+        }
+    }
+
+    impl gpui::Render for ControlBarTestView {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            use gpui::prelude::*;
+            let bar = self.pane.update(cx, |pane, cx| {
+                pane.render_terminal_control_bar(
+                    gpui::div()
+                        .size_full()
+                        .debug_selector(|| "toolbar-information".into())
+                        .child("Port"),
+                    gpui::div()
+                        .size_full()
+                        .debug_selector(|| "toolbar-controls".into())
+                        .child("Send"),
+                    cx,
+                )
+            });
+            gpui::div().size_full().relative().child(bar)
+        }
+    }
+
+    #[gpui::test]
+    fn control_bar_toggle_hides_and_restores_the_controls_row(cx: &mut gpui::TestAppContext) {
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let pane = cx.new(|cx| {
+                super::TerminalPane::new_recording_playback(80, 24, Default::default(), window, cx)
+                    .unwrap()
+            });
+            cx.observe(&pane, |_, _, cx| cx.notify()).detach();
+            ControlBarTestView { pane }
+        });
+        cx.simulate_resize(gpui::size(gpui::px(400.0), gpui::px(200.0)));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let information = cx.debug_bounds("toolbar-information").unwrap();
+        let controls = cx.debug_bounds("toolbar-controls").unwrap();
+        assert!(controls.top() >= information.bottom());
+        let toggle = gpui::point(gpui::px(18.0), information.center().y);
+        cx.simulate_click(toggle, gpui::Modifiers::none());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert!(cx.debug_bounds("toolbar-controls").is_none());
+        let collapsed_information = cx.debug_bounds("toolbar-information").unwrap();
+        assert_eq!(collapsed_information.origin, information.origin);
+        assert!(controls.bottom() - collapsed_information.bottom() >= controls.size.height);
+        cx.simulate_click(toggle, gpui::Modifiers::none());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert_eq!(cx.debug_bounds("toolbar-controls").unwrap(), controls);
+    }
+
+    impl gpui::Render for AutosuggestTestView {
+        fn render(
+            &mut self,
+            window: &mut gpui::Window,
+            cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            use gpui::prelude::*;
+            let size = window.viewport_size();
+            let overlay = self.pane.update(cx, |pane, cx| {
+                pane.bounds = Some(gpui::Bounds::new(
+                    gpui::point(gpui::px(0.0), gpui::px(0.0)),
+                    size,
+                ));
+                let candidates = pane
+                    .command_history
+                    .candidates(&pane.input_tracker.state(), 8);
+                pane.render_terminal_autosuggest_overlay(candidates, 0.0, cx)
+            });
+            gpui::div().size_full().relative().child(overlay)
+        }
+    }
+
+    #[gpui::test]
+    fn autosuggest_native_list_scrolls_keyboard_selection_into_view(cx: &mut gpui::TestAppContext) {
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            let mut preferences = crate::terminal_ui::TerminalUiPreferences::default();
+            preferences.command_history = crate::SharedTerminalCommandHistory::from_commands(
+                (0..8)
+                    .map(|index| format!("git show {}-{index}", "project".repeat(12)))
+                    .collect(),
+            );
+            let pane = cx.new(|cx| {
+                super::TerminalPane::new_recording_playback(80, 24, preferences, window, cx)
+                    .unwrap()
+            });
+            pane.update(cx, |pane, _| {
+                pane.input_tracker.apply_bytes(b"git");
+            });
+            AutosuggestTestView { pane }
+        });
+        cx.simulate_resize(gpui::size(gpui::px(400.0), gpui::px(500.0)));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let pane = cx.update(|_, cx| view.read(cx).pane.clone());
+        let scroll = cx.update(|_, cx| pane.read(cx).autosuggest_scroll.clone());
+        assert!(scroll.max_offset().y > gpui::px(0.0));
+        pane.update(cx, |pane, cx| {
+            pane.autosuggest_selected_index = Some(7);
+            pane.autosuggest_scroll.scroll_to_item(7);
+            cx.notify();
+        });
+        view.update(cx, |_, cx| cx.notify());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let last = scroll.bounds_for_item(7).unwrap();
+        let bottom = last.bottom() + scroll.offset().y;
+        assert!(
+            bottom <= scroll.bounds().bottom(),
+            "selected command must remain visible"
+        );
+        assert!(scroll.offset().y < gpui::px(0.0));
+        assert_eq!(scroll.max_offset().x, gpui::px(0.0));
+    }
+
+    #[test]
+    fn autosuggest_hints_use_platform_key_names_in_localized_templates() {
+        let labels = crate::terminal_ui::TerminalAutosuggestLabels {
+            navigation_hint: "{{select}} 选择 · {{run}} 执行 · 单击填充".into(),
+            dismiss_hint: "{{dismiss}} 关闭 · {{remove}} 移除".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            super::terminal_autosuggest_hints(&labels, true),
+            (
+                "⌥↑/↓ 选择 · Return 执行 · 单击填充".into(),
+                "Esc 关闭 · ⇧⌦ 移除".into(),
+            )
+        );
+        assert_eq!(
+            super::terminal_autosuggest_hints(&labels, false),
+            (
+                "Alt+↑/↓ 选择 · Enter 执行 · 单击填充".into(),
+                "Esc 关闭 · Shift+Delete 移除".into(),
+            )
+        );
+    }
+
+    #[test]
+    fn autosuggest_matches_highlight_original_utf8_ranges() {
+        for (command, query, expected) in [
+            ("git status", "gts", vec![0..1, 2..3, 4..5]),
+            ("git status", "status", vec![4..10]),
+            ("İnfo 设置", "i", vec![0..2]),
+            ("İnfo 设置", "设置", vec![6..12]),
+        ] {
+            assert_eq!(
+                super::terminal_autosuggest_highlight_ranges(command, query),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn autosuggest_popup_fits_the_pane_and_never_covers_the_input_line() {
+        let anchor = super::super::TerminalCursorAnchor {
+            x: 120.0,
+            y: 20.0,
+            line_height: 16.0,
+            char_width: 8.0,
+            container_width: 600.0,
+            container_height: 400.0,
+        };
+        let below = super::terminal_autosuggest_bounds(anchor, 30.0, 200.0).unwrap();
+        assert_eq!(below.origin, gpui::point(gpui::px(120.0), gpui::px(70.0)));
+        let bottom = super::super::TerminalCursorAnchor { y: 380.0, ..anchor };
+        let above = super::terminal_autosuggest_bounds(bottom, 30.0, 200.0).unwrap();
+        assert_eq!(above.bottom(), gpui::px(406.0));
+        let narrow = super::super::TerminalCursorAnchor {
+            x: 240.0,
+            y: 60.0,
+            container_width: 250.0,
+            container_height: 120.0,
+            ..anchor
+        };
+        let constrained = super::terminal_autosuggest_bounds(narrow, 30.0, 200.0).unwrap();
+        assert_eq!(
+            constrained.origin,
+            gpui::point(gpui::px(8.0), gpui::px(38.0))
+        );
+        assert_eq!(
+            constrained.size,
+            gpui::size(gpui::px(234.0), gpui::px(48.0))
+        );
+    }
+
+    #[test]
+    fn terminal_application_can_hide_the_configured_cursor() {
+        assert_eq!(
+            terminal_cursor_shape_for_render(TerminalCursorShape::Hidden, TerminalCursorShape::Bar),
+            TerminalCursorShape::Hidden
+        );
+        assert_eq!(
+            terminal_cursor_shape_for_render(TerminalCursorShape::Block, TerminalCursorShape::Bar),
+            TerminalCursorShape::Bar
+        );
+    }
+
+    #[test]
+    fn external_terminal_paths_are_inserted_as_inert_shell_words() {
+        let input = external_paths_for_local_terminal(&[
+            PathBuf::from("/Applications/Visual Studio Code.app"),
+            PathBuf::from("/tmp/it's ready\nnext"),
+        ]);
+
+        assert_eq!(
+            input.as_deref(),
+            Some("'/Applications/Visual Studio Code.app' '/tmp/it'\\''s ready\nnext' ")
+        );
+    }
+}

@@ -1,0 +1,382 @@
+use gpui::{
+    AnyElement, App, Context, CursorStyle, Decorations, Entity, FocusHandle, Focusable,
+    IntoElement, MouseButton, Render, ResizeEdge, Tiling, Window, div, prelude::*, px,
+};
+
+use super::*;
+
+const CLIENT_WINDOW_RESIZE_EDGE_SIZE: f32 = 6.0;
+const CLIENT_WINDOW_RESIZE_CORNER_SIZE: f32 = 12.0;
+
+fn client_window_resize_enabled(
+    is_linux: bool,
+    decorations: Decorations,
+    maximized: bool,
+    fullscreen: bool,
+) -> bool {
+    is_linux && matches!(decorations, Decorations::Client { .. }) && !maximized && !fullscreen
+}
+
+fn client_window_resize_edge_enabled(edge: ResizeEdge, tiling: Tiling) -> bool {
+    match edge {
+        ResizeEdge::Top => !tiling.top,
+        ResizeEdge::TopRight => !tiling.top && !tiling.right,
+        ResizeEdge::Right => !tiling.right,
+        ResizeEdge::BottomRight => !tiling.bottom && !tiling.right,
+        ResizeEdge::Bottom => !tiling.bottom,
+        ResizeEdge::BottomLeft => !tiling.bottom && !tiling.left,
+        ResizeEdge::Left => !tiling.left,
+        ResizeEdge::TopLeft => !tiling.top && !tiling.left,
+    }
+}
+
+fn client_window_resize_cursor(edge: ResizeEdge) -> CursorStyle {
+    match edge {
+        ResizeEdge::Top | ResizeEdge::Bottom => CursorStyle::ResizeUpDown,
+        ResizeEdge::Left | ResizeEdge::Right => CursorStyle::ResizeLeftRight,
+        ResizeEdge::TopLeft | ResizeEdge::BottomRight => CursorStyle::ResizeUpLeftDownRight,
+        ResizeEdge::TopRight | ResizeEdge::BottomLeft => CursorStyle::ResizeUpRightDownLeft,
+    }
+}
+
+fn render_client_window_resize_handles(window: &Window) -> Option<AnyElement> {
+    let decorations = window.window_decorations();
+    if !client_window_resize_enabled(
+        cfg!(target_os = "linux"),
+        decorations,
+        window.is_maximized(),
+        window.is_fullscreen(),
+    ) {
+        return None;
+    }
+    let Decorations::Client { tiling } = decorations else {
+        return None;
+    };
+    let edge_size = px(CLIENT_WINDOW_RESIZE_EDGE_SIZE);
+    let corner_size = px(CLIENT_WINDOW_RESIZE_CORNER_SIZE);
+    let handle = |id, edge| {
+        div()
+            .id(id)
+            .absolute()
+            .occlude()
+            .cursor(client_window_resize_cursor(edge))
+            .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
+                window.start_window_resize(edge);
+                cx.stop_propagation();
+            })
+    };
+
+    Some(
+        div()
+            .id("client-window-resize-handles")
+            .absolute()
+            .top_0()
+            .left_0()
+            .right_0()
+            .bottom_0()
+            .when(
+                client_window_resize_edge_enabled(ResizeEdge::Top, tiling),
+                |handles| {
+                    handles.child(
+                        handle("client-window-resize-top", ResizeEdge::Top)
+                            .top_0()
+                            .left(corner_size)
+                            .right(corner_size)
+                            .h(edge_size),
+                    )
+                },
+            )
+            .when(
+                client_window_resize_edge_enabled(ResizeEdge::Right, tiling),
+                |handles| {
+                    handles.child(
+                        handle("client-window-resize-right", ResizeEdge::Right)
+                            .top(corner_size)
+                            .right_0()
+                            .bottom(corner_size)
+                            .w(edge_size),
+                    )
+                },
+            )
+            .when(
+                client_window_resize_edge_enabled(ResizeEdge::Bottom, tiling),
+                |handles| {
+                    handles.child(
+                        handle("client-window-resize-bottom", ResizeEdge::Bottom)
+                            .right(corner_size)
+                            .bottom_0()
+                            .left(corner_size)
+                            .h(edge_size),
+                    )
+                },
+            )
+            .when(
+                client_window_resize_edge_enabled(ResizeEdge::Left, tiling),
+                |handles| {
+                    handles.child(
+                        handle("client-window-resize-left", ResizeEdge::Left)
+                            .top(corner_size)
+                            .bottom(corner_size)
+                            .left_0()
+                            .w(edge_size),
+                    )
+                },
+            )
+            .when(
+                client_window_resize_edge_enabled(ResizeEdge::TopLeft, tiling),
+                |handles| {
+                    handles.child(
+                        handle("client-window-resize-top-left", ResizeEdge::TopLeft)
+                            .top_0()
+                            .left_0()
+                            .size(corner_size),
+                    )
+                },
+            )
+            .when(
+                client_window_resize_edge_enabled(ResizeEdge::TopRight, tiling),
+                |handles| {
+                    handles.child(
+                        handle("client-window-resize-top-right", ResizeEdge::TopRight)
+                            .top_0()
+                            .right_0()
+                            .size(corner_size),
+                    )
+                },
+            )
+            .when(
+                client_window_resize_edge_enabled(ResizeEdge::BottomRight, tiling),
+                |handles| {
+                    handles.child(
+                        handle("client-window-resize-bottom-right", ResizeEdge::BottomRight)
+                            .right_0()
+                            .bottom_0()
+                            .size(corner_size),
+                    )
+                },
+            )
+            .when(
+                client_window_resize_edge_enabled(ResizeEdge::BottomLeft, tiling),
+                |handles| {
+                    handles.child(
+                        handle("client-window-resize-bottom-left", ResizeEdge::BottomLeft)
+                            .bottom_0()
+                            .left_0()
+                            .size(corner_size),
+                    )
+                },
+            )
+            .into_any_element(),
+    )
+}
+
+pub(in crate::workspace) fn render_resizable_window_content(
+    content: AnyElement,
+    window: &Window,
+) -> AnyElement {
+    let Some(handles) = render_client_window_resize_handles(window) else {
+        return content;
+    };
+    div()
+        .size_full()
+        .relative()
+        .child(content)
+        // Keep native resize hit targets above content-owned overlays.
+        .child(handles)
+        .into_any_element()
+}
+
+pub(in crate::workspace) fn observe_window_close(
+    window: &Window,
+    cx: &App,
+    on_close: impl FnOnce(gpui::WindowId, &mut App) + 'static,
+) -> Subscription {
+    let window_id = window.window_handle().window_id();
+    let mut on_close = Some(on_close);
+    cx.on_window_closed(move |cx, closed_id| {
+        if closed_id == window_id
+            && let Some(on_close) = on_close.take()
+        {
+            // The window is already gone, and its session may still be updating.
+            // Deliver cleanup after that update without re-entering the dead handle.
+            cx.defer(move |cx| on_close(closed_id, cx));
+        }
+    })
+}
+
+/// Owns native-window state while retaining the shared workspace session.
+pub(crate) struct WorkspaceWindowShell {
+    session: Entity<WorkspaceApp>,
+    focus_handle: FocusHandle,
+    native_style: WorkspaceWindowNativeStyle,
+    background: Entity<WorkspaceWindowBackgroundEntity>,
+    _session_observation: Subscription,
+    _background_observation: Subscription,
+    _close_subscription: Subscription,
+}
+
+impl WorkspaceWindowShell {
+    pub(crate) fn new(
+        session: Entity<WorkspaceApp>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let (focus_handle, background_cache_byte_limit) = session.read_with(cx, |session, _cx| {
+            (
+                session.focus_handle.clone(),
+                session.render_policy.image_cache_bytes,
+            )
+        });
+        let native_style = WorkspaceWindowNativeStyle::unapplied();
+        let background =
+            WorkspaceWindowBackgroundEntity::with_byte_limit(background_cache_byte_limit, cx);
+        let session_observation = observe_window_session(&session, cx);
+        let background_observation = observe_window_background(&background, cx);
+        let window_handle = window.window_handle();
+        let window_registration = session.update(cx, |session, _cx| {
+            session.reserve_workspace_window(window_registry::WindowRole::Main)
+        });
+        let window_registered = session.update(cx, |session, cx| {
+            session.commit_workspace_window(window_registration, window_handle, cx)
+        });
+        debug_assert!(window_registered, "main window registration must commit");
+        let session_on_close = session.clone();
+        let close_subscription = observe_window_close(window, cx, move |window_id, cx| {
+            session_on_close.update(cx, |session, cx| {
+                session.release_workspace_window(window_registration, window_id, cx);
+            });
+        });
+        Self {
+            session,
+            focus_handle,
+            native_style,
+            background,
+            _session_observation: session_observation,
+            _background_observation: background_observation,
+            _close_subscription: close_subscription,
+        }
+    }
+}
+
+pub(in crate::workspace) fn observe_window_background<Owner>(
+    background: &Entity<WorkspaceWindowBackgroundEntity>,
+    cx: &mut Context<Owner>,
+) -> Subscription
+where
+    Owner: 'static,
+{
+    cx.observe(background, |_owner, _background, cx| {
+        // A completed decode repaints only shells that own this cache.
+        cx.notify();
+    })
+}
+
+impl Focusable for WorkspaceWindowShell {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl Render for WorkspaceWindowShell {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.native_style.apply(&self.session, window, cx);
+        let content = self.session.update(cx, |session, cx| {
+            session.render_main_window(&self.background, window, cx)
+        });
+        render_resizable_window_content(content, window)
+    }
+}
+
+pub(in crate::workspace) fn observe_window_session<Owner, Session>(
+    session: &Entity<Session>,
+    cx: &mut Context<Owner>,
+) -> Subscription
+where
+    Owner: 'static,
+    Session: 'static,
+{
+    cx.observe(session, |_owner, _session, cx| {
+        // Session changes repaint every native shell that currently mounts it.
+        cx.notify();
+    })
+}
+
+/// Owns one native window's image cache and its bounded completion task.
+pub(in crate::workspace) struct WorkspaceWindowBackgroundEntity {
+    pub(in crate::workspace) cache: BackgroundImageRenderCache,
+    pub(in crate::workspace) decode_completion_task: Option<Task<()>>,
+}
+
+impl WorkspaceWindowBackgroundEntity {
+    pub(in crate::workspace) fn with_byte_limit<Owner>(
+        byte_limit: usize,
+        cx: &mut Context<Owner>,
+    ) -> Entity<Self>
+    where
+        Owner: 'static,
+    {
+        cx.new(move |_| {
+            let mut cache = BackgroundImageRenderCache::default();
+            cache.set_byte_limit(byte_limit);
+            Self {
+                cache,
+                decode_completion_task: None,
+            }
+        })
+    }
+}
+
+/// Tracks values already applied to one native window.
+pub(in crate::workspace) struct WorkspaceWindowNativeStyle {
+    appearance_subscription: Option<Subscription>,
+    applied_vibrancy_mode: Option<NativeVibrancyMode>,
+    applied_window_opacity: Option<f32>,
+}
+
+impl WorkspaceWindowNativeStyle {
+    pub(in crate::workspace) fn unapplied() -> Self {
+        Self {
+            appearance_subscription: None,
+            applied_vibrancy_mode: None,
+            applied_window_opacity: None,
+        }
+    }
+
+    pub(in crate::workspace) fn apply<Owner>(
+        &mut self,
+        session: &Entity<WorkspaceApp>,
+        window: &mut Window,
+        cx: &mut Context<Owner>,
+    ) {
+        if self.appearance_subscription.is_none() {
+            let session = session.downgrade();
+            self.appearance_subscription =
+                Some(window.observe_window_appearance(move |window, cx| {
+                    let _ = session.update(cx, |session, cx| {
+                        session.sync_system_appearance(window.appearance(), cx)
+                    });
+                }));
+        }
+        let (vibrancy_mode, window_opacity) = session.read_with(cx, |session, _cx| {
+            (
+                effective_vibrancy_mode(session.settings_store.settings(), &session.render_policy),
+                normalized_window_opacity(
+                    session.settings_store.settings().appearance.window_opacity,
+                ),
+            )
+        });
+        if self.applied_window_opacity != Some(window_opacity) {
+            let _ = apply_window_opacity(window, window_opacity as f64);
+            self.applied_window_opacity = Some(window_opacity);
+        }
+        if self.applied_vibrancy_mode != Some(vibrancy_mode) {
+            let support = apply_window_vibrancy(window, vibrancy_mode);
+            session.update(cx, |session, _cx| {
+                // The capability is platform-wide UI diagnostics; the applied
+                // mode remains exclusively owned by this native window shell.
+                session.vibrancy_support = support;
+            });
+            self.applied_vibrancy_mode = Some(vibrancy_mode);
+        }
+    }
+}

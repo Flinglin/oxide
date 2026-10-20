@@ -1,0 +1,13 @@
+[lints]
+workspace = true
+
+[package]
+name = "oxide-terminal-unicode"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+oxide-terminal-model = { path = "../oxide-terminal-model" }
+unicode-bidi.workspace = true
+unicode-segmentation.workspace = true

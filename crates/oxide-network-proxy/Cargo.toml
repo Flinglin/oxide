@@ -1,0 +1,18 @@
+[lints]
+workspace = true
+
+[package]
+name = "oxide-network-proxy"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+tokio.workspace = true
+base64.workspace = true
+oxide-connections = { path = "../oxide-connections" }
+oxide-settings = { path = "../oxide-settings" }
+parking_lot.workspace = true
+reqwest.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true

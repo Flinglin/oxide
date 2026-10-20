@@ -1,0 +1,29 @@
+[lints]
+workspace = true
+
+[package]
+name = "oxide-app-cloud-sync"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+oxide-audit = { path = "../oxide-audit" }
+anyhow.workspace = true
+base64.workspace = true
+chrono.workspace = true
+gpui.workspace = true
+oxide-cloud-sync = { path = "../oxide-cloud-sync" }
+oxide-connections = { path = "../oxide-connections" }
+oxide-forwarding = { path = "../oxide-forwarding" }
+oxide-quick-commands = { path = "../oxide-quick-commands" }
+oxide-ui = { path = "../oxide-ui" }
+oxide-settings-view = { path = "../oxide-settings-view" }
+oxide-settings = { path = "../oxide-settings" }
+oxide-settings-model = { path = "../oxide-settings-model" }
+oxide-theme = { path = "../oxide-theme" }
+serde_json.workspace = true
+tokio.workspace = true
+url.workspace = true
+uuid.workspace = true
+zeroize.workspace = true

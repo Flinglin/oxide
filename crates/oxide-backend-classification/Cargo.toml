@@ -1,0 +1,10 @@
+[lints]
+workspace = true
+
+[package]
+name = "oxide-backend-classification"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]

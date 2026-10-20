@@ -1,0 +1,20 @@
+[lints]
+workspace = true
+
+[package]
+name = "oxide-settings-view"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+gpui.workspace = true
+
+oxide-gpui-platform = { path = "../oxide-gpui-platform" }
+oxide-ui = { path = "../oxide-ui" }
+oxide-i18n = { path = "../oxide-i18n" }
+oxide-render-policy = { path = "../oxide-render-policy" }
+oxide-settings = { path = "../oxide-settings" }
+oxide-settings-model = { path = "../oxide-settings-model" }
+oxide-theme = { path = "../oxide-theme" }
+regex.workspace = true

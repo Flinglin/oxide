@@ -1,0 +1,10 @@
+[lints]
+workspace = true
+
+[package]
+name = "oxide-terminal-model"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]

@@ -1,0 +1,395 @@
+use std::{
+    cell::Cell,
+    collections::VecDeque,
+    io::{Read, Write},
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
+use alacritty_terminal::{
+    event::{Event as AlacEvent, EventListener},
+    grid::{Dimensions, Scroll},
+    index::Line,
+    sync::FairMutex,
+    term::{Config, Term},
+    vte::ansi::{self, Handler, Processor},
+};
+use anyhow::{Context, Result, bail};
+use crossbeam_channel::{Receiver, unbounded};
+use oxide_modem_transfer::{ModemConsumer, ModemConsumerEvent, ModemTransfer};
+use oxide_ssh::{
+    ConnectionConsumer, ManagedKeyResolver, SshConfig, SshConnectionHandle, SshConnectionRegistry,
+    SshOutputChunk, SshPromptHandler, SshPtyHandle, SshTransportClient, SshTransportCommand,
+    X11ForwardPolicy,
+};
+use oxide_terminal_encoding::{
+    EncodingMismatchDetector, TerminalEncoding, TerminalInputEncoder, TerminalOutputDecoder,
+};
+use oxide_terminal_graphics::{
+    GraphicsIngress, GraphicsOptions, KittyFileTransmissionControl, TerminalGraphicsSegment,
+};
+use oxide_trzsz::{TrzszConsumer, TrzszConsumerEvent, TrzszTransfer, TrzszTransferPolicy};
+use tokio::sync::mpsc::error::TryRecvError;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    runtime::Runtime,
+};
+
+pub use crate::backpressure::{TerminalDrainBudget, TerminalDrainReport, TerminalMagicKind};
+
+use crate::{
+    LocalEventListener, LocalEventReceiver, LocalPtyConfig, LocalPtySession, TermMode,
+    TerminalActivityReceiver, TerminalCommandMark, TerminalCwdIntegrationLaunchState,
+    TerminalEvent, TerminalGraphicsState, TerminalLifecycle, TerminalModemTransferRequest,
+    TerminalPalette, TerminalProcessInfo, TerminalProcessProbe, TerminalSearchMatch, TerminalSize,
+    TerminalSnapshot, append_grid_line_text, backpressure::MagicScanWindow, focus_report_sequence,
+    graphics_cursor_from_term, incremental_snapshot_from_term, interactive_terminal_config,
+    local_event_channel, privilege_prompt::TerminalPrivilegePromptStream,
+    scroll_snapshot_from_term, search_matches_from_term,
+    shell_integration::TerminalShellIntegration, snapshot_from_term,
+    snapshot_from_term_with_display_offset,
+};
+
+const MAX_COMMAND_OUTPUT_LINES: usize = 400;
+const MAX_COMMAND_OUTPUT_CHARS: usize = 24_000;
+const MAX_AI_TERMINAL_BUFFER_LINES: usize = 500;
+
+// AI terminal tools mirror the Tauri registry getter: expose the most recent
+// physical buffer rows, including scrollback, rather than only the viewport.
+fn terminal_buffer_text_from_term<T: EventListener>(term: &Term<T>, max_cols: usize) -> String {
+    let grid = term.grid();
+    let top_line = -(term.total_lines().saturating_sub(term.screen_lines()) as i32);
+    let bottom_line = term.screen_lines() as i32;
+    let line_count = (bottom_line - top_line).max(0) as usize;
+    let kept_lines = line_count.min(MAX_AI_TERMINAL_BUFFER_LINES);
+    let start_line = bottom_line - kept_lines as i32;
+    let mut lines = Vec::with_capacity(kept_lines);
+
+    for line in start_line..bottom_line {
+        let row = &grid[Line(line)];
+        let mut text = String::new();
+        let mut cell_map = Vec::new();
+        append_grid_line_text(row[..].iter(), line, max_cols, &mut text, &mut cell_map);
+        lines.push(text.trim_end().to_string());
+    }
+
+    lines.join("\n")
+}
+
+fn command_output_text_from_term<T: EventListener>(
+    term: &Term<T>,
+    mark: &TerminalCommandMark,
+) -> String {
+    let start = mark.output_start_line();
+    let end = mark.end_line.unwrap_or_else(|| {
+        let scrollback = term.total_lines().saturating_sub(term.screen_lines());
+        let cursor_line = term.renderable_content().cursor.point.line.0.max(0) as usize;
+        scrollback.saturating_add(cursor_line)
+    });
+    if start > end {
+        return String::new();
+    }
+
+    let mut text = String::new();
+    for absolute_line in start..=end {
+        if absolute_line - start >= MAX_COMMAND_OUTPUT_LINES
+            || text.len() >= MAX_COMMAND_OUTPUT_CHARS
+        {
+            break;
+        }
+        if absolute_line > start {
+            text.push('\n');
+        }
+        let remaining = MAX_COMMAND_OUTPUT_CHARS.saturating_sub(text.len());
+        if remaining == 0 {
+            break;
+        }
+        let line = crate::shell_integration::line_text(term, absolute_line);
+        if line.len() > remaining {
+            let mut end = 0;
+            for (index, ch) in line.char_indices() {
+                let next = index + ch.len_utf8();
+                if next > remaining {
+                    break;
+                }
+                end = next;
+            }
+            text.push_str(&line[..end]);
+            break;
+        }
+        text.push_str(&line);
+    }
+    text
+}
+
+pub(crate) fn clear_terminal_buffer<T: EventListener>(term: &mut Term<T>) {
+    // Clear host-owned emulator state without sending control bytes to the process or device.
+    // New output must start at the cleared origin after viewport and scrollback removal.
+    Handler::clear_screen(term, ansi::ClearMode::All);
+    Handler::clear_screen(term, ansi::ClearMode::Saved);
+    Handler::goto(term, 0, 0);
+}
+
+fn apply_terminal_output_processor<'a>(
+    processor: &Option<TerminalOutputProcessor>,
+    bytes: &'a [u8],
+) -> std::borrow::Cow<'a, [u8]> {
+    let Some(processor) = processor else {
+        return std::borrow::Cow::Borrowed(bytes);
+    };
+    std::borrow::Cow::Owned(processor(bytes))
+}
+
+// Session backends are kept in this module scope so the TerminalSession
+// facade, local PTY adapter, and SSH PTY owner keep their existing API and
+// private access while avoiding another thousand-line implementation file.
+include!("session/types.rs");
+include!("session/facade.rs");
+include!("session/playback.rs");
+include!("session/local_backend.rs");
+include!("session/ssh_config.rs");
+mod ssh_parser;
+use ssh_parser::SshParser;
+include!("session/ssh_pty.rs");
+mod ssh_worker;
+pub use ssh_worker::SshPtySession;
+include!("session/telnet.rs");
+include!("session/mosh.rs");
+include!("session/serial.rs");
+
+#[cfg(test)]
+mod tests {
+    use alacritty_terminal::{
+        event::{Event as AlacEvent, VoidListener},
+        index::{Column, Line, Point},
+        vte::ansi::{Processor, StdSyncHandler},
+    };
+
+    use super::*;
+
+    #[tokio::test]
+    async fn telnet_worker_uses_authenticated_proxy_and_keeps_telnet_negotiation() {
+        use oxide_network_proxy::tcp::{
+            UpstreamProxyAuth, UpstreamProxyConfig, UpstreamProxyProtocol,
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_port = listener.local_addr().unwrap().port();
+        let (commands, command_rx) = tokio::sync::mpsc::channel(4);
+        let (worker_tx, events) = crate::backpressure::byte_bounded_channel(1024);
+        let worker = run_telnet_worker(
+            TelnetSessionConfig {
+                host: "telnet.invalid".into(),
+                port: 2323,
+            },
+            None,
+            Some(UpstreamProxyConfig {
+                protocol: UpstreamProxyProtocol::Socks5,
+                host: "127.0.0.1".into(),
+                port: proxy_port,
+                auth: UpstreamProxyAuth::Password {
+                    username: "u".into(),
+                    password: "p".to_string().into(),
+                },
+                remote_dns: true,
+                no_proxy: String::new(),
+            }),
+            TerminalEncoding::Utf8,
+            TerminalResize::new(80, 24, 0, 0),
+            command_rx,
+            worker_tx,
+        );
+        let server = async {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut greeting = [0; 4];
+            stream.read_exact(&mut greeting).await.unwrap();
+            assert_eq!(greeting, [5, 2, 0, 2]);
+            stream.write_all(&[5, 2]).await.unwrap();
+            let mut auth = [0; 5];
+            stream.read_exact(&mut auth).await.unwrap();
+            assert_eq!(auth, [1, 1, b'u', 1, b'p']);
+            stream.write_all(&[1, 0]).await.unwrap();
+            let mut request = [0; 21];
+            stream.read_exact(&mut request).await.unwrap();
+            assert_eq!(&request[..5], &[5, 1, 0, 3, 14]);
+            assert_eq!(&request[5..19], b"telnet.invalid");
+            assert_eq!(&request[19..], &2323u16.to_be_bytes());
+            stream
+                .write_all(&[5, 0, 0, 1, 127, 0, 0, 1, 0, 23])
+                .await
+                .unwrap();
+            stream.write_all(&[255, 251, 1]).await.unwrap();
+            let mut reply = [0; 3];
+            stream.read_exact(&mut reply).await.unwrap();
+            assert_eq!(reply, [255, 253, 1]);
+            commands
+                .send(TelnetCommand::Data(vec![b'X', 255]))
+                .await
+                .unwrap();
+            stream.read_exact(&mut reply).await.unwrap();
+            assert_eq!(reply, [b'X', 255, 255]);
+            stream.write_all(b"ready\r\n").await.unwrap();
+        };
+        tokio::time::timeout(Duration::from_secs(3), async {
+            tokio::join!(worker, server);
+        })
+        .await
+        .unwrap();
+        let mut output = Vec::new();
+        while let Ok(event) = events.try_recv() {
+            match event.into_inner() {
+                TelnetWorkerEvent::Output(bytes) => output.extend(bytes),
+                TelnetWorkerEvent::Failed(error) => panic!("{error}"),
+                _ => {}
+            }
+        }
+        assert_eq!(output, b"ready\r\n");
+    }
+
+    #[test]
+    fn interactive_terminal_config_emits_osc52_clipboard_queries() {
+        let size = TerminalSize {
+            cols: 12,
+            rows: 3,
+            cell_width: 8,
+            cell_height: 17,
+        };
+        let (listener, event_rx) = local_event_channel();
+        let mut term = Term::new(interactive_terminal_config(16), &size, listener);
+        let mut parser = Processor::<StdSyncHandler>::new();
+
+        parser.advance(&mut term, b"\x1b]52;c;?\x07");
+
+        let AlacEvent::ClipboardLoad(_, formatter) = event_rx.try_recv().unwrap() else {
+            panic!("expected OSC 52 clipboard query");
+        };
+        assert_eq!(formatter("clipboard"), "\x1b]52;c;Y2xpcGJvYXJk\x07");
+    }
+
+    #[test]
+    fn terminal_wakeup_events_are_coalesced_until_consumed() {
+        let (listener, event_rx) = local_event_channel();
+
+        listener.send_event(AlacEvent::Wakeup);
+        listener.send_event(AlacEvent::Wakeup);
+        listener.send_event(AlacEvent::Wakeup);
+
+        assert!(matches!(event_rx.try_recv(), Ok(AlacEvent::Wakeup)));
+        assert!(matches!(
+            event_rx.try_recv(),
+            Err(crossbeam_channel::TryRecvError::Empty)
+        ));
+
+        listener.send_event(AlacEvent::Wakeup);
+        assert!(matches!(event_rx.try_recv(), Ok(AlacEvent::Wakeup)));
+    }
+
+    #[test]
+    fn ai_terminal_buffer_text_includes_scrollback_rows() {
+        let size = TerminalSize {
+            cols: 12,
+            rows: 3,
+            cell_width: 8,
+            cell_height: 17,
+        };
+        let mut config = Config::default();
+        config.scrolling_history = 16;
+        let mut term = Term::new(config, &size, VoidListener);
+        let mut parser = Processor::<StdSyncHandler>::new();
+
+        // More rows than the viewport proves AI tools receive buffer context,
+        // not just the currently visible screen.
+        for index in 0..6 {
+            let line = format!("line-{index}\r\n");
+            parser.advance(&mut term, line.as_bytes());
+        }
+
+        let buffer = terminal_buffer_text_from_term(&term, size.cols);
+
+        assert!(buffer.lines().count() > size.rows);
+        assert!(buffer.contains("line-0"));
+    }
+
+    #[test]
+    fn clear_terminal_buffer_homes_cursor_for_followup_output() {
+        let size = TerminalSize {
+            cols: 12,
+            rows: 4,
+            cell_width: 8,
+            cell_height: 17,
+        };
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+        let mut parser = Processor::<StdSyncHandler>::new();
+        parser.advance(&mut term, b"\x1b[3;5Hbefore");
+
+        clear_terminal_buffer(&mut term);
+
+        assert_eq!(term.grid().cursor.point, Point::new(Line(0), Column(0)));
+        parser.advance(&mut term, b"next");
+        assert_eq!(term.grid()[Line(0)][Column(0)].c, 'n');
+    }
+
+    #[test]
+    fn ssh_trigger_matches_do_not_enable_full_output_events() {
+        use oxide_terminal_triggers::{
+            TERMINAL_TRIGGERS_SCHEMA_VERSION, TerminalTrigger, TerminalTriggerAction,
+            TerminalTriggerDispatch, TerminalTriggerMatch, TerminalTriggerMatchMode,
+            TerminalTriggerScope, TerminalTriggerTiming, TerminalTriggersSnapshot, compile_active,
+        };
+
+        let snapshot = TerminalTriggersSnapshot {
+            version: TERMINAL_TRIGGERS_SCHEMA_VERSION,
+            triggers: vec![TerminalTrigger {
+                id: "ready".to_string(),
+                name: "ready".to_string(),
+                description: None,
+                enabled: true,
+                matcher: TerminalTriggerMatch {
+                    pattern: "READY".to_string(),
+                    mode: TerminalTriggerMatchMode::Literal,
+                    case_sensitive: true,
+                    whole_word: false,
+                },
+                action: TerminalTriggerAction::SendText {
+                    text: "continue".to_string(),
+                    append_enter: true,
+                },
+                timing: TerminalTriggerTiming {
+                    dispatch: TerminalTriggerDispatch::Immediate,
+                    delay_ms: 0,
+                    cooldown_ms: 100,
+                },
+                scope: TerminalTriggerScope::AllTerminals,
+                created_at: 1,
+                updated_at: 1,
+            }],
+            updated_at: 1,
+        };
+        let rules = compile_active(&snapshot, 7).unwrap();
+        let mut session = SshPtyCore::new_disconnected_for_test(
+            SshSessionConfig::new("127.0.0.1", 9, "nobody"),
+            80,
+            24,
+            GraphicsOptions::default(),
+            TerminalEncoding::Utf8,
+            1000,
+        );
+        TerminalSessionBackend::set_trigger_rules(&mut session, rules);
+
+        session
+            .parser_state
+            .feed_plain_transport_output_to_terminal(b"RE");
+        session
+            .parser_state
+            .feed_plain_transport_output_to_terminal(b"ADY");
+        let events = session.take_events();
+
+        assert!(events.iter().any(|event| {
+            matches!(event, TerminalEvent::TriggerMatched(matched) if matched.trigger_id() == "ready")
+        }));
+        assert!(
+            events
+                .iter()
+                .all(|event| !matches!(event, TerminalEvent::Output(_)))
+        );
+    }
+}

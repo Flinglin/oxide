@@ -1,0 +1,42 @@
+[lints]
+workspace = true
+
+[package]
+name = "oxide-forwarding"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[features]
+default = ["runtime"]
+runtime = [
+  "dep:dashmap",
+  "dep:oxide-backend-classification",
+  "dep:oxide-ssh",
+  "dep:oxide-x11-forwarding",
+  "dep:tokio",
+  "dep:tracing",
+]
+
+[dependencies]
+oxide-audit = { path = "../oxide-audit" }
+chrono.workspace = true
+dashmap = { workspace = true, optional = true }
+oxide-backend-classification = { path = "../oxide-backend-classification", optional = true }
+oxide-atomic-file = { path = "../oxide-atomic-file" }
+oxide-ssh = { path = "../oxide-ssh", optional = true }
+oxide-x11-forwarding = { path = "../oxide-x11-forwarding", optional = true }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+uuid.workspace = true
+
+[dev-dependencies]
+rand.workspace = true
+russh.workspace = true
+serde_json.workspace = true
+tempfile = "3.23"
+zeroize.workspace = true

@@ -1,0 +1,22 @@
+[lints]
+workspace = true
+
+[package]
+name = "oxide-settings"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+oxide-audit = { path = "../oxide-audit" }
+anyhow.workspace = true
+oxide-atomic-file = { path = "../oxide-atomic-file" }
+oxide-portable-runtime = { path = "../oxide-portable-runtime" }
+oxide-render-policy = { path = "../oxide-render-policy" }
+oxide-terminal-semantic = { path = "../oxide-terminal-semantic", default-features = false }
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile = "3.23"

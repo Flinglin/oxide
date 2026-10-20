@@ -1,0 +1,21 @@
+[lints]
+workspace = true
+
+[package]
+name = "oxide-plugin-wasm-runtime"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+oxide-plugin-protocol = { path = "../oxide-plugin-protocol" }
+serde.workspace = true
+serde_json.workspace = true
+wasmtime.workspace = true
+wasmtime-wasi.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+oxide-plugin-manifest = { path = "../oxide-plugin-manifest" }
+tokio.workspace = true
+wat = "1.250.0"

@@ -1,0 +1,26 @@
+[lints]
+workspace = true
+
+[package]
+name = "oxide-terminal-semantic"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[features]
+default = []
+shell-syntax = ["dep:oxide-editor-syntax"]
+
+[dependencies]
+oxide-editor-syntax = { path = "../oxide-editor-syntax", optional = true }
+regex.workspace = true
+roxmltree = "0.20"
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "semantic_classifier"
+harness = false

@@ -1,0 +1,29 @@
+// Copyright (C) 2026 AnalyseDeCircuit
+// SPDX-License-Identifier: GPL-3.0-only
+
+//! Settings page model crate.
+//!
+//! This crate owns non-GPUI settings page behavior: AI profile mutations,
+//! provider refresh DTOs, reconnect option models, knowledge import rules,
+//! cloud sync form drafts, plugin setting draft conversion, and compact
+//! view-model helpers.
+
+pub mod cloud_sync_form;
+pub mod input_draft;
+
+pub mod navigation;
+pub mod plugin;
+pub mod reconnect;
+pub mod semantic_scheme;
+pub mod theme;
+pub mod types;
+
+pub use cloud_sync_form::*;
+pub use input_draft::*;
+
+pub use navigation::*;
+pub use plugin::*;
+pub use reconnect::*;
+pub use semantic_scheme::*;
+pub use theme::*;
+pub use types::*;

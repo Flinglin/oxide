@@ -1,0 +1,13 @@
+[lints]
+workspace = true
+
+[package]
+name = "oxide-plugin-manifest"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+oxide-remote-desktop-core = { path = "../oxide-remote-desktop-core" }
+serde.workspace = true
+serde_json.workspace = true

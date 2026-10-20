@@ -1,0 +1,156 @@
+[lints]
+workspace = true
+
+[package]
+name = "oxide-app"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[features]
+default = ["plugin-wasm-runtime"]
+plugin-wasm-runtime = ["oxide-plugin-host-api/wasm-runtime"]
+
+[[bin]]
+name = "oxide"
+path = "src/main.rs"
+
+[dependencies]
+oxide-background-media = { path = "../oxide-background-media" }
+oxide-background = { path = "../oxide-background" }
+oxide-ftp = { path = "../oxide-ftp" }
+futures-util.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+base64.workspace = true
+chrono.workspace = true
+fs2.workspace = true
+gpui.workspace = true
+image.workspace = true
+oxide-backend-classification = { path = "../oxide-backend-classification" }
+
+
+oxide-secret-key-store = { path = "../oxide-secret-key-store" }
+oxide-atomic-file = { path = "../oxide-atomic-file" }
+oxide-app-lock = { path = "../oxide-app-lock" }
+oxide-cloud-sync = { path = "../oxide-cloud-sync" }
+oxide-connection-monitor = { path = "../oxide-connection-monitor" }
+oxide-connections = { path = "../oxide-connections" }
+oxide-desktop-presence = { path = "../oxide-desktop-presence" }
+oxide-editor-core = { path = "../oxide-editor-core" }
+oxide-forwarding = { path = "../oxide-forwarding" }
+oxide-app-cloud-sync = { path = "../oxide-app-cloud-sync" }
+oxide-editor = { path = "../oxide-editor" }
+oxide-ide = { path = "../oxide-ide" }
+oxide-markdown = { path = "../oxide-markdown" }
+oxide-gpui-platform = { path = "../oxide-gpui-platform" }
+oxide-remote-desktop = { path = "../oxide-remote-desktop" }
+oxide-settings-view = { path = "../oxide-settings-view" }
+oxide-terminal = { path = "../oxide-terminal" }
+oxide-ui = { path = "../oxide-ui" }
+oxide-editor-syntax = { path = "../oxide-editor-syntax" }
+oxide-environment = { path = "../oxide-environment" }
+oxide-i18n = { path = "../oxide-i18n" }
+oxide-ide-core = { path = "../oxide-ide-core" }
+oxide-ide-fs = { path = "../oxide-ide-fs" }
+oxide-local-files = { path = "../oxide-local-files" }
+oxide-mosh = { path = "../oxide-mosh" }
+oxide-audit = { path = "../oxide-audit" }
+oxide-notification-center = { path = "../oxide-notification-center" }
+oxide-network-proxy = { path = "../oxide-network-proxy" }
+oxide-plugin-host-api = { path = "../oxide-plugin-host-api" }
+oxide-plugin-protocol = { path = "../oxide-plugin-protocol" }
+oxide-plugin-registry = { path = "../oxide-plugin-registry" }
+oxide-portable-runtime = { path = "../oxide-portable-runtime" }
+oxide-preview = { path = "../oxide-preview" }
+
+oxide-quick-commands = { path = "../oxide-quick-commands" }
+oxide-remote-desktop-core = { path = "../oxide-remote-desktop-core" }
+oxide-render-policy = { path = "../oxide-render-policy" }
+oxide-settings = { path = "../oxide-settings" }
+oxide-settings-model = { path = "../oxide-settings-model" }
+oxide-session-adapter = { path = "../oxide-session-adapter" }
+oxide-sftp = { path = "../oxide-sftp" }
+oxide-ssh-launch = { path = "../oxide-ssh-launch" }
+oxide-ssh = { path = "../oxide-ssh" }
+oxide-terminal-core= { path = "../oxide-terminal-core" }
+oxide-terminal-semantic = { path = "../oxide-terminal-semantic", default-features = false }
+oxide-terminal-triggers = { path = "../oxide-terminal-triggers" }
+oxide-terminal-recording = { path = "../oxide-terminal-recording" }
+oxide-theme = { path = "../oxide-theme" }
+oxide-topology = { path = "../oxide-topology" }
+oxide-update = { path = "../oxide-update" }
+oxide-workspace = { path = "../oxide-workspace" }
+oxide-wsl-graphics = { path = "../oxide-wsl-graphics" }
+parking_lot.workspace = true
+regex.workspace = true
+redb = "2.1"
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tempfile = "3.23"
+tracing.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+url.workspace = true
+walkdir = "2"
+whoami.workspace = true
+zeroize.workspace = true
+zstd = "0.13"
+
+[build-dependencies]
+embed-resource = "3.0.9"
+zstd = "0.13"
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+ttf-parser = "0.25"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+raw-window-handle.workspace = true
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_UI_WindowsAndMessaging",
+] }
+windows-core.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gstreamer = "0.24.5"
+gstreamer-video = "0.24.5"
+raw-window-handle.workspace = true
+x11-dl = "2.21.0"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.4"
+objc2-app-kit = "0.3.2"
+objc2-av-foundation = "0.3.2"
+objc2-av-kit = "0.3.2"
+objc2-foundation = "0.3.2"
+raw-window-handle.workspace = true
+
+[package.metadata.bundle]
+identifier = "com.analysecircuit.oxide"
+name = "oxide"
+icon = [
+    "resources/icons/32x32.png",
+    "resources/icons/64x64.png",
+    "resources/icons/128x128.png",
+    "resources/icons/128x128@2x.png",
+    "resources/icons/icon.icns",
+    "resources/icons/icon.ico",
+]
+osx_minimum_system_version = "13.0"
+osx_info_plist_exts = ["resources/info/*"]
+osx_entitlements = "resources/oxide.entitlements"
+resources = ["resources/agents", "resources/cli-bin", "resources/icons"]
+

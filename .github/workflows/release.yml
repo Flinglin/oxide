@@ -1,0 +1,73 @@
+name: release
+run-name: release
+
+on:
+    workflow_dispatch:
+
+    push:
+        branches:
+            - 'main'
+        paths:
+            - '.github/release/stable/release_log'
+
+jobs:
+    parse:
+        runs-on: ubuntu-latest
+        outputs:
+            name: ${{ steps.parse.outputs.name }}
+            channel: ${{ steps.parse.outputs.channel }}
+            version: ${{ steps.parse.outputs.version }}
+            release_tag: ${{ steps.parse.outputs.release_tag }}
+        steps:
+            - uses: actions/checkout@v7
+
+            - name: "parse release_log"
+              id: parse
+              shell: bash
+              run: |
+                set -euo pipefail
+                last_line=$(tail -n 1 .github/release/stable/release_log)
+                IFS='_' read -r name channel version tag <<< "$last_line"
+
+                if [[ -z "${name:-}" || -z "${channel:-}" || -z "${version:-}" || -z "${tag:-}" ]]; then
+                    echo "Error:Invalid release_log format: $last_line"
+                    exit 1
+                fi
+
+                echo "name=${name}" >> "$GITHUB_OUTPUT"
+                echo "channel=${channel}" >> "$GITHUB_OUTPUT"
+                echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+                if [[ ${name} == "oxide" ]]; then
+                    echo "release_tag=oxide-${tag}" >> "$GITHUB_OUTPUT"
+                fi
+                if [[ ${name} == "oxide-agent" ]]; then
+                    echo "release_tag=oxide-agent-${tag}" >> "$GITHUB_OUTPUT"
+                fi
+
+    # 发布oxide
+    stable_oxide:
+        needs: parse
+        if: needs.parse.outputs.name == 'oxide'
+        uses: ./.github/workflows/oxide_release.yml
+        permissions:
+            actions: write
+            contents: write
+        with:
+            version: ${{ needs.parse.outputs.version }}
+            release_tag: ${{ needs.parse.outputs.release_tag }}
+            upload_release: true
+
+    # 发布oxide-agent
+    stable_oxide_agent:
+        needs: parse
+        if: needs.parse.outputs.name == 'oxide-agent'
+        uses: ./.github/workflows/oxide_agent_release.yml
+        permissions:
+            actions: write
+            contents: write
+        with:
+            version: ${{ needs.parse.outputs.version }}
+            release_tag: ${{ needs.parse.outputs.release_tag }}
+            upload_release: true
+        

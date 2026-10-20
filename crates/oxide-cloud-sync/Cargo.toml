@@ -1,0 +1,43 @@
+[lints]
+workspace = true
+
+[package]
+name = "oxide-cloud-sync"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[features]
+default = ["runtime"]
+runtime = ["oxide-forwarding/runtime"]
+
+[dependencies]
+anyhow.workspace = true
+automerge = "=0.12.0"
+base64.workspace = true
+chrono.workspace = true
+hmac = "0.12"
+oxide-atomic-file = { path = "../oxide-atomic-file" }
+oxide-audit = { path = "../oxide-audit" }
+oxide-secret-key-store={path = "../oxide-secret-key-store"}
+oxide-connections = { path = "../oxide-connections" }
+oxide-forwarding = { path = "../oxide-forwarding", default-features = false }
+oxide-network-proxy = { path = "../oxide-network-proxy" }
+oxide-portable-runtime = { path = "../oxide-portable-runtime" }
+oxide-quick-commands = { path = "../oxide-quick-commands" }
+oxide-secret-store = { path = "../oxide-secret-store" }
+oxide-settings = { path = "../oxide-settings" }
+reqwest.workspace = true
+rmp-serde.workspace = true
+fs2.workspace = true
+rand.workspace = true
+quick-xml.workspace = true
+percent-encoding = "2"
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+whoami.workspace = true
+zeroize.workspace = true

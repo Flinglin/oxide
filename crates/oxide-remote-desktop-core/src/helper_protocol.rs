@@ -1,0 +1,843 @@
+// Copyright (C) 2026 AnalyseDeCircuit
+// SPDX-License-Identifier: GPL-3.0-only
+
+use std::{fmt, path::PathBuf};
+
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    NegotiatedCapabilities, RemoteDesktopCursorShape, RemoteDesktopEndpoint,
+    RemoteDesktopFileConflictPolicy, RemoteDesktopFileTransferFailureKind, RemoteDesktopFrame,
+    RemoteDesktopFrameUpdate, RemoteDesktopFrameUpdateBatch, RemoteDesktopMonitorLayout,
+    RemoteDesktopProtocol, RemoteDesktopRemoteFileEntry, RemoteDesktopSecret,
+    RemoteDesktopSessionOptions, RemoteDesktopSessionStatus, RemoteDesktopSize,
+};
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteDesktopServerCertificate {
+    pub challenge_id: String,
+    #[serde(default)]
+    pub protocol: RemoteDesktopProtocol,
+    pub endpoint: RemoteDesktopEndpoint,
+    #[serde(default)]
+    pub identity_kind: RemoteDesktopServerIdentityKind,
+    pub security_method: String,
+    pub sha256_fingerprint: String,
+    pub subject: Option<String>,
+    pub issuer: Option<String>,
+    pub valid_from: Option<String>,
+    pub valid_to: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RemoteDesktopServerIdentityKind {
+    #[default]
+    X509Certificate,
+    AnonymousTls,
+    InsecureLegacy,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RemoteDesktopMouseButton {
+    Left,
+    Middle,
+    Right,
+    Back,
+    Forward,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RemoteDesktopMouseButtonState {
+    Pressed,
+    Released,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RemoteDesktopKeyState {
+    Pressed,
+    Released,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteDesktopKey {
+    pub code: String,
+    pub text: Option<String>,
+    pub alt: bool,
+    pub ctrl: bool,
+    pub shift: bool,
+    pub meta: bool,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteDesktopWheelDelta {
+    pub x: f32,
+    pub y: f32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteDesktopLockKeys {
+    pub scroll_lock: bool,
+    pub num_lock: bool,
+    pub caps_lock: bool,
+    pub kana_lock: bool,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RemoteDesktopClipboardFormat {
+    ImagePng,
+    ImageJpeg,
+    ImageWebp,
+    ImageGif,
+    ImageSvg,
+    ImageBmp,
+    ImageTiff,
+}
+
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteDesktopClipboardData {
+    pub format: RemoteDesktopClipboardFormat,
+    pub bytes: Vec<u8>,
+}
+
+impl RemoteDesktopClipboardData {
+    pub fn new(format: RemoteDesktopClipboardFormat, bytes: Vec<u8>) -> Self {
+        Self { format, bytes }
+    }
+}
+
+impl fmt::Debug for RemoteDesktopClipboardData {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RemoteDesktopClipboardData")
+            .field("format", &self.format)
+            .field("bytes", &format_args!("<{} bytes>", self.bytes.len()))
+            .finish()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RemoteDesktopErrorCategory {
+    Configuration,
+    Network,
+    Authentication,
+    Protocol,
+    LegacySecurity,
+    Dependency,
+    Unknown,
+}
+
+#[derive(Deserialize, PartialEq, Serialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum RemoteDesktopHelperRequest {
+    StartConnect {
+        protocol: RemoteDesktopProtocol,
+        endpoint: RemoteDesktopEndpoint,
+        /// Optional network endpoint for an application-owned SSH tunnel.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        transport_endpoint: Option<RemoteDesktopEndpoint>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        socks_proxy: Option<crate::RemoteDesktopSocksProxy>,
+        /// Indicates whether the UI can answer a later password challenge
+        /// without sending any credential material during preflight.
+        #[serde(default)]
+        password_available: bool,
+        /// Indicates whether the UI can answer a later username challenge
+        /// without exposing the username during transport preflight.
+        #[serde(default)]
+        username_available: bool,
+        size: RemoteDesktopSize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scale_factor: Option<u32>,
+        read_only: bool,
+        #[serde(default)]
+        session_options: RemoteDesktopSessionOptions,
+        #[serde(default)]
+        monitor_layout: RemoteDesktopMonitorLayout,
+    },
+    Connect {
+        protocol: RemoteDesktopProtocol,
+        endpoint: RemoteDesktopEndpoint,
+        username: Option<String>,
+        password: Option<RemoteDesktopSecret>,
+        domain: Option<String>,
+        size: RemoteDesktopSize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scale_factor: Option<u32>,
+        read_only: bool,
+    },
+    Authenticate {
+        challenge_id: String,
+        sha256_fingerprint: String,
+        username: Option<String>,
+        password: Option<RemoteDesktopSecret>,
+        domain: Option<String>,
+    },
+    Resize {
+        size: RemoteDesktopSize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scale_factor: Option<u32>,
+    },
+    MouseMove {
+        x: u32,
+        y: u32,
+    },
+    MouseButton {
+        button: RemoteDesktopMouseButton,
+        state: RemoteDesktopMouseButtonState,
+    },
+    Wheel {
+        delta: RemoteDesktopWheelDelta,
+    },
+    Key {
+        key: RemoteDesktopKey,
+        state: RemoteDesktopKeyState,
+    },
+    Text {
+        text: String,
+    },
+    ClipboardText {
+        text: String,
+    },
+    PasteText {
+        text: RemoteDesktopSecret,
+    },
+    ClipboardData {
+        data: RemoteDesktopClipboardData,
+    },
+    ClipboardFiles {
+        transfer_id: String,
+        paths: Vec<PathBuf>,
+    },
+    VncListRemoteFiles {
+        request_id: String,
+        path: String,
+    },
+    VncDownloadRemoteFiles {
+        transfer_id: String,
+        remote_paths: Vec<String>,
+        destination: PathBuf,
+        conflict_policy: RemoteDesktopFileConflictPolicy,
+    },
+    CancelVncFileTransfer {
+        transfer_id: String,
+    },
+    CancelClipboardTransfer {
+        transfer_id: String,
+    },
+    UpdateDisplayLayout {
+        layout: RemoteDesktopMonitorLayout,
+    },
+    SynchronizeLockKeys {
+        keys: RemoteDesktopLockKeys,
+    },
+    RequestFrame,
+    ReleaseAllInputs,
+    Close,
+    Reconnect,
+}
+
+impl fmt::Debug for RemoteDesktopHelperRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::StartConnect {
+                protocol,
+                endpoint,
+                transport_endpoint,
+                socks_proxy,
+                password_available,
+                username_available,
+                size,
+                scale_factor,
+                read_only,
+                session_options,
+                monitor_layout,
+            } => formatter
+                .debug_struct("StartConnect")
+                .field("protocol", protocol)
+                .field("endpoint", endpoint)
+                .field("transport_endpoint", transport_endpoint)
+                .field("socks_proxy", socks_proxy)
+                .field("password_available", password_available)
+                .field("username_available", username_available)
+                .field("size", size)
+                .field("scale_factor", scale_factor)
+                .field("read_only", read_only)
+                .field("session_options", session_options)
+                .field("monitor_count", &monitor_layout.monitors.len())
+                .finish(),
+            Self::Connect {
+                protocol,
+                endpoint,
+                username,
+                password,
+                domain,
+                size,
+                scale_factor,
+                read_only,
+            } => formatter
+                .debug_struct("Connect")
+                .field("protocol", protocol)
+                .field("endpoint", endpoint)
+                .field("username", &username.as_ref().map(|_| "<present>"))
+                .field("password", &password.as_ref().map(|_| "[redacted secret]"))
+                .field("domain", &domain.as_ref().map(|_| "<present>"))
+                .field("size", size)
+                .field("scale_factor", scale_factor)
+                .field("read_only", read_only)
+                .finish(),
+            Self::Authenticate {
+                challenge_id,
+                sha256_fingerprint,
+                username,
+                password,
+                domain,
+            } => formatter
+                .debug_struct("Authenticate")
+                .field("challenge_id", challenge_id)
+                .field("sha256_fingerprint", sha256_fingerprint)
+                .field(
+                    "username",
+                    &username
+                        .as_ref()
+                        .map(|value| format!("<redacted:{}>", value.chars().count())),
+                )
+                .field("password", &password.as_ref().map(|_| "[redacted secret]"))
+                .field("domain", &domain.as_ref().map(|_| "<present>"))
+                .finish(),
+            Self::Resize { size, scale_factor } => formatter
+                .debug_struct("Resize")
+                .field("size", size)
+                .field("scale_factor", scale_factor)
+                .finish(),
+            Self::MouseMove { x, y } => formatter
+                .debug_struct("MouseMove")
+                .field("x", x)
+                .field("y", y)
+                .finish(),
+            Self::MouseButton { button, state } => formatter
+                .debug_struct("MouseButton")
+                .field("button", button)
+                .field("state", state)
+                .finish(),
+            Self::Wheel { delta } => formatter
+                .debug_struct("Wheel")
+                .field("delta", delta)
+                .finish(),
+            Self::Key { key, state } => formatter
+                .debug_struct("Key")
+                // Key text may contain credentials typed into a remote prompt.
+                .field(
+                    "code",
+                    &format_args!("<redacted:{}>", key.code.chars().count()),
+                )
+                .field(
+                    "text",
+                    &key.text
+                        .as_ref()
+                        .map(|text| format!("<redacted:{}>", text.chars().count())),
+                )
+                .field("alt", &key.alt)
+                .field("ctrl", &key.ctrl)
+                .field("shift", &key.shift)
+                .field("meta", &key.meta)
+                .field("state", state)
+                .finish(),
+            Self::Text { text } => formatter
+                .debug_struct("Text")
+                .field("text", &format_args!("<redacted:{}>", text.chars().count()))
+                .finish(),
+            Self::ClipboardText { text } => formatter
+                .debug_struct("ClipboardText")
+                .field("text", &format_args!("<redacted:{}>", text.chars().count()))
+                .finish(),
+            Self::PasteText { .. } => formatter
+                .debug_struct("PasteText")
+                .field("text", &"<redacted>")
+                .finish(),
+            Self::ClipboardData { data } => formatter
+                .debug_struct("ClipboardData")
+                .field("format", &data.format)
+                .field("bytes", &format_args!("<{} bytes>", data.bytes.len()))
+                .finish(),
+            Self::ClipboardFiles { transfer_id, paths } => formatter
+                .debug_struct("ClipboardFiles")
+                .field("transfer_id", transfer_id)
+                .field("path_count", &paths.len())
+                .finish(),
+            Self::VncListRemoteFiles { request_id, path } => formatter
+                .debug_struct("VncListRemoteFiles")
+                .field("request_id", request_id)
+                .field("path", &format_args!("<redacted:{}>", path.chars().count()))
+                .finish(),
+            Self::VncDownloadRemoteFiles {
+                transfer_id,
+                remote_paths,
+                destination: _,
+                conflict_policy,
+            } => formatter
+                .debug_struct("VncDownloadRemoteFiles")
+                .field("transfer_id", transfer_id)
+                .field("remote_path_count", &remote_paths.len())
+                .field("destination", &"<redacted path>")
+                .field("conflict_policy", conflict_policy)
+                .finish(),
+            Self::CancelVncFileTransfer { transfer_id } => formatter
+                .debug_struct("CancelVncFileTransfer")
+                .field("transfer_id", transfer_id)
+                .finish(),
+            Self::CancelClipboardTransfer { transfer_id } => formatter
+                .debug_struct("CancelClipboardTransfer")
+                .field("transfer_id", transfer_id)
+                .finish(),
+            Self::UpdateDisplayLayout { layout } => formatter
+                .debug_struct("UpdateDisplayLayout")
+                .field("monitor_count", &layout.monitors.len())
+                .finish(),
+            Self::SynchronizeLockKeys { keys } => formatter
+                .debug_struct("SynchronizeLockKeys")
+                .field("keys", keys)
+                .finish(),
+            Self::RequestFrame => formatter.write_str("RequestFrame"),
+            Self::ReleaseAllInputs => formatter.write_str("ReleaseAllInputs"),
+            Self::Close => formatter.write_str("Close"),
+            Self::Reconnect => formatter.write_str("Reconnect"),
+        }
+    }
+}
+
+#[derive(Clone, Deserialize, PartialEq, Serialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum RemoteDesktopHelperEvent {
+    Status {
+        status: RemoteDesktopSessionStatus,
+        message: Option<String>,
+    },
+    Connected {
+        size: RemoteDesktopSize,
+    },
+    CapabilitiesNegotiated {
+        capabilities: NegotiatedCapabilities,
+    },
+    ServerCertificate {
+        certificate: RemoteDesktopServerCertificate,
+    },
+    Frame {
+        frame: RemoteDesktopFrame,
+    },
+    FrameUpdate {
+        update: RemoteDesktopFrameUpdate,
+    },
+    FrameUpdateBatch {
+        batch: RemoteDesktopFrameUpdateBatch,
+    },
+    FrameStreamReset {
+        graphics_epoch: u64,
+    },
+    Cursor {
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+    },
+    CursorShape {
+        shape: RemoteDesktopCursorShape,
+    },
+    CursorDefault,
+    CursorHidden,
+    ClipboardText {
+        text: String,
+    },
+    ClipboardData {
+        data: RemoteDesktopClipboardData,
+    },
+    ClipboardFilesReady {
+        transfer_id: String,
+        paths: Vec<PathBuf>,
+    },
+    ClipboardTransferFailed {
+        transfer_id: String,
+        message: String,
+    },
+    VncRemoteFilesListed {
+        request_id: String,
+        path: String,
+        entries: Vec<RemoteDesktopRemoteFileEntry>,
+    },
+    VncRemoteFileListFailed {
+        request_id: String,
+    },
+    VncFileTransferProgress {
+        transfer_id: String,
+        file_name: String,
+        transferred_bytes: u64,
+        total_bytes: u64,
+        completed_files: u32,
+        total_files: u32,
+    },
+    VncFileTransferCompleted {
+        transfer_id: String,
+        paths: Vec<PathBuf>,
+        skipped_files: u32,
+    },
+    VncFileTransferFailed {
+        transfer_id: String,
+        kind: RemoteDesktopFileTransferFailureKind,
+    },
+    ConnectionFailure {
+        message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        category: Option<RemoteDesktopErrorCategory>,
+    },
+    Disconnected {
+        reason: Option<String>,
+    },
+    Terminated {
+        exit_code: Option<i32>,
+    },
+}
+
+impl fmt::Debug for RemoteDesktopHelperEvent {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Status { status, message } => formatter
+                .debug_struct("Status")
+                .field("status", status)
+                .field("message", message)
+                .finish(),
+            Self::Connected { size } => formatter
+                .debug_struct("Connected")
+                .field("size", size)
+                .finish(),
+            Self::CapabilitiesNegotiated { capabilities } => formatter
+                .debug_struct("CapabilitiesNegotiated")
+                .field("capabilities", capabilities)
+                .finish(),
+            Self::ServerCertificate { certificate } => formatter
+                .debug_struct("ServerCertificate")
+                .field("challenge_id", &certificate.challenge_id)
+                .field("protocol", &certificate.protocol)
+                .field("endpoint", &certificate.endpoint)
+                .field("identity_kind", &certificate.identity_kind)
+                .field("security_method", &certificate.security_method)
+                .field("sha256_fingerprint", &certificate.sha256_fingerprint)
+                .field("subject", &certificate.subject)
+                .field("issuer", &certificate.issuer)
+                .field("valid_from", &certificate.valid_from)
+                .field("valid_to", &certificate.valid_to)
+                .finish(),
+            Self::Frame { frame } => formatter
+                .debug_struct("Frame")
+                .field("size", &frame.size)
+                .field("format", &frame.format)
+                .field("graphics_epoch", &frame.graphics_epoch)
+                .field("trace_id", &frame.trace_id)
+                .field("bytes", &format_args!("<{} bytes>", frame.bytes.len()))
+                .finish(),
+            Self::FrameUpdate { update } => formatter
+                .debug_struct("FrameUpdate")
+                .field("size", &update.size)
+                .field("rect", &update.rect)
+                .field("format", &update.format)
+                .field("graphics_epoch", &update.graphics_epoch)
+                .field("trace_id", &update.trace_id)
+                .field("compression", &update.compression)
+                .field("bytes", &format_args!("<{} bytes>", update.bytes.len()))
+                .finish(),
+            Self::FrameUpdateBatch { batch } => formatter
+                .debug_struct("FrameUpdateBatch")
+                .field("updates", &batch.updates.len())
+                .field("bytes", &format_args!("<{} bytes>", batch.byte_len()))
+                .finish(),
+            Self::FrameStreamReset { graphics_epoch } => formatter
+                .debug_struct("FrameStreamReset")
+                .field("graphics_epoch", graphics_epoch)
+                .finish(),
+            Self::Cursor {
+                x,
+                y,
+                width,
+                height,
+            } => formatter
+                .debug_struct("Cursor")
+                .field("x", x)
+                .field("y", y)
+                .field("width", width)
+                .field("height", height)
+                .finish(),
+            Self::CursorShape { shape } => formatter
+                .debug_struct("CursorShape")
+                .field("size", &shape.size)
+                .field("hotspot_x", &shape.hotspot_x)
+                .field("hotspot_y", &shape.hotspot_y)
+                .field("format", &shape.format)
+                .field("bytes", &format_args!("<{} bytes>", shape.bytes.len()))
+                .finish(),
+            Self::CursorDefault => formatter.write_str("CursorDefault"),
+            Self::CursorHidden => formatter.write_str("CursorHidden"),
+            Self::ClipboardText { text } => formatter
+                .debug_struct("ClipboardText")
+                .field("text", &format_args!("<redacted:{}>", text.chars().count()))
+                .finish(),
+            Self::ClipboardData { data } => formatter
+                .debug_struct("ClipboardData")
+                .field("format", &data.format)
+                .field("bytes", &format_args!("<{} bytes>", data.bytes.len()))
+                .finish(),
+            Self::ClipboardFilesReady { transfer_id, paths } => formatter
+                .debug_struct("ClipboardFilesReady")
+                .field("transfer_id", transfer_id)
+                .field("path_count", &paths.len())
+                .finish(),
+            Self::ClipboardTransferFailed {
+                transfer_id,
+                message,
+            } => formatter
+                .debug_struct("ClipboardTransferFailed")
+                .field("transfer_id", transfer_id)
+                .field("message", message)
+                .finish(),
+            Self::VncRemoteFilesListed {
+                request_id,
+                path,
+                entries,
+            } => formatter
+                .debug_struct("VncRemoteFilesListed")
+                .field("request_id", request_id)
+                .field("path", &format_args!("<redacted:{}>", path.chars().count()))
+                .field("entry_count", &entries.len())
+                .finish(),
+            Self::VncRemoteFileListFailed { request_id } => formatter
+                .debug_struct("VncRemoteFileListFailed")
+                .field("request_id", request_id)
+                .finish(),
+            Self::VncFileTransferProgress {
+                transfer_id,
+                file_name,
+                transferred_bytes,
+                total_bytes,
+                completed_files,
+                total_files,
+            } => formatter
+                .debug_struct("VncFileTransferProgress")
+                .field("transfer_id", transfer_id)
+                .field(
+                    "file_name",
+                    &format_args!("<redacted:{}>", file_name.chars().count()),
+                )
+                .field("transferred_bytes", transferred_bytes)
+                .field("total_bytes", total_bytes)
+                .field("completed_files", completed_files)
+                .field("total_files", total_files)
+                .finish(),
+            Self::VncFileTransferCompleted {
+                transfer_id,
+                paths,
+                skipped_files,
+            } => formatter
+                .debug_struct("VncFileTransferCompleted")
+                .field("transfer_id", transfer_id)
+                .field("path_count", &paths.len())
+                .field("skipped_files", skipped_files)
+                .finish(),
+            Self::VncFileTransferFailed { transfer_id, kind } => formatter
+                .debug_struct("VncFileTransferFailed")
+                .field("transfer_id", transfer_id)
+                .field("kind", kind)
+                .finish(),
+            Self::ConnectionFailure { message, category } => formatter
+                .debug_struct("ConnectionFailure")
+                .field("message", message)
+                .field("category", category)
+                .finish(),
+            Self::Disconnected { reason } => formatter
+                .debug_struct("Disconnected")
+                .field("reason", reason)
+                .finish(),
+            Self::Terminated { exit_code } => formatter
+                .debug_struct("Terminated")
+                .field("exit_code", exit_code)
+                .finish(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_debug_redacts_credentials_and_clipboard_paths() {
+        for (request, marker, secrets) in [
+            (
+                RemoteDesktopHelperRequest::Connect {
+                    protocol: RemoteDesktopProtocol::Rdp,
+                    endpoint: RemoteDesktopEndpoint::new("example.test", 3389),
+                    username: Some("admin".into()),
+                    password: Some(RemoteDesktopSecret::from("super-secret")),
+                    domain: Some("corp".into()),
+                    size: RemoteDesktopSize {
+                        width: 1280,
+                        height: 720,
+                    },
+                    scale_factor: Some(125),
+                    read_only: false,
+                },
+                "redacted",
+                &["super-secret", "admin", "corp"][..],
+            ),
+            (
+                RemoteDesktopHelperRequest::Authenticate {
+                    challenge_id: "challenge".into(),
+                    sha256_fingerprint: "AA:BB".into(),
+                    username: Some("admin".into()),
+                    password: Some(RemoteDesktopSecret::from("super-secret")),
+                    domain: Some("corp".into()),
+                },
+                "redacted",
+                &["super-secret", "admin", "corp"][..],
+            ),
+            (
+                RemoteDesktopHelperRequest::ClipboardFiles {
+                    transfer_id: "transfer".into(),
+                    paths: vec![PathBuf::from("/private/example.txt")],
+                },
+                "path_count",
+                &["/private/example.txt"][..],
+            ),
+        ] {
+            let debug = format!("{request:?}");
+            assert!(debug.contains(marker));
+            for &secret in secrets {
+                assert!(!debug.contains(secret), "sensitive debug field leaked");
+            }
+        }
+    }
+
+    #[test]
+    fn socks_proxy_credentials_cross_only_the_helper_wire() {
+        let request = RemoteDesktopHelperRequest::StartConnect {
+            protocol: RemoteDesktopProtocol::Rdp,
+            endpoint: RemoteDesktopEndpoint::new("desktop.test", 3389),
+            transport_endpoint: None,
+            socks_proxy: Some(crate::RemoteDesktopSocksProxy {
+                host: "proxy.test".into(),
+                port: 1080,
+                remote_dns: true,
+                no_proxy: String::new(),
+                auth: Some(crate::RemoteDesktopProxyAuth {
+                    username: "proxy-user".into(),
+                    password: "proxy-secret".into(),
+                }),
+            }),
+            password_available: true,
+            username_available: true,
+            size: RemoteDesktopSize {
+                width: 1280,
+                height: 720,
+            },
+            scale_factor: None,
+            read_only: false,
+            session_options: RemoteDesktopSessionOptions::default(),
+            monitor_layout: RemoteDesktopMonitorLayout::default(),
+        };
+        assert!(!format!("{request:?}").contains("proxy-secret"));
+        let encoded = zeroize::Zeroizing::new(serde_json::to_string(&request).unwrap());
+        let decoded: RemoteDesktopHelperRequest = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(decoded, request);
+    }
+
+    #[test]
+    fn helper_request_wire_fixtures_preserve_variants_and_optional_scale() {
+        for (wire, expected) in [
+            (
+                serde_json::json!({"type":"connect","protocol":"rdp","endpoint":{"host":"example.test","port":3389},"username":null,"password":null,"domain":null,"size":{"width":1280,"height":720},"readOnly":false}),
+                RemoteDesktopHelperRequest::Connect {
+                    protocol: RemoteDesktopProtocol::Rdp,
+                    endpoint: RemoteDesktopEndpoint::new("example.test", 3389),
+                    username: None,
+                    password: None,
+                    domain: None,
+                    size: RemoteDesktopSize {
+                        width: 1280,
+                        height: 720,
+                    },
+                    scale_factor: None,
+                    read_only: false,
+                },
+            ),
+            (
+                serde_json::json!({"type":"resize","size":{"width":1024,"height":768}}),
+                RemoteDesktopHelperRequest::Resize {
+                    size: RemoteDesktopSize {
+                        width: 1024,
+                        height: 768,
+                    },
+                    scale_factor: None,
+                },
+            ),
+            (
+                serde_json::json!({"type":"resize","size":{"width":1024,"height":768},"scaleFactor":125}),
+                RemoteDesktopHelperRequest::Resize {
+                    size: RemoteDesktopSize {
+                        width: 1024,
+                        height: 768,
+                    },
+                    scale_factor: Some(125),
+                },
+            ),
+            (
+                serde_json::json!({"type":"releaseAllInputs"}),
+                RemoteDesktopHelperRequest::ReleaseAllInputs,
+            ),
+            (
+                serde_json::json!({"type":"synchronizeLockKeys","keys":{"scrollLock":true,"numLock":false,"capsLock":true,"kanaLock":false}}),
+                RemoteDesktopHelperRequest::SynchronizeLockKeys {
+                    keys: RemoteDesktopLockKeys {
+                        scroll_lock: true,
+                        num_lock: false,
+                        caps_lock: true,
+                        kana_lock: false,
+                    },
+                },
+            ),
+        ] {
+            assert_eq!(serde_json::to_value(&expected).unwrap(), wire);
+            let decoded: RemoteDesktopHelperRequest = serde_json::from_value(wire).unwrap();
+            assert_eq!(decoded, expected);
+        }
+    }
+
+    #[test]
+    fn connection_failure_accepts_missing_category() {
+        let decoded: RemoteDesktopHelperEvent =
+            serde_json::from_str(r#"{"type":"connectionFailure","message":"old helper failure"}"#)
+                .unwrap();
+
+        assert_eq!(
+            decoded,
+            RemoteDesktopHelperEvent::ConnectionFailure {
+                message: "old helper failure".to_string(),
+                category: None,
+            }
+        );
+    }
+}

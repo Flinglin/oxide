@@ -1,0 +1,23 @@
+[lints]
+workspace = true
+
+[package]
+name = "oxide-session-adapter"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+oxide-terminal-core = { path = "../oxide-terminal-core" }
+oxide-remote-desktop-core = { path = "../oxide-remote-desktop-core" }
+oxide-connections = { path = "../oxide-connections" }
+oxide-settings = { path = "../oxide-settings" }
+oxide-sftp = { path = "../oxide-sftp" }
+oxide-ssh = { path = "../oxide-ssh" }
+
+[dev-dependencies]
+chrono.workspace = true
+
+[target.'cfg(not(target_os = "macos"))'.dev-dependencies]
+keyring.workspace = true
+

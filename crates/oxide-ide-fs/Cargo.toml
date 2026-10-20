@@ -1,0 +1,29 @@
+[lints]
+workspace = true
+
+[package]
+name = "oxide-ide-fs"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+oxide-audit = { path = "../oxide-audit" }
+oxide-backend-classification = { path = "../oxide-backend-classification" }
+oxide-ide-core = { path = "../oxide-ide-core" }
+oxide-sftp = { path = "../oxide-sftp" }
+oxide-ssh = { path = "../oxide-ssh" }
+base64.workspace = true
+dashmap.workspace = true
+futures-util.workspace = true
+russh.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+zstd = "0.13"
+
+oxide-preview = { path = "../oxide-preview" }
+encoding_rs.workspace = true
+zeroize.workspace = true

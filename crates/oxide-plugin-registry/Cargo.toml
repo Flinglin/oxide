@@ -1,0 +1,25 @@
+[lints]
+workspace = true
+
+[package]
+name = "oxide-plugin-registry"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+futures-util.workspace = true
+oxide-remote-desktop-core = { path = "../oxide-remote-desktop-core" }
+oxide-atomic-file = { path = "../oxide-atomic-file" }
+
+oxide-network-proxy = { path = "../oxide-network-proxy" }
+oxide-plugin-manifest = { path = "../oxide-plugin-manifest" }
+oxide-plugin-protocol = { path = "../oxide-plugin-protocol" }
+reqwest.workspace = true
+semver.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

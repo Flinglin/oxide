@@ -1,0 +1,61 @@
+[lints]
+workspace = true
+
+[package]
+name = "oxide-terminal"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[features]
+bench = []
+
+[dependencies]
+oxide-terminal-core = { path = "../oxide-terminal-core" }
+oxide-terminal-recording = { path = "../oxide-terminal-recording" }
+oxide-terminal-triggers = { path = "../oxide-terminal-triggers" }
+oxide-terminal-semantic = { path = "../oxide-terminal-semantic", features = [
+    "shell-syntax",
+] }
+oxide-terminal-unicode = { path = "../oxide-terminal-unicode" }
+oxide-theme = { path = "../oxide-theme" }
+oxide-trzsz = { path = "../oxide-trzsz" }
+parking_lot.workspace = true
+regex.workspace = true
+serde_json.workspace = true
+tempfile = "3.23"
+unicode-segmentation.workspace = true
+unicode-width.workspace = true
+vte.workspace = true
+zeroize.workspace = true
+oxide-ui = { path = "../oxide-ui" }
+uuid.workspace = true
+oxide-audit = { path = "../oxide-audit" }
+anyhow.workspace = true
+async-channel.workspace = true
+chrono.workspace = true
+futures.workspace = true
+gpui.workspace = true
+oxide-background-media = { path = "../oxide-background-media" }
+oxide-background = { path = "../oxide-background" }
+image.workspace = true
+oxide-render-policy = { path = "../oxide-render-policy" }
+oxide-editor = { path = "../oxide-editor" }
+oxide-modem-transfer = { path = "../oxide-modem-transfer" }
+oxide-settings = { path = "../oxide-settings" }
+oxide-ssh = { path = "../oxide-ssh" }
+
+[dev-dependencies]
+russh.workspace = true
+rand.workspace = true
+tokio.workspace = true
+crossbeam-channel.workspace = true
+criterion = { version = "0.8.2", features = ["html_reports"] }
+gpui = { workspace = true, features = ["bench", "test-support"] }
+gpui_platform = { workspace = true, features = ["font-kit", "bench-support"] }
+
+[[bench]]
+name = "terminal_render"
+harness = false
+required-features = ["bench"]
+

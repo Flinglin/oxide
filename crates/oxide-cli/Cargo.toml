@@ -1,0 +1,37 @@
+[lints]
+workspace = true
+
+[package]
+name = "oxide-cli"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "oxide-cli"
+path = "src/main.rs"
+
+[dependencies]
+oxide-audit = { path = "../oxide-audit" }
+chrono.workspace = true
+clap.workspace = true
+clap_complete.workspace = true
+fs2.workspace = true
+oxide-secret-key-store={path = "../oxide-secret-key-store"}
+oxide-cloud-sync = { path = "../oxide-cloud-sync", default-features = false }
+oxide-connections = { path = "../oxide-connections" }
+oxide-forwarding = { path = "../oxide-forwarding", default-features = false }
+oxide-portable-runtime = { path = "../oxide-portable-runtime" }
+oxide-quick-commands = { path = "../oxide-quick-commands" }
+oxide-settings = { path = "../oxide-settings" }
+oxide-ssh = { path = "../oxide-ssh" }
+oxide-ssh-launch = { path = "../oxide-ssh-launch" }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["io-std"] }
+zeroize.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile = "3.23"

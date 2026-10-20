@@ -1,0 +1,14 @@
+[lints]
+workspace = true
+
+[package]
+name = "oxide-plugin-protocol"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+oxide-plugin-manifest = { path = "../oxide-plugin-manifest" }
+serde.workspace = true
+serde_json.workspace = true
+zeroize.workspace = true

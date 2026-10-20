@@ -1,0 +1,26 @@
+[lints]
+workspace = true
+
+[package]
+name = "oxide-portable-runtime"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+argon2.workspace = true
+base64.workspace = true
+chacha20poly1305.workspace = true
+fs2.workspace = true
+oxide-atomic-file = { path = "../oxide-atomic-file" }
+oxide-secret-store = { path = "../oxide-secret-store" }
+parking_lot.workspace = true
+rand.workspace = true
+rmp-serde.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile = "3.23"

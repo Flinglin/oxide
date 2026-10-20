@@ -1,0 +1,249 @@
+name: Oxide Agent Package
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Optional artifact version override, for example 0.1.0-preview.1"
+        required: false
+        type: string
+      release_tag:
+        description: "Existing release tag to publish, for example oxide-agent-v2.0.25"
+        required: false
+        type: string
+      upload_release:
+        description: "Upload artifacts to release_tag"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oxide-agent-package-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-release-request:
+    name: Validate oxide release request
+    runs-on: ubuntu-latest
+    outputs:
+      raw_version: ${{ steps.release_request.outputs.raw_version }}
+      release_commit: ${{ steps.release_request.outputs.release_commit }}
+      release_tag: ${{ steps.release_request.outputs.release_tag }}
+      version: ${{ steps.release_request.outputs.version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate version, tag, and commit
+        id: release_request
+        shell: bash
+        env:
+          INPUT_RELEASE_TAG: ${{ inputs.release_tag }} #oxide-v0.1.0
+          INPUT_VERSION: ${{ inputs.version }} #0.1.0
+          INPUT_UPLOAD_RELEASE: ${{ inputs.upload_release }} #
+        run: |
+          set -euo pipefail
+
+          workspace_version="$(python3 -c 'import tomllib; print(tomllib.load(open("agent/Cargo.toml", "rb"))["package"]["version"])')"
+          input_version="${INPUT_VERSION}"
+          raw_version="${INPUT_RELEASE_TAG#oxide-agent-}"
+          release_tag="${INPUT_RELEASE_TAG}"
+          release_commit="${GITHUB_SHA}"
+
+
+          if [[ "${INPUT_UPLOAD_RELEASE}" == "true" ]]; then
+            if [[ "${GITHUB_REF}" != "refs/heads/main" ]]; then
+              echo "Release publishing must be dispatched from main, not ${GITHUB_REF}." >&2
+              exit 1
+            fi
+            if [[ -z "${INPUT_RELEASE_TAG}" ]]; then
+              echo 'Release publishing requires release_tag.' >&2
+              exit 1
+            fi
+            
+            git fetch --no-tags origin "refs/tags/${release_tag}:refs/tags/${release_tag}"
+            tag_commit="$(git rev-list -n 1 "refs/tags/${release_tag}")"
+            if ! git merge-base --is-ancestor "${tag_commit}" "${GITHUB_SHA}"; then
+              echo "Release tag ${release_tag} points outside dispatched main history." >&2
+              exit 1
+            fi
+
+            workspace_version="$(git show "${tag_commit}:agent/Cargo.toml" | python3 -c 'import sys, tomllib; print(tomllib.loads(sys.stdin.read())["package"]["version"])')"
+          elif [[ -n "${INPUT_RELEASE_TAG}" ]]; then
+            echo 'release_tag is only valid when upload_release is enabled.' >&2
+            exit 1
+          fi
+
+          if [[ "${INPUT_UPLOAD_RELEASE}" == "true" && -n "${INPUT_VERSION}" ]]; then
+            if [[ "${input_version}" != "${raw_version#v}" ]]; then
+              echo "version input ${input_version} does not match release tag version ${raw_version}." >&2
+              exit 1
+            fi
+          fi
+
+          if [[ "${input_version}" != "${workspace_version}" ]]; then
+            echo "Requested version ${input_version} does not match workspace version ${workspace_version}." >&2
+            exit 1
+          fi
+
+          echo "raw_version=${raw_version}" >> "${GITHUB_OUTPUT}"
+          echo "release_commit=${release_commit}" >> "${GITHUB_OUTPUT}"
+          echo "release_tag=${release_tag}" >> "${GITHUB_OUTPUT}"
+          echo "version=${input_version}" >> "${GITHUB_OUTPUT}"
+  
+  build:
+    name: Build oxide agents on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest       # 原生 x86_64 Linux
+          - os: ubuntu-24.04-arm    # 原生 ARM64 Linux (需公开仓库或付费版)
+    needs: validate-release-request
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          # Keep this workflow on the default branch while building the requested source branch.
+          ref: ${{ github.ref }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable # stable
+        with:
+          toolchain: 1.97.0
+          components: rustfmt
+          targets: x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2 # v2
+        with:
+          workspaces: ./agent -> target
+          key: remote-agent-binaries
+          cache-on-failure: false
+      
+      - name: Install Linux system dependencies
+        uses: ./.github/actions/install-linux-deps
+        with:
+          extra_packages: 'curl file patchelf desktop-file-utils dpkg-dev rpm freerdp2-dev'
+      
+      - name: Build bundled remote agents
+        run: ./scripts/build/build-agent.sh
+
+      - name: Verify bundled artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -x dist/agents/oxide-agent-*-linux-gnu
+          file dist/agents/oxide-agent_*-linux-gnu
+          sha256sum dist/agents/oxide-agent-*-linux-gnu
+
+      - name: Upload bundled agents
+        uses: actions/upload-artifact@v7 # v7.0.1
+        with:
+          name: oxide-agent-${{ matrix.os }}
+          # 只上传当前系统编译出的文件
+          path: dist/agents/oxide-agent-*-linux-gnu
+          if-no-files-found: error
+  
+  release:
+    name: Publish release assets
+    needs:
+      - build
+      - validate-release-request
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.release_meta.outputs.tag }}
+      version: ${{ steps.release_meta.outputs.version }}
+      prerelease: ${{ steps.release_meta.outputs.prerelease }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7 # v7.0.1
+        with:
+          ref: ${{ needs.validate-release-request.outputs.release_commit }}
+      
+      - name: Download package artifacts
+        uses: actions/download-artifact@v8 # v4
+        with:
+          pattern: oxide-agent*
+          path: dist-release
+          merge-multiple: true
+      
+      - name: Resolve release metadata
+        id: release_meta
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.validate-release-request.outputs.release_tag }}
+          RELEASE_VERSION: ${{ needs.validate-release-request.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          echo "tag=${RELEASE_TAG}" >> "${GITHUB_OUTPUT}"
+          echo "version=${RELEASE_VERSION}" >> "${GITHUB_OUTPUT}"
+      
+      - name: Resolve release notes
+        id: release_notes
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.release_meta.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.release_meta.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          notes_channel="stable"
+          notes_changelog=".github/release/stable/oxide_agent_changelog.md"
+          notes_template=".github/release/stable/template.md"
+
+          # Every channel combines channel evergreen text with a single
+          # versioned changelog section so release history can stay in Git.
+          python3 .github/scripts/compose_release_notes.py \
+            --version "${RELEASE_VERSION}" \
+            --tag "${RELEASE_TAG}" \
+            --template "${notes_template}" \
+            --changelog "${notes_changelog}" \
+            --output release-notes.md
+
+          echo "channel=${notes_channel}" >> "${GITHUB_OUTPUT}"
+          echo "generate_release_notes=false" >> "${GITHUB_OUTPUT}"
+          echo "body_path=release-notes.md" >> "${GITHUB_OUTPUT}"
+      
+      - name: Generate release checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t checksum_assets < <(find dist-release -maxdepth 1 -type f \( \
+            -name 'oxide-agent-*-linux-gnu' \
+          \) | sort -u)
+
+          if [[ "${#checksum_assets[@]}" -eq 0 ]]; then
+            echo "No native release assets found for checksum generation." >&2
+            exit 1
+          fi
+
+          (cd dist-release && sha256sum "${checksum_assets[@]/#dist-release\//}" > sha256sums.txt)
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v3 # v2
+        with:
+          files: |
+            dist-release/oxide-agent-*-linux-gnu
+            dist-release/sha256sums.txt
+          tag_name: ${{ steps.release_meta.outputs.tag }}
+          target_commitish: ${{ needs.validate-release-request.outputs.release_commit }}
+          name: oxide-agent ${{ steps.release_meta.outputs.version }}
+          prerelease: ${{ steps.release_meta.outputs.prerelease }}
+          # Stable releases become Latest automatically; prereleases must never
+          # displace the current stable release.
+          make_latest: ${{ steps.release_meta.outputs.prerelease == 'false' }}
+          body_path: ${{ steps.release_notes.outputs.body_path }}
+          generate_release_notes: ${{ steps.release_notes.outputs.generate_release_notes }}
+          # Re-running a release for the same tag (for example after a partial
+          # upload failure) must overwrite in place instead of failing on an
+          # existing release.

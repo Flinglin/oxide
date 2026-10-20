@@ -1,0 +1,65 @@
+schema_version = 4
+primary_upstream = "gpui-pre"
+publisher = "Longbridge"
+registry = "https://crates.io"
+gpui_pre_version = "0.3.7"
+consumer_baseline = "gpui-kit v0.7.0"
+zed_repository = "https://github.com/zed-industries/zed.git"
+zed_commit = "1a28cff4b409169bac058bca40dfbfeb7621d19b"
+gpui_ce_repository = "https://github.com/gpui-ce/gpui-ce.git"
+gpui_ce_commit = "9949f8b2d27bb1d6dbc1efe90be039634cf1fb6b"
+previous_zed_commit = "0969b0dba3f3411592fce801d00f8d81b8dcf902"
+upstream_license = "Apache-2.0"
+upstream_root_license = "crates/gpui-ce/gpui/GPUI_CE_ROOT_LICENSE.md"
+packaged_license = "licenses/third-party/GPUI-CE-LICENSE-APACHE"
+previous_imported_on = "2026-08-25"
+imported_on = "2026-10-03"
+migration_parent_commit = "21424825bc6d767be7003ba6fe78bc3e656ab35f"
+oxide_import_parent_commit = "f462f86a7bcbc5d2803b55b118f6763a3b7c89b6"
+oxide_rust_toolchain = "1.94.1"
+oxide_cargo_resolver = "2"
+local_patch_ledger = "crates/gpui-ce/gpui/oxide_PATCHES.md"
+
+# Checksums identify pristine crates.io archives, not the locally patched trees.
+
+[[crates]]
+name = "gpui-pre"
+local_path = "crates/gpui-ce/gpui"
+zed_crate = "gpui"
+zed_version = "0.2.2"
+registry_checksum = "0e87a42bb37c7cb4e76dd1ac0ce88851e46e976e0373a47ab3e0757abffee54d"
+
+[[crates]]
+name = "gpui-pre-apple"
+local_path = "crates/gpui-ce/gpui_apple"
+zed_crate = "gpui_apple"
+zed_version = "0.1.0"
+registry_checksum = "00053551517815ab169fda28fff78dbebf2712722593c7671c511785cb3f79d5"
+
+[[crates]]
+name = "gpui-pre-macos"
+local_path = "crates/gpui-ce/gpui_macos"
+zed_crate = "gpui_macos"
+zed_version = "0.1.0"
+registry_checksum = "5a43af845b260b09393e923c4f1e1a67a10fcfc847b4815192bbfd02ed9fe725"
+
+[[crates]]
+name = "gpui-pre-windows"
+local_path = "crates/gpui-ce/gpui_windows"
+zed_crate = "gpui_windows"
+zed_version = "0.1.0"
+registry_checksum = "f05592a6f9e3e6bb7a9f2a0d4779271cf747a948db1c07b02448de777ffff8f3"
+
+[[crates]]
+name = "gpui-pre-linux"
+local_path = "crates/gpui-ce/gpui_linux"
+zed_crate = "gpui_linux"
+zed_version = "0.1.0"
+registry_checksum = "0aac7022e347409454777701082201742710052813964a1e25160f7e22c965ad"
+
+[[crates]]
+name = "gpui-pre-wgpu"
+local_path = "crates/gpui-ce/gpui_wgpu"
+zed_crate = "gpui_wgpu"
+zed_version = "0.1.0"
+registry_checksum = "f0b02657b56b09140ce542f5e4434fb96d9fdaba0fd0035ba7dba13c171ddb9b"

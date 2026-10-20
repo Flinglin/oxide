@@ -1,0 +1,1134 @@
+fn ssh_client_config(
+    legacy_ssh_compatibility: bool,
+    ssh_algorithms: &oxide_connections::SshAlgorithmPreferences,
+) -> Result<client::Config, SshTransportError> {
+    let mut config = client::Config {
+        inactivity_timeout: None,
+        keepalive_interval: Some(Duration::from_secs(30)),
+        keepalive_max: 3,
+        window_size: 32 * 1024 * 1024,
+        maximum_packet_size: 256 * 1024,
+        ..client::Config::default()
+    };
+    // The persisted policy is compiled once per physical connection. Invalid
+    // names fail before the handshake instead of silently widening the offer.
+    config.preferred = crate::preferred_algorithms(legacy_ssh_compatibility, ssh_algorithms)
+        .map_err(|error| SshTransportError::ConnectionFailed(error.to_string()))?;
+    Ok(config)
+}
+
+async fn open_direct_tcpip_stream(
+    handle: &client::Handle<NativeClientHandler>,
+    host: &str,
+    port: u16,
+) -> Result<russh::ChannelStream<client::Msg>, SshTransportError> {
+    open_direct_tcpip_stream_with_origin(handle, host, port, "127.0.0.1", 0).await
+}
+
+async fn open_direct_tcpip_stream_with_origin(
+    handle: &client::Handle<NativeClientHandler>,
+    host: &str,
+    port: u16,
+    origin_host: &str,
+    origin_port: u16,
+) -> Result<russh::ChannelStream<client::Msg>, SshTransportError> {
+    handle
+        .channel_open_direct_tcpip(host, port as u32, origin_host, origin_port as u32)
+        .await
+        .map(|channel| channel.into_stream())
+        .map_err(|error| {
+            SshTransportError::ConnectionFailed(format!(
+                "failed to open proxy tunnel to {host}:{port}: {error}"
+            ))
+        })
+}
+
+fn validate_proxy_chain_depth(chain: &[ProxyHopConfig]) -> Result<(), SshTransportError> {
+    if chain.len() > MAX_PROXY_CHAIN_DEPTH {
+        return Err(SshTransportError::ConnectionFailed(format!(
+            "proxy chain too long: {} hops (max {})",
+            chain.len(),
+            MAX_PROXY_CHAIN_DEPTH
+        )));
+    }
+    Ok(())
+}
+
+fn proxy_hop_handler(hop: &ProxyHopConfig) -> Result<NativeClientHandler, SshTransportError> {
+    NativeClientHandler::new(
+        hop.host.clone(),
+        hop.port,
+        hop.strict_host_key_checking,
+        hop.trust_host_key,
+        hop.expected_host_key_fingerprint.clone(),
+        hop.agent_forwarding,
+        hop.identity_agent.clone(),
+        hop.agent_forwarding_socket.clone(),
+        Arc::new(RwLock::new(None)),
+        Arc::new(RwLock::new(None)),
+    )
+}
+
+async fn authenticate_proxy_hop(
+    handle: &mut client::Handle<NativeClientHandler>,
+    hop: &ProxyHopConfig,
+    prompt_handler: Option<&dyn SshPromptHandler>,
+    managed_key_resolver: Option<&ManagedKeyResolver>,
+    audit: Option<&oxide_audit::AuditContext>,
+) -> Result<(), SshTransportError> {
+    let config = SshConfig {
+        totp: hop.totp.clone(),
+        host: hop.host.clone(),
+        port: hop.port,
+        username: hop.username.clone(),
+        auth: hop.auth.clone(),
+        strict_host_key_checking: hop.strict_host_key_checking,
+        trust_host_key: hop.trust_host_key,
+        expected_host_key_fingerprint: hop.expected_host_key_fingerprint.clone(),
+        agent_forwarding: hop.agent_forwarding,
+        identity_agent: hop.identity_agent.clone(),
+        agent_forwarding_socket: hop.agent_forwarding_socket.clone(),
+        legacy_ssh_compatibility: hop.legacy_ssh_compatibility,
+        ..SshConfig::default()
+    };
+    authenticate_with_options(
+        handle,
+        &config,
+        prompt_handler,
+        managed_key_resolver,
+        None,
+        // Proxy hops use the same KBI prompt and fallback rules as target
+        // hosts so bastions and MFA jump boxes do not become a special case.
+        AuthenticationOptions::default(),
+        audit,
+    )
+    .await
+}
+
+struct NativeClientHandler {
+    audit: Option<oxide_audit::AuditContext>,
+    host: String,
+    port: u16,
+    strict: bool,
+    trust_host_key: Option<bool>,
+    expected_host_key_fingerprint: Option<String>,
+    agent_forwarding_requested: bool,
+    agent_forwarding_accepted: Arc<AtomicBool>,
+    agent_forwarding_endpoint: Option<SshAgentEndpoint>,
+    agent_forward_semaphore: Arc<Semaphore>,
+    agent_forward_tasks: JoinSet<()>,
+    remote_forward_handler: RemoteForwardHandlerSlot,
+    x11_forward_handler: X11ForwardHandlerSlot,
+    x11_dispatcher: X11ForwardDispatcher,
+    x11_forward_semaphore: Arc<Semaphore>,
+    x11_forward_tasks: JoinSet<()>,
+    auth_banners: AuthBannerSink,
+    connection_progress: Option<ConnectionProgressReporter>,
+}
+
+impl NativeClientHandler {
+    fn new(
+        host: String,
+        port: u16,
+        strict: bool,
+        trust_host_key: Option<bool>,
+        expected_host_key_fingerprint: Option<String>,
+        agent_forwarding_requested: bool,
+        identity_agent: Option<String>,
+        agent_forwarding_socket: Option<String>,
+        remote_forward_handler: RemoteForwardHandlerSlot,
+        x11_forward_handler: X11ForwardHandlerSlot,
+    ) -> Result<Self, SshTransportError> {
+        let agent_forwarding_endpoint = if agent_forwarding_requested {
+            let endpoint = if let Some(forwarding_socket) = agent_forwarding_socket.as_deref() {
+                resolve_ssh_agent_forwarding_endpoint(Some(forwarding_socket))
+            } else {
+                resolve_ssh_agent_endpoint(identity_agent.as_deref())
+            };
+            Some(endpoint.map_err(SshTransportError::ConnectionFailed)?)
+        } else {
+            None
+        };
+        Ok(Self {
+            audit: None,
+            host,
+            port,
+            strict,
+            trust_host_key,
+            expected_host_key_fingerprint,
+            agent_forwarding_requested,
+            agent_forwarding_accepted: Arc::new(AtomicBool::new(false)),
+            agent_forwarding_endpoint,
+            agent_forward_semaphore: Arc::new(Semaphore::new(16)),
+            agent_forward_tasks: JoinSet::new(),
+            remote_forward_handler,
+            x11_forward_handler,
+            x11_dispatcher: X11ForwardDispatcher::new(),
+            x11_forward_semaphore: Arc::new(Semaphore::new(X11_CHANNEL_LIMIT)),
+            x11_forward_tasks: JoinSet::new(),
+            auth_banners: new_auth_banner_sink(),
+            connection_progress: None,
+        })
+    }
+
+    fn check_server_key_policy(
+        &mut self,
+        server_key: &russh::keys::PublicKeyOrCertificate,
+    ) -> Result<bool, SshTransportError> {
+        // Host-key progress is an initial-handshake signal and must not retain the attempt sink.
+        if let Some(reporter) = self.connection_progress.take() {
+            reporter.report(ConnectionTraceStage::HostKey);
+        }
+        let russh::keys::PublicKeyOrCertificate::PublicKey {
+            key: server_public_key,
+            ..
+        } = server_key
+        else {
+            // Certificate trust is deliberately disabled until the host-key
+            // policy validates its CA, principal, validity, and revocation.
+            tracing::debug!(
+                host = self.host.as_str(),
+                port = self.port,
+                "SSH host certificate rejected because certificate trust is not configured"
+            );
+            return Ok(false);
+        };
+        let actual_fingerprint = public_key_fingerprint(server_public_key);
+        tracing::debug!(
+            host = self.host.as_str(),
+            port = self.port,
+            host_key_algorithm = server_public_key.algorithm().as_str(),
+            host_key_fingerprint = actual_fingerprint.as_str(),
+            "SSH server host key received"
+        );
+        if let Some(expected_fingerprint) = self.expected_host_key_fingerprint.as_deref() {
+            if expected_fingerprint != actual_fingerprint {
+                tracing::debug!(
+                    host = self.host.as_str(),
+                    port = self.port,
+                    "SSH server host key fingerprint mismatch"
+                );
+                return Err(SshTransportError::HostKeyChanged {
+                    host: self.host.clone(),
+                    port: self.port,
+                    expected_fingerprint: expected_fingerprint.to_string(),
+                    actual_fingerprint,
+                    key_type: server_public_key.algorithm().as_str().to_string(),
+                });
+            }
+            if let Some(trust_host_key) = self.trust_host_key {
+                accept_host_key_for_session(&self.host, self.port, actual_fingerprint);
+                if trust_host_key {
+                    learn_host_key(&self.host, self.port, server_public_key)?;
+                }
+                tracing::debug!(
+                    host = self.host.as_str(),
+                    port = self.port,
+                    persisted = trust_host_key,
+                    "SSH server host key matched expected fingerprint"
+                );
+                return Ok(true);
+            }
+        }
+
+        match verify_host_key(&self.host, self.port, server_public_key)? {
+            HostKeyVerification::Verified => {
+                tracing::debug!(
+                    host = self.host.as_str(),
+                    port = self.port,
+                    "SSH server host key verified"
+                );
+                Ok(true)
+            }
+            HostKeyVerification::Unknown { fingerprint, .. } => {
+                if let Some(trust_host_key) = self.trust_host_key {
+                    accept_host_key_for_session(&self.host, self.port, fingerprint);
+                    if trust_host_key {
+                        learn_host_key(&self.host, self.port, server_public_key)?;
+                    }
+                    tracing::debug!(
+                        host = self.host.as_str(),
+                        port = self.port,
+                        persisted = trust_host_key,
+                        "SSH unknown server host key accepted by policy"
+                    );
+                    return Ok(true);
+                }
+
+                if self.strict {
+                    tracing::debug!(
+                        host = self.host.as_str(),
+                        port = self.port,
+                        "SSH unknown server host key rejected by strict checking"
+                    );
+                    Err(SshTransportError::HostKeyUnknown {
+                        host: self.host.clone(),
+                        port: self.port,
+                        fingerprint,
+                        key_type: server_public_key.algorithm().as_str().to_string(),
+                    })
+                } else {
+                    learn_host_key(&self.host, self.port, server_public_key)?;
+                    tracing::debug!(
+                        host = self.host.as_str(),
+                        port = self.port,
+                        "SSH unknown server host key learned"
+                    );
+                    Ok(true)
+                }
+            }
+            HostKeyVerification::Changed {
+                expected_fingerprint,
+                actual_fingerprint,
+                ..
+            } => {
+                tracing::debug!(
+                    host = self.host.as_str(),
+                    port = self.port,
+                    "SSH server host key changed"
+                );
+                Err(SshTransportError::HostKeyChanged {
+                    host: self.host.clone(),
+                    port: self.port,
+                    expected_fingerprint,
+                    actual_fingerprint,
+                    key_type: server_public_key.algorithm().as_str().to_string(),
+                })
+            }
+        }
+    }
+
+    fn with_audit_context(mut self, audit: Option<oxide_audit::AuditContext>) -> Self {
+        self.audit = audit;
+        self
+    }
+
+    fn with_connection_progress(
+        mut self,
+        connection_progress: Option<ConnectionProgressReporter>,
+    ) -> Self {
+        self.connection_progress = connection_progress;
+        self
+    }
+
+    fn auth_banners(&self) -> AuthBannerSink {
+        self.auth_banners.clone()
+    }
+
+    fn agent_forwarding_acceptance(&self) -> Arc<AtomicBool> {
+        self.agent_forwarding_accepted.clone()
+    }
+
+    fn x11_dispatcher(&self) -> X11ForwardDispatcher {
+        self.x11_dispatcher.clone()
+    }
+}
+
+fn ssh_protocol_diagnostic(error: &russh::Error) -> String {
+    // Preserve protocol types and numeric details, never plugin/server text,
+    // custom I/O messages, key material, or task panic payloads.
+    match error {
+        russh::Error::IO(error) => {
+            format!("io: {:?}, os_code={:?}", error.kind(), error.raw_os_error())
+        }
+        russh::Error::SshEncoding(error) => match error {
+            ssh_encoding::Error::CharacterEncoding
+            | ssh_encoding::Error::Length
+            | ssh_encoding::Error::MpintEncoding
+            | ssh_encoding::Error::Overflow
+            | ssh_encoding::Error::TrailingData { .. }
+            | ssh_encoding::Error::InvalidDiscriminant(_) => format!("encoding: {error}"),
+            _ => "encoding: invalid encoded value".into(),
+        },
+        russh::Error::CouldNotReadKey
+        | russh::Error::KexInit
+        | russh::Error::UnknownAlgo
+        | russh::Error::Version
+        | russh::Error::Kex
+        | russh::Error::PacketAuth
+        | russh::Error::Inconsistent
+        | russh::Error::NotAuthenticated
+        | russh::Error::UnsupportedAuthMethod
+        | russh::Error::IndexOutOfBounds
+        | russh::Error::UnknownKey
+        | russh::Error::WrongServerSig
+        | russh::Error::PacketSize(_)
+        | russh::Error::WrongChannel
+        | russh::Error::ChannelOpenFailure(_)
+        | russh::Error::Disconnect
+        | russh::Error::NoHomeDir
+        | russh::Error::KeyChanged { .. }
+        | russh::Error::HUP
+        | russh::Error::ConnectionTimeout
+        | russh::Error::KeepaliveTimeout
+        | russh::Error::InactivityTimeout
+        | russh::Error::NoAuthMethod
+        | russh::Error::SendError
+        | russh::Error::Pending
+        | russh::Error::DecryptionError
+        | russh::Error::RequestDenied
+        | russh::Error::Utf8(_)
+        | russh::Error::Elapsed(_)
+        | russh::Error::StrictKeyExchangeViolation { .. }
+        | russh::Error::RecvError => error.to_string(),
+        russh::Error::NoCommonAlgo { kind, .. } => format!("no common {kind:?} algorithm"),
+        russh::Error::Keys(_) | russh::Error::SshKey(_) => "key_error".into(),
+        russh::Error::Signature(_) => "signature_error".into(),
+        russh::Error::Join(_) => "session_task_failure".into(),
+        russh::Error::InvalidConfig(_) => "invalid_configuration".into(),
+        russh::Error::Compress(_) => "compression_error".into(),
+        russh::Error::Decompress(_) => "decompression_error".into(),
+    }
+}
+
+impl client::Handler for NativeClientHandler {
+    type Error = SshTransportError;
+
+    async fn disconnected(
+        &mut self,
+        reason: client::DisconnectReason<Self::Error>,
+    ) -> Result<(), Self::Error> {
+        match reason {
+            client::DisconnectReason::ReceivedDisconnect(info) => {
+                // Server descriptions may contain arbitrary text; log only the protocol code.
+                let _message = Zeroizing::new(info.message);
+                let _language = Zeroizing::new(info.lang_tag);
+                tracing::warn!(reason = ?info.reason_code, "SSH server disconnected shared transport");
+                Ok(())
+            }
+            client::DisconnectReason::Error(error) => {
+                let cause = match &error {
+                    SshTransportError::Protocol(source) => ssh_protocol_diagnostic(source),
+                    SshTransportError::ConnectionFailed(_) => "connection_error".into(),
+                    SshTransportError::Channel(_) => "channel_error".into(),
+                    _ => "handshake_error".into(),
+                };
+                tracing::warn!(cause, "SSH client stopped shared transport");
+                Err(error)
+            }
+        }
+    }
+
+    fn kex_done(
+        &mut self,
+        _shared_secret: Option<&[u8]>,
+        names: &russh::Names,
+        _session: &mut client::Session,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send {
+        tracing::debug!(
+            kex = names.kex.as_ref(),
+            host_key_algorithm = names.key.as_str(),
+            cipher = names.cipher.as_ref(),
+            client_mac = names.client_mac.as_ref(),
+            server_mac = names.server_mac.as_ref(),
+            client_compression = compression_algorithm_label(&names.client_compression),
+            server_compression = compression_algorithm_label(&names.server_compression),
+            strict_kex = names.strict_kex(),
+            "SSH key exchange completed"
+        );
+        async { Ok(()) }
+    }
+
+    async fn auth_banner(
+        &mut self,
+        banner: &str,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        // Authentication banners are server-auth messages. They are stored
+        // separately from shell output so the first visible terminal can show
+        // them once, matching Tauri's pending-auth-banner boundary.
+        if let Some(sanitized) = sanitize_auth_banner(banner) {
+            self.auth_banners.lock().push(sanitized);
+        }
+        Ok(())
+    }
+
+    async fn check_server_key(
+        &mut self,
+        server_key: &russh::keys::PublicKeyOrCertificate,
+    ) -> Result<bool, Self::Error> {
+        let fingerprint = match server_key {
+            russh::keys::PublicKeyOrCertificate::PublicKey { key, .. } => {
+                Some(public_key_fingerprint(key))
+            }
+            _ => None,
+        };
+        let detail = serde_json::json!({"fingerprint": fingerprint, "strict": self.strict,
+            "trust_requested": self.trust_host_key, "expected_fingerprint": self.expected_host_key_fingerprint}).to_string();
+        let operation = oxide_audit::AuditOperation::in_context(
+            self.audit.as_ref(),
+            oxide_audit::AuditCategory::Security,
+            "ssh_host_key",
+            Some(&detail),
+        );
+        let result = self.check_server_key_policy(server_key);
+        let outcome = match &result {
+            Ok(true) => oxide_audit::AuditOutcome::Succeeded,
+            Ok(false)
+            | Err(
+                SshTransportError::HostKeyUnknown { .. } | SshTransportError::HostKeyChanged { .. },
+            ) => oxide_audit::AuditOutcome::Denied,
+            Err(_) => oxide_audit::AuditOutcome::Failed,
+        };
+        operation.finish(
+            outcome,
+            oxide_audit::AuditEvidence::Protocol,
+            None,
+            None,
+        );
+        result
+    }
+
+    async fn server_channel_open_agent_forward(
+        &mut self,
+        channel: Channel<client::Msg>,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        if !self.agent_forwarding_requested
+            || !self.agent_forwarding_accepted.load(Ordering::Acquire)
+        {
+            reply
+                .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
+                .await;
+            return Ok(());
+        }
+
+        let Ok(permit) = self.agent_forward_semaphore.clone().try_acquire_owned() else {
+            reply
+                .reject(russh::ChannelOpenFailure::ResourceShortage)
+                .await;
+            return Ok(());
+        };
+
+        let agent_forwarding_endpoint = self.agent_forwarding_endpoint.clone();
+        while self.agent_forward_tasks.try_join_next().is_some() {}
+        reply.accept().await;
+        // The SSH handler owns relay tasks, so dropping the protocol session
+        // aborts every agent bridge instead of detaching them.
+        self.agent_forward_tasks.spawn(async move {
+            handle_agent_forward_channel(channel, agent_forwarding_endpoint.as_ref()).await;
+            drop(permit);
+        });
+        Ok(())
+    }
+
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: Channel<client::Msg>,
+        connected_address: &str,
+        connected_port: u32,
+        originator_address: &str,
+        originator_port: u32,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        let Some(registration) = self.remote_forward_handler.read().clone() else {
+            reply
+                .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
+                .await;
+            return Ok(());
+        };
+
+        reply.accept().await;
+        let event = RemoteForwardedTcpIp {
+            connection_id: registration.connection_id.clone(),
+            connected_address: connected_address.to_string(),
+            connected_port: connected_port as u16,
+            originator_address: originator_address.to_string(),
+            originator_port: originator_port as u16,
+            stream: Box::new(channel.into_stream()),
+        };
+        tokio::spawn(async move {
+            registration.handler.handle_remote_forward(event).await;
+        });
+        Ok(())
+    }
+
+    async fn server_channel_open_x11(
+        &mut self,
+        channel: Channel<client::Msg>,
+        originator_address: &str,
+        originator_port: u32,
+        reply: client::ChannelOpenHandle,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        let has_dispatch_route = self.x11_dispatcher.has_active_routes();
+        let registration = self.x11_forward_handler.read().clone();
+        if !has_dispatch_route && registration.is_none() {
+            reply
+                .reject(russh::ChannelOpenFailure::AdministrativelyProhibited)
+                .await;
+            return Ok(());
+        }
+
+        let Ok(permit) = self.x11_forward_semaphore.clone().try_acquire_owned() else {
+            reply
+                .reject(russh::ChannelOpenFailure::ResourceShortage)
+                .await;
+            return Ok(());
+        };
+        while self.x11_forward_tasks.try_join_next().is_some() {}
+        if has_dispatch_route {
+            reply.accept().await;
+            let dispatcher = self.x11_dispatcher.clone();
+            self.x11_forward_tasks.spawn(async move {
+                if let Err(error) = dispatcher.bridge(Box::new(channel.into_stream())).await {
+                    tracing::debug!(error = %error, "X11 channel bridge failed");
+                }
+                drop(permit);
+            });
+            return Ok(());
+        }
+
+        if let Some(registration) = registration {
+            reply.accept().await;
+            let event = X11ForwardedChannel {
+                connection_id: registration.connection_id.clone(),
+                originator_address: originator_address.to_string(),
+                originator_port: originator_port as u16,
+                stream: Box::new(channel.into_stream()),
+            };
+            self.x11_forward_tasks.spawn(async move {
+                registration.handler.handle_x11_forward(event).await;
+                drop(permit);
+            });
+        }
+        Ok(())
+    }
+}
+
+fn compression_algorithm_label(compression: &russh::compression::Compression) -> &'static str {
+    match compression {
+        russh::compression::Compression::None => "none",
+        russh::compression::Compression::Zlib => "zlib",
+        russh::compression::Compression::ZlibOpenSSH => "zlib@openssh.com",
+    }
+}
+
+async fn authenticate(
+    handle: &mut client::Handle<NativeClientHandler>,
+    config: &SshConfig,
+    prompt_handler: Option<&dyn SshPromptHandler>,
+    managed_key_resolver: Option<&ManagedKeyResolver>,
+    connection_progress: Option<&ConnectionProgressReporter>,
+    audit: Option<&oxide_audit::AuditContext>,
+) -> Result<(), SshTransportError> {
+    authenticate_with_options(
+        handle,
+        config,
+        prompt_handler,
+        managed_key_resolver,
+        connection_progress,
+        AuthenticationOptions::default(),
+        audit,
+    )
+    .await
+}
+
+#[derive(Clone, Copy)]
+struct AuthenticationOptions {
+    password_kbi_fallback: bool,
+    interactive_kbi_chain: bool,
+}
+
+impl Default for AuthenticationOptions {
+    fn default() -> Self {
+        Self {
+            password_kbi_fallback: true,
+            interactive_kbi_chain: true,
+        }
+    }
+}
+
+async fn authenticate_with_options(
+    handle: &mut client::Handle<NativeClientHandler>,
+    config: &SshConfig,
+    prompt_handler: Option<&dyn SshPromptHandler>,
+    managed_key_resolver: Option<&ManagedKeyResolver>,
+    connection_progress: Option<&ConnectionProgressReporter>,
+    options: AuthenticationOptions,
+    audit: Option<&oxide_audit::AuditContext>,
+) -> Result<(), SshTransportError> {
+    // Method names are static metadata; prompts, replies, key material, and error strings stay outside the audit queue.
+    let operation = oxide_audit::AuditOperation::in_context(
+        audit,
+        oxide_audit::AuditCategory::Security,
+        "ssh_authenticate",
+        Some(&format!(
+            "requested_method={}",
+            auth_method_label(&config.auth)
+        )),
+    );
+    let mut attempts = AuthenticationAudit::new(audit, operation.id());
+    let mut password_to_save = None;
+    let result = authenticate_flow(
+        handle,
+        config,
+        prompt_handler,
+        managed_key_resolver,
+        connection_progress,
+        options,
+        &mut attempts,
+        &mut password_to_save,
+    )
+    .await;
+    operation.result(&result);
+    if let Ok(configured_credentials_confirmed) = &result
+        && let Some(handler) = prompt_handler
+    {
+        handler.authentication_completed(*configured_credentials_confirmed);
+    }
+    if result.is_ok()
+        && let Some(SshPasswordResponse {
+            password,
+            on_authenticated: Some(save),
+        }) = password_to_save
+    {
+        save(password);
+    }
+    result.map(|_| ())
+}
+
+async fn authenticate_flow(
+    handle: &mut client::Handle<NativeClientHandler>,
+    config: &SshConfig,
+    prompt_handler: Option<&dyn SshPromptHandler>,
+    managed_key_resolver: Option<&ManagedKeyResolver>,
+    connection_progress: Option<&ConnectionProgressReporter>,
+    options: AuthenticationOptions,
+    audit: &mut AuthenticationAudit,
+    password_to_save: &mut Option<SshPasswordResponse>,
+) -> Result<bool, SshTransportError> {
+    tracing::debug!(
+        auth_method = auth_method_label(&config.auth),
+        "SSH authentication flow starting"
+    );
+    if let Some(result) = try_none_auth_probe(handle, &config.username, audit).await
+        && result.success()
+    {
+        tracing::debug!("SSH none-auth probe accepted by server");
+        return Ok(false);
+    }
+
+    let auth = match &config.auth {
+        AuthMethod::KerberosPreferred {
+            server_identity,
+            delegate_credentials,
+            fallback,
+        } => {
+            match try_kerberos_authentication(
+                handle,
+                config,
+                server_identity.as_deref(),
+                *delegate_credentials,
+                connection_progress,
+                audit,
+            )
+            .await?
+            {
+                KerberosAuthenticationOutcome::Authenticated => return Ok(false),
+                KerberosAuthenticationOutcome::Fallback => {
+                    if let Some(reporter) = connection_progress {
+                        reporter.report(ConnectionTraceStage::FallbackAuthentication);
+                    }
+                    fallback.as_ref()
+                }
+            }
+        }
+        auth => auth,
+    };
+
+    // Local password requests must bypass server-prompt matching, including
+    // when the user has configured a broad TOTP regular expression.
+    let password_prompt_handler = prompt_handler;
+    let totp_handler = config.totp.as_ref().map(|binding| totp::TotpPromptHandler {
+        binding: binding.clone(), manual: prompt_handler,
+        submitted: std::sync::atomic::AtomicBool::new(false),
+    });
+    let prompt_handler = totp_handler.as_ref().map(|handler| handler as &dyn SshPromptHandler).or(prompt_handler);
+    let result = match auth {
+        AuthMethod::Password { password, prompt } => {
+            let prompted;
+            let password = if *prompt {
+                let handler = password_prompt_handler.ok_or(SshTransportError::UnsupportedAuth(
+                    "password authentication requires a prompt handler",
+                ))?;
+                let request = SshPasswordPrompt {
+                    host: config.host.clone(),
+                    port: config.port,
+                    username: config.username.clone(),
+                };
+                let response = audit
+                    .password_prompt(handler, request)
+                    .await
+                    .map_err(|error| SshTransportError::AuthenticationFailed(error.to_string()))?;
+                if response.on_authenticated.is_some() {
+                    // The whole authentication flow, including any second factor, owns this secret.
+                    *password_to_save = Some(response);
+                    &password_to_save.as_ref().unwrap().password
+                } else {
+                    prompted = response.password;
+                    &prompted
+                }
+            } else {
+                password
+            };
+            tracing::debug!("SSH password authentication starting");
+            let result = authenticate_password(handle, config, password, audit).await?;
+            log_auth_result("password", &result);
+            if options.password_kbi_fallback
+                && let PasswordFallbackOutcome::Authenticated { password_confirmed } =
+                    try_password_as_keyboard_interactive(
+                        handle,
+                        config,
+                        password,
+                        &result,
+                        prompt_handler,
+                        audit,
+                    )
+                    .await?
+            {
+                if !password_confirmed {
+                    *password_to_save = None;
+                }
+                tracing::debug!("SSH password keyboard-interactive fallback succeeded");
+                return Ok(password_confirmed && !prompt);
+            }
+            result
+        }
+        AuthMethod::Key {
+            key_path,
+            passphrase,
+        } => {
+            tracing::debug!(
+                key_source = if key_path.trim().is_empty() {
+                    "default"
+                } else {
+                    "file"
+                },
+                passphrase_supplied = passphrase.is_some(),
+                "SSH public-key authentication preparing key"
+            );
+            let key = load_private_key_material(
+                key_path,
+                passphrase.as_ref().map(|passphrase| passphrase.as_str()),
+            )?;
+            let result =
+                authenticate_publickey_best_algo(handle, &config.username, key, prompt_handler, audit).await?;
+            log_auth_result("publickey", &result);
+            result
+        }
+        AuthMethod::Certificate {
+            key_path,
+            cert_path,
+            passphrase,
+        } => {
+            tracing::debug!(
+                key_source = if key_path.trim().is_empty() {
+                    "default"
+                } else {
+                    "file"
+                },
+                certificate_source = if cert_path.trim().is_empty() {
+                    "empty"
+                } else {
+                    "file"
+                },
+                passphrase_supplied = passphrase.is_some(),
+                "SSH certificate authentication preparing key"
+            );
+            let (key, cert) = load_certificate_auth_material(
+                key_path,
+                cert_path,
+                passphrase.as_ref().map(|passphrase| passphrase.as_str()),
+            )?;
+            let result =
+                authenticate_certificate_best_algo(handle, &config.username, key, cert, prompt_handler, audit)
+                    .await?;
+            log_auth_result("certificate", &result);
+            result
+        }
+        AuthMethod::Agent => {
+            tracing::debug!("SSH agent authentication starting");
+            let agent_attempt = authenticate_agent(handle, config, audit).await;
+            if let Some(result) = agent_attempt.result.as_ref() {
+                log_auth_result("agent", result);
+                if result.success() {
+                    return Ok(true);
+                }
+            }
+
+            let server_allows_fallback = agent_attempt
+                .result
+                .as_ref()
+                .is_none_or(server_allows_more_publickey_attempts);
+            if server_allows_fallback {
+                let fallback_keys = load_agent_fallback_keys(
+                    preferred_default_key_paths(),
+                    &agent_attempt.offered_public_keys,
+                );
+                for key in fallback_keys {
+                    let result =
+                        authenticate_publickey_best_algo(handle, &config.username, key, prompt_handler, audit)
+                            .await?;
+                    log_auth_result("default-publickey", &result);
+                    if result.success() || !server_allows_more_publickey_attempts(&result) {
+                        return if result.success() {
+                            Ok(true)
+                        } else {
+                            Err(SshTransportError::AuthenticationFailed(
+                                authentication_failure_message(&result),
+                            ))
+                        };
+                    }
+                }
+            }
+
+            if let Some(result) = agent_attempt.result {
+                result
+            } else {
+                return Err(SshTransportError::AuthenticationFailed(format!(
+                    "{}. Add a key to the agent or configure an explicit IdentityFile",
+                    agent_attempt
+                        .failure_reason
+                        .unwrap_or_else(|| "SSH agent authentication failed".to_string())
+                )));
+            }
+        }
+        AuthMethod::ManagedKey { key_id, passphrase } => {
+            let Some(resolve_managed_key) = managed_key_resolver else {
+                return Err(SshTransportError::AuthenticationFailed(
+                    "Managed key authentication requires a key resolver".to_string(),
+                ));
+            };
+            tracing::debug!(
+                managed_key_configured = !key_id.trim().is_empty(),
+                passphrase_supplied = passphrase.is_some(),
+                "SSH managed-key authentication preparing key"
+            );
+            // SshConfig stores only the managed key id. The resolver exposes
+            // keychain material for this auth attempt and drops it after decode.
+            let private_key = resolve_managed_key(key_id)?;
+            let key = load_private_key_from_memory(
+                private_key.private_key.as_str(),
+                passphrase.as_ref().map(|passphrase| passphrase.as_str()),
+            )?;
+            let result = if let Some(certificate) = &private_key.certificate {
+                let certificate = Certificate::from_openssh(certificate).map_err(|_| SshTransportError::AuthenticationFailed("Invalid managed SSH certificate".into()))?;
+                if certificate.public_key() != key.public_key().key_data() {
+                    return Err(SshTransportError::AuthenticationFailed("Managed SSH certificate does not match its private key".into()));
+                }
+                authenticate_certificate_best_algo(handle,&config.username,key,certificate,prompt_handler,audit).await?
+            } else { authenticate_publickey_best_algo(handle, &config.username, key, prompt_handler, audit).await? };
+            log_auth_result("managed-key", &result);
+            result
+        }
+        AuthMethod::KeyboardInteractive => {
+            tracing::debug!("SSH keyboard-interactive authentication starting");
+            let result =
+                authenticate_keyboard_interactive(handle, &config.username, prompt_handler, audit)
+                    .await?;
+            log_auth_result("keyboard-interactive", &result);
+            result
+        }
+        AuthMethod::KerberosPreferred { .. } => unreachable!("Kerberos plans are unwrapped above"),
+    };
+
+    if result.success() {
+        tracing::debug!("SSH authentication flow succeeded");
+        Ok(!matches!(auth, AuthMethod::Password { prompt: true, .. }))
+    } else if options.interactive_kbi_chain
+        && try_keyboard_interactive_chain(handle, &config.username, &result, prompt_handler, audit)
+            .await?
+    {
+        tracing::debug!("SSH chained keyboard-interactive authentication succeeded");
+        Ok(!matches!(auth, AuthMethod::Password { prompt: true, .. }))
+    } else {
+        tracing::debug!("SSH authentication flow failed");
+        Err(SshTransportError::AuthenticationFailed(
+            authentication_failure_message(&result),
+        ))
+    }
+}
+
+fn auth_method_label(auth: &AuthMethod) -> &'static str {
+    match auth {
+        AuthMethod::Password { .. } => "password",
+        AuthMethod::Key { .. } => "publickey",
+        AuthMethod::Agent => "agent",
+        AuthMethod::ManagedKey { .. } => "managed-key",
+        AuthMethod::Certificate { .. } => "certificate",
+        AuthMethod::KeyboardInteractive => "keyboard-interactive",
+        AuthMethod::KerberosPreferred { .. } => "kerberos-preferred",
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum KerberosAuthenticationOutcome {
+    Authenticated,
+    Fallback,
+}
+
+async fn try_kerberos_authentication(
+    handle: &mut client::Handle<NativeClientHandler>,
+    config: &SshConfig,
+    server_identity: Option<&str>,
+    delegate_credentials: bool,
+    connection_progress: Option<&ConnectionProgressReporter>,
+    audit: &mut AuthenticationAudit,
+) -> Result<KerberosAuthenticationOutcome, SshTransportError> {
+    if let Some(reporter) = connection_progress {
+        reporter.report(ConnectionTraceStage::KerberosCredentials);
+    }
+    tracing::debug!(
+        server_identity_configured = server_identity.is_some(),
+        delegate_credentials,
+        "SSH preferred Kerberos authentication starting"
+    );
+    let mut authenticator =
+        gssapi::KerberosAuthenticator::new(&config.host, server_identity, delegate_credentials)
+            .map_err(|error| SshTransportError::AuthenticationFailed(error.to_string()))?;
+    if let Some(reporter) = connection_progress {
+        reporter.report(ConnectionTraceStage::GssapiExchange);
+    }
+    let operation = audit.attempt("gssapi-with-mic", "authenticate", None);
+    let result = tokio::time::timeout(
+        GSSAPI_AUTH_TIMEOUT,
+        handle.authenticate_gssapi_with_mic(
+            config.username.clone(),
+            gssapi::KerberosAuthenticator::mechanism_oids(),
+            &mut authenticator,
+        ),
+    )
+    .await;
+
+    AuthenticationAudit::finish(
+        operation,
+        result.as_ref().ok().and_then(|result| result.as_ref().ok()),
+    );
+    match result {
+        Ok(Ok(result)) if result.success() => Ok(KerberosAuthenticationOutcome::Authenticated),
+        Ok(Ok(_)) if authenticator.allows_authentication_fallback() => {
+            tracing::debug!("Kerberos authentication unavailable; using configured fallback");
+            Ok(KerberosAuthenticationOutcome::Fallback)
+        }
+        Ok(Ok(_)) => Err(SshTransportError::AuthenticationFailed(
+            "Kerberos integrity exchange was rejected".to_string(),
+        )),
+        Ok(Err(error)) if error.allows_authentication_fallback() => {
+            tracing::debug!("Kerberos credentials unavailable; using configured fallback");
+            Ok(KerberosAuthenticationOutcome::Fallback)
+        }
+        Ok(Err(error)) => Err(SshTransportError::AuthenticationFailed(error.to_string())),
+        Err(_) => {
+            tracing::debug!("Kerberos authentication timed out; using configured fallback");
+            Ok(KerberosAuthenticationOutcome::Fallback)
+        }
+    }
+}
+
+fn auth_result_remaining_methods(result: &client::AuthResult) -> String {
+    match result {
+        client::AuthResult::Success => String::new(),
+        client::AuthResult::Failure {
+            remaining_methods, ..
+        } => remaining_methods
+            .iter()
+            .map(|method| String::from(<&str>::from(method)))
+            .collect::<Vec<_>>()
+            .join(","),
+    }
+}
+
+fn log_auth_result(method: &'static str, result: &client::AuthResult) {
+    match result {
+        client::AuthResult::Success => {
+            tracing::debug!(auth_method = method, "SSH authentication method accepted");
+        }
+        client::AuthResult::Failure {
+            partial_success, ..
+        } => {
+            tracing::debug!(
+                auth_method = method,
+                partial_success,
+                remaining_methods = auth_result_remaining_methods(result),
+                "SSH authentication method rejected"
+            );
+        }
+    }
+}
+
+async fn try_none_auth_probe(
+    handle: &mut client::Handle<NativeClientHandler>,
+    username: &str,
+    audit: &mut AuthenticationAudit,
+) -> Option<client::AuthResult> {
+    tracing::debug!("SSH none-auth probe starting");
+    let operation = audit.attempt("none", "authenticate", None);
+    let result =
+        tokio::time::timeout(NONE_AUTH_PROBE_TIMEOUT, handle.authenticate_none(username)).await;
+    AuthenticationAudit::finish(
+        operation,
+        result.as_ref().ok().and_then(|result| result.as_ref().ok()),
+    );
+    match result {
+        Ok(Ok(result)) => {
+            log_auth_result("none", &result);
+            Some(result)
+        }
+        Ok(Err(_)) | Err(_) => {
+            tracing::debug!("SSH none-auth probe unavailable");
+            None
+        }
+    }
+}
+
+async fn authenticate_password(
+    handle: &mut client::Handle<NativeClientHandler>,
+    config: &SshConfig,
+    password: &str,
+    audit: &mut AuthenticationAudit,
+) -> Result<client::AuthResult, SshTransportError> {
+    let result = audit
+        .authenticate("password", None, async {
+            tokio::time::timeout(
+                PASSWORD_AUTH_TIMEOUT,
+                handle.authenticate_password(config.username.clone(), password),
+            )
+            .await
+            .map_err(|_| {
+                SshTransportError::AuthenticationFailed(
+                    "password authentication timed out".to_string(),
+                )
+            })?
+            .map_err(|error| SshTransportError::AuthenticationFailed(error.to_string()))
+        })
+        .await?;
+
+    if result.success() {
+        return Ok(result);
+    }
+
+    if should_retry_password_auth(&result) {
+        tracing::debug!("SSH password authentication retry starting");
+        tokio::time::sleep(PASSWORD_RETRY_DELAY).await;
+        audit
+            .authenticate("password", None, async {
+                tokio::time::timeout(
+                    PASSWORD_AUTH_TIMEOUT,
+                    handle.authenticate_password(config.username.clone(), password),
+                )
+                .await
+                .map_err(|_| {
+                    SshTransportError::AuthenticationFailed(
+                        "password authentication retry timed out".to_string(),
+                    )
+                })?
+                .map_err(|error| SshTransportError::AuthenticationFailed(error.to_string()))
+            })
+            .await
+    } else {
+        Ok(result)
+    }
+}
