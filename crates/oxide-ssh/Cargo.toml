@@ -41,7 +41,7 @@ libgssapi.workspace = true
 windows.workspace = true
 
 [dev-dependencies]
-russh-sftp = { path = "../russh-sftp" }
+russh-sftp = { path = "../oxide-russh-sftp" }
 tempfile = "3.23"
 tokio = { workspace = true, features = ["test-util"] }
 rand.workspace = true

@@ -1,0 +1,9 @@
+[submodule "crates/oxide-russh"]
+	path = crates/oxide-russh
+	url = https://github.com/Flinglin/russh.git
+[submodule "crates/oxide-vte"]
+	path = crates/oxide-vte
+	url = https://github.com/Flinglin/vte.git
+[submodule "crates/oxide-russh-sftp"]
+	path = crates/oxide-russh-sftp
+	url = https://github.com/Flinglin/russh-sftp.git

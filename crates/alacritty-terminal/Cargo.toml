@@ -86,12 +86,12 @@ optional = true
 version = "0.2.0"
 
 [dependencies.vte]
-version = "0.15.0"
+git="https://github.com/Flinglin/vte.git"
 features = [
     "std",
     "ansi",
 ]
-default-features = false
+branch="master"
 
 [dev-dependencies.serde_json]
 version = "1.0.0"

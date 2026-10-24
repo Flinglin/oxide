@@ -1,9 +1,0 @@
-# oxide reviews this fork as an upstream patch set, so workspace formatting
-# must not rewrite the imported source.
-disable_all_formatting = true
-match_block_trailing_comma = true
-use_field_init_shorthand = true
-use_small_heuristics = "Max"
-use_try_shorthand = true
-newline_style = "Unix"
-
