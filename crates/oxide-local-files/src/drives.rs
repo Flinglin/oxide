@@ -5,7 +5,7 @@ use std::collections::HashMap;
 #[cfg(not(unix))]
 use std::{collections::HashSet, path::PathBuf};
 
-use crate::{LocalDrive, paths::extract_drive_prefix};
+use crate::{LocalDrive, paths::extract_drive_letter};
 
 pub fn local_drives() -> Vec<LocalDrive> {
     let mut drives = platform_local_drives();
@@ -52,7 +52,7 @@ fn home_path_root() -> String {
 fn platform_local_drives() -> Vec<LocalDrive> {
     use sysinfo::Disks;
     #[cfg(windows)]
-    let wsl = get_wsl_drive_char();
+    let wsl = get_wsl_drive_letter();
     let disks = Disks::new_with_refreshed_list();
     let mut drives: Vec<LocalDrive> = Vec::new();
 
@@ -165,7 +165,7 @@ fn is_blocked_run_mount(mount: &str) -> bool {
 fn drive_display_name(disk: &sysinfo::Disk, mount_point: &Path) -> String {
     let raw_name = disk.name().to_string_lossy();
     if !raw_name.is_empty() {
-        if let Some(drive) = extract_drive_prefix(mount_point) {
+        if let Some(drive) = extract_drive_letter(mount_point) {
             return format!("{}({}:)", raw_name, drive);
         }
         return raw_name.to_string();
@@ -291,7 +291,7 @@ fn query_value(key: &str, value_name: &str) -> Option<String> {
     None
 }
 
-fn get_wsl_drive_char() -> Option<Vec<(String, char)>> {
+fn get_wsl_drive_letter() -> Option<Vec<(String, char)>> {
     let root = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss";
     let keys_text = reg_query(&["query", root])?;
 
@@ -313,7 +313,7 @@ fn get_wsl_drive_char() -> Option<Vec<(String, char)>> {
                 continue;
             }
         };
-        let drive = match extract_drive_prefix(Path::new(&path)) {
+        let drive = match extract_drive_letter(Path::new(&path)) {
             Some(d) => d,
             None => {
                 continue;

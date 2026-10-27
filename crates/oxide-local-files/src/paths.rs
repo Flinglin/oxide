@@ -239,7 +239,7 @@ pub fn would_move_directory_into_itself(source: &Path, target: &Path) -> bool {
         .unwrap_or_else(|| target.to_path_buf());
     target.starts_with(source)
 }
-pub fn extract_drive_prefix(path: &Path) -> Option<char> {
+pub fn extract_drive_letter(path: &Path) -> Option<char> {
     match path.components().next()? {
         Component::Prefix(prefix) => match prefix.kind() {
             // 普通盘符：C:
