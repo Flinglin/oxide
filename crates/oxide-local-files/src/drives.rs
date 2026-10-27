@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{fmt::Display, path::Path, process::Command};
 
 #[cfg(unix)]
 use std::collections::HashMap;
@@ -9,9 +9,18 @@ use crate::LocalDrive;
 
 pub fn local_drives() -> Vec<LocalDrive> {
     let mut drives = platform_local_drives();
+
     drives.sort_by(|left, right| {
-        let left_system = if left.drive_type == "system" { 0 } else { 1 };
-        let right_system = if right.drive_type == "system" { 0 } else { 1 };
+        let left_system = if left.drive_type == DiskType::Phd(true) {
+            0
+        } else {
+            1
+        };
+        let right_system = if right.drive_type == DiskType::Phd(true) {
+            0
+        } else {
+            1
+        };
         left_system
             .cmp(&right_system)
             .then_with(|| left.path.cmp(&right.path))
@@ -20,7 +29,7 @@ pub fn local_drives() -> Vec<LocalDrive> {
         drives.push(LocalDrive {
             name: "System".to_string(),
             path: home_path_root(),
-            drive_type: "system".to_string(),
+            drive_type: DiskType::Phd(true),
             total_space: 0,
             available_space: 0,
             read_only: false,
@@ -42,7 +51,8 @@ fn home_path_root() -> String {
 
 fn platform_local_drives() -> Vec<LocalDrive> {
     use sysinfo::Disks;
-
+    #[cfg(windows)]
+    let wsl = get_wsl_drive_char();
     let disks = Disks::new_with_refreshed_list();
     let mut drives: Vec<LocalDrive> = Vec::new();
 
@@ -100,15 +110,34 @@ fn platform_local_drives() -> Vec<LocalDrive> {
             disk.is_read_only()
         };
 
+        #[cfg(windows)]
+        if let Some(distributions) = &wsl {
+            for (name, location) in distributions {
+                if let Some(mount) = mount_point.to_str()
+                    && mount.starts_with(*location)
+                {
+                    drives.push(LocalDrive {
+                        name: name.clone(),
+                        path: format!("//wsl.localhost/{}/home", name),
+                        drive_type: DiskType::Network,
+                        total_space: disk.total_space(),
+                        available_space: disk.available_space(),
+                        read_only,
+                    });
+                }
+            }
+        }
+
         drives.push(LocalDrive {
             name: drive_display_name(disk, &mount_point),
             path: mount.to_string(),
-            drive_type: classify_disk(disk).to_string(),
+            drive_type: classify_disk(disk),
             total_space: disk.total_space(),
             available_space: disk.available_space(),
             read_only,
         });
     }
+
     drives
 }
 
@@ -151,24 +180,45 @@ fn drive_display_name(disk: &sysinfo::Disk, mount_point: &Path) -> String {
         })
 }
 
-fn classify_disk(disk: &sysinfo::Disk) -> &'static str {
+#[derive(Clone, Debug, PartialEq)]
+pub enum DiskType {
+    //true表示是根目录或者系统盘
+    Phd(bool),
+    //网络磁盘
+    Network,
+    //可移动硬盘
+    Removable,
+}
+
+impl Display for DiskType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Network => f.write_str("network"),
+            Self::Phd(true) => f.write_str("system"),
+            Self::Phd(false) => f.write_str("nonsystem"),
+            Self::Removable => f.write_str("removable"),
+        }
+    }
+}
+
+fn classify_disk(disk: &sysinfo::Disk) -> DiskType {
     use sysinfo::DiskKind;
 
     let mount = disk.mount_point().to_string_lossy();
     #[cfg(not(windows))]
     if mount == "/" {
-        return "system";
+        return DiskType::Phd(true);
     }
     #[cfg(windows)]
     if mount.to_uppercase().starts_with("C:") {
-        return "system";
+        return DiskType::Phd(true);
     }
     if mount.contains("://") || mount.starts_with("//") {
-        return "network";
+        return DiskType::Network;
     }
     match disk.kind() {
-        DiskKind::HDD | DiskKind::SSD => "local",
-        _ => "removable",
+        DiskKind::HDD | DiskKind::SSD => DiskType::Phd(false),
+        _ => DiskType::Removable,
     }
 }
 
@@ -195,4 +245,87 @@ pub fn directory_stats(path: &Path) -> (u64, u64, u64) {
         }
     }
     (files, dirs, size)
+}
+fn decode_output(bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(s) => s.to_string(),
+        Err(_) => {
+            let (text, _, _) = encoding_rs::GBK.decode(bytes);
+            text.into_owned()
+        }
+    }
+}
+
+fn reg_query(args: &[&str]) -> Option<String> {
+    let out = Command::new("reg").args(args).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(decode_output(&out.stdout))
+}
+
+fn query_value(key: &str, value_name: &str) -> Option<String> {
+    let text = reg_query(&["query", key, "/v", value_name])?;
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if !trimmed.starts_with(value_name) {
+            continue;
+        }
+        let rest = &trimmed[value_name.len()..];
+        if !rest.starts_with(char::is_whitespace) {
+            continue;
+        }
+        let rest = rest.trim_start();
+        let type_end = rest.find(char::is_whitespace)?;
+        let typ = &rest[..type_end];
+        if !typ.starts_with("REG_") {
+            continue;
+        }
+        let data = rest[type_end..].trim_start();
+        return Some(data.to_string());
+    }
+    None
+}
+
+fn extract_drive(path: &str) -> Option<char> {
+    let mut chars = path.chars();
+    let first = chars.next()?;
+    if first.is_ascii_alphabetic() && chars.next()? == ':' {
+        Some(first.to_ascii_uppercase())
+    } else {
+        None
+    }
+}
+fn get_wsl_drive_char() -> Option<Vec<(String, char)>> {
+    let root = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss";
+    let keys_text = reg_query(&["query", root])?;
+
+    let mut result = Vec::new();
+    for line in keys_text.lines() {
+        let line = line.trim();
+        let guid = match line.rsplit('\\').next() {
+            Some(g) if g.starts_with('{') && g.ends_with('}') => g,
+            _ => continue,
+        };
+        let key = format!(r"{}\{}", root, guid);
+        let name = match query_value(&key, "DistributionName") {
+            Some(n) if !n.is_empty() => n,
+            _ => continue,
+        };
+        let path = match query_value(&key, "BasePath") {
+            Some(p) if !p.is_empty() => p,
+            _ => {
+                continue;
+            }
+        };
+        let drive = match extract_drive(&path) {
+            Some(d) => d,
+            None => {
+                continue;
+            }
+        };
+
+        result.push((name, drive));
+    }
+    Some(result)
 }

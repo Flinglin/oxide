@@ -6727,6 +6727,7 @@ dependencies = [
  "base64 0.23.1",
  "chrono",
  "embed-resource",
+ "encoding_rs",
  "fs2",
  "futures-util",
  "gpui-pre",
@@ -7259,6 +7260,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "dirs 7.0.0",
+ "encoding_rs",
  "md5 0.7.0",
  "serde",
  "sha2 0.10.9",

@@ -1104,7 +1104,7 @@ impl WorkspaceApp {
                                 div()
                                     .text_size(px(FILE_MANAGER_TEXT_XS))
                                     .text_color(rgb(self.theme_tokens.ui.text_muted))
-                                    .child(drive.drive_type.clone()),
+                                    .child(drive.drive_type.to_string()),
                             ),
                     )
                     .child(

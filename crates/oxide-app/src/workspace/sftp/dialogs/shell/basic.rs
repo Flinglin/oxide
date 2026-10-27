@@ -44,7 +44,7 @@ impl WorkspaceApp {
                             .hover(move |row| row.bg(rgb(theme.bg_hover)))
                             .cursor_pointer()
                             .child(Self::render_lucide_icon(
-                                if drive.drive_type == "network" {
+                                if drive.drive_type == DiskType::Network {
                                     LucideIcon::Network
                                 } else {
                                     LucideIcon::HardDrive

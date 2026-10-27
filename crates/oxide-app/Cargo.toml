@@ -16,6 +16,7 @@ name = "oxide"
 path = "src/main.rs"
 
 [dependencies]
+encoding_rs.workspace=true
 oxide-background-media = { path = "../oxide-background-media" }
 oxide-background = { path = "../oxide-background" }
 oxide-ftp = { path = "../oxide-ftp" }

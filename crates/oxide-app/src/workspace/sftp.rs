@@ -8,6 +8,7 @@ use gpui::{
 use oxide_connections::SshChannelStrategy;
 use oxide_editor::{EditorContextMenuLabels, TextEditorView};
 use oxide_editor_syntax::LanguageId;
+use oxide_local_files::DiskType;
 use oxide_markdown::{MarkdownVirtualListScrollHandle, markdown_virtual_with_code_actions};
 use oxide_preview::{
     AudioPreviewBackend, AudioPreviewCommand, AudioPreviewState, PreviewAssetOwner,
@@ -997,7 +998,7 @@ pub(super) enum SftpDialog {
 struct SftpDrive {
     name: String,
     path: String,
-    drive_type: String,
+    drive_type: DiskType,
     total_space: u64,
     available_space: u64,
     read_only: bool,

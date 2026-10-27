@@ -17,7 +17,7 @@ pub use bookmarks::{
     new_file_manager_bookmark_id, now_ms,
 };
 pub use checksum::calculate_local_checksum;
-pub use drives::{directory_stats, local_drives};
+pub use drives::{directory_stats, local_drives,DiskType};
 pub use listing::{list_local_files, local_file_default_cmp, sorted_local_files};
 pub use model::{
     LocalArchiveEntry, LocalArchiveInfo, LocalBookmark, LocalChecksumResult, LocalClipboardMode,

@@ -1,4 +1,4 @@
-use std::borrow::Cow;
+use std::{borrow::Cow};
 
 use super::ime::WorkspaceImeTarget;
 use super::*;
@@ -9,9 +9,9 @@ use gpui::{
 use oxide_editor::{EditorContextMenuLabels, TextEditorView};
 use oxide_editor_core::utf16::replace_utf16;
 use oxide_local_files::{
-    BOOKMARKS_FILENAME as FILE_MANAGER_BOOKMARKS_FILENAME, LocalArchiveEntry, LocalArchiveInfo,
-    LocalBookmark, LocalChecksumResult, LocalClipboardMode, LocalDrive, LocalFileEntry,
-    LocalFileType, LocalPreview, LocalPreviewMetadata, LocalSidebarLocation,
+    BOOKMARKS_FILENAME as FILE_MANAGER_BOOKMARKS_FILENAME, LocalArchiveEntry,
+    LocalArchiveInfo, LocalBookmark, LocalChecksumResult, LocalClipboardMode, LocalDrive,
+    LocalFileEntry, LocalFileType, LocalPreview, LocalPreviewMetadata, LocalSidebarLocation,
     LocalSidebarLocationKind, LocalSortDirection, LocalSortField,
 };
 use oxide_markdown::{
@@ -976,7 +976,10 @@ impl FileManagerState {
         self.replace_files(Vec::new());
     }
 
-    pub(super) fn load(settings_path: &std::path::Path, cx: &mut Context<Self>) -> Self {
+    pub(super) fn load(
+        settings_path: &std::path::Path,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let bookmarks_path = settings_path
             .parent()
             .unwrap_or(settings_path)

@@ -1,3 +1,5 @@
+use crate::drives::DiskType;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LocalFileType {
     File,
@@ -45,7 +47,7 @@ impl LocalFileEntry {
 pub struct LocalDrive {
     pub name: String,
     pub path: String,
-    pub drive_type: String,
+    pub drive_type: DiskType,
     pub total_space: u64,
     pub available_space: u64,
     pub read_only: bool,
