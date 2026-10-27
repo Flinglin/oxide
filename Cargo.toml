@@ -448,12 +448,14 @@ codegen-units = 1
 strip = true
 panic = "abort"
 opt-level = 3
+debug-assertions = false
 
 [profile.dev]
 opt-level = 0
 debug = 1
 incremental = true
 split-debuginfo = "unpacked"
+debug-assertions = true
 
 # The refreshed GPUI traverses larger interaction and layout trees. Keep the default development
 # build debuggable while avoiding multi-hundred-millisecond frames in the native GUI.

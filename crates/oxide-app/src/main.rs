@@ -1,7 +1,10 @@
 // The native GPUI app is a Windows GUI process. Without this subsystem flag,
 // Windows launches a console host for the installed app and closing that
 // console also terminates oxide.
-#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
 
 mod app_icon;
 mod assets;
