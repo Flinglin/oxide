@@ -692,10 +692,10 @@ impl WorkspaceApp {
             let sftp = self.sftp_view().read(cx);
             match pane {
                 SftpPane::Local if sftp.pair_primary_remote_id.is_some() => {
-                    normalize_remote_path(&sftp.local_path_input)
+                    normalize_remote_path(&sftp.local_path_input).into_owned()
                 }
                 SftpPane::Local => sftp.local_path_input.trim().to_string(),
-                SftpPane::Remote => normalize_remote_path(&sftp.remote_path_input),
+                SftpPane::Remote => normalize_remote_path(&sftp.remote_path_input).into_owned(),
             }
         };
         if !path.is_empty() {
@@ -730,8 +730,8 @@ impl WorkspaceApp {
             (SftpPane::Local, "..") => parent_path(
                 &self.sftp_view().read(cx).local_path,
                 self.sftp_pair_primary_remote_id(cx).is_some(),
-            ),
-            (SftpPane::Remote, "..") => parent_path(&self.sftp_view().read(cx).remote_path, true),
+            ).into_owned(),
+            (SftpPane::Remote, "..") => parent_path(&self.sftp_view().read(cx).remote_path, true).into_owned(),
             _ => target.to_string(),
         };
         self.set_sftp_path(pane, next, cx);
@@ -928,7 +928,7 @@ impl SftpWorkspaceEntity {
 
     pub(in crate::workspace::sftp) fn apply_pair_primary_path(&mut self, path: String) {
         self.local_path_completion.dismiss();
-        self.local_path = normalize_remote_path(&path);
+        self.local_path = normalize_remote_path(&path).into_owned();
         self.local_path_input.clone_from(&self.local_path);
         self.editing_local_path = false;
         self.local_selected.clear();

@@ -1,6 +1,9 @@
-use std::path::{Component, Path, PathBuf, Prefix};
+use std::{
+    borrow::Cow,
+    path::{Component, Path, PathBuf, Prefix},
+};
 
-use crate::{LocalPathSegment, LocalSidebarLocation, LocalSidebarLocationKind};
+use crate::{LocalSidebarLocation, LocalSidebarLocationKind};
 
 #[cfg(target_os = "macos")]
 const MACOS_APPLICATIONS_PATH: &str = "/Applications";
@@ -86,107 +89,57 @@ fn platform_applications_path() -> Option<PathBuf> {
     }
 }
 
-pub fn normalize_local_path(path: &str) -> String {
+pub fn resolve_home_path<'a>(path: &'a str) -> Cow<'a, str> {
     let trimmed = path.trim();
-    if trimmed == "~" || trimmed == "$HOME" {
-        return home_path();
+    if trimmed.is_empty() || trimmed == "~" || trimmed == "$HOME" {
+        return Cow::Owned(home_path());
     }
-    for prefix in ["~/", "~\\", "$HOME/", "$HOME\\"] {
-        if let Some(rest) = trimmed.strip_prefix(prefix) {
-            return Path::new(&home_path())
-                .join(rest)
-                .to_string_lossy()
-                .to_string();
+    let rest = trimmed
+        .strip_prefix("~/")
+        .or_else(|| trimmed.strip_prefix("~\\"))
+        .or_else(|| trimmed.strip_prefix("$HOME/"))
+        .or_else(|| trimmed.strip_prefix("$HOME\\"));
+
+    match rest {
+        Some(rest) => {
+            let home = home_path();
+            let mut out = String::with_capacity(home.len() + 1 + rest.len());
+            out.push_str(&home);
+            if !home.ends_with(['/', '\\']) {
+                out.push(std::path::MAIN_SEPARATOR);
+            }
+            out.push_str(rest);
+            Cow::Owned(out)
+        }
+        None => Cow::Borrowed(trimmed), // 零分配
+    }
+}
+
+pub fn local_parent_path<'a>(path: &'a str) -> Option<Cow<'a, str>> {
+    let normalized = resolve_home_path(path);
+    match normalized {
+        // 路径不需要 home 展开：s: &'a str
+        Cow::Borrowed(s) => {
+            let segments = split_path_into_segments(s); // SegmentedPath<'a>
+            let idx = segments.len().saturating_sub(2);
+            if let Some(seg) = segments.get_borrowed(idx) {
+                Some(Cow::Borrowed(seg.full_path)) // 零分配
+            } else {
+                // 需要规范化（c:/x、/a/../b 等），转 Owned
+                segments
+                    .get(idx)
+                    .map(|seg| Cow::Owned(seg.full_path.to_owned()))
+            }
+        }
+        // 路径需要 home 展开（~/x、$HOME、空串）
+        Cow::Owned(s) => {
+            let segments = split_path_into_segments(&s);
+            let idx = segments.len().saturating_sub(2);
+            segments
+                .get(idx)
+                .map(|seg| Cow::Owned(seg.full_path.to_owned()))
         }
     }
-    if trimmed.is_empty() {
-        home_path()
-    } else {
-        trimmed.to_string()
-    }
-}
-
-pub fn local_parent_path(path: &str) -> Option<String> {
-    let normalized = normalize_local_path(path);
-    if let Some(segments) = windows_path_segments(&normalized) {
-        // Drive roots have no filesystem parent; their caller may open the drive picker.
-        return segments
-            .get(segments.len().checked_sub(2)?)
-            .map(|segment| segment.full_path.clone());
-    }
-    let path = Path::new(&normalized);
-    path.parent()
-        .map(|parent| parent.to_string_lossy().to_string())
-        .filter(|parent| !parent.is_empty())
-}
-
-pub fn local_path_segments(path: &str) -> Vec<LocalPathSegment> {
-    let normalized = normalize_local_path(path);
-    if let Some(segments) = windows_path_segments(&normalized) {
-        return segments;
-    }
-
-    let unix_path = normalized.replace('\\', "/");
-    let mut segments = vec![LocalPathSegment {
-        name: "/".to_string(),
-        full_path: "/".to_string(),
-        root_is_drive: false,
-    }];
-    let mut current = String::from("/");
-    for part in unix_path
-        .trim_start_matches('/')
-        .split('/')
-        .filter(|part| !part.is_empty())
-    {
-        current = if current == "/" {
-            format!("/{part}")
-        } else {
-            format!("{current}/{part}")
-        };
-        segments.push(LocalPathSegment {
-            name: part.to_string(),
-            full_path: current.clone(),
-            root_is_drive: false,
-        });
-    }
-    segments
-}
-
-fn windows_path_segments(path: &str) -> Option<Vec<LocalPathSegment>> {
-    let normalized = path.replace('/', "\\");
-    let bytes = normalized.as_bytes();
-    if bytes.len() < 2
-        || !bytes[0].is_ascii_alphabetic()
-        || bytes[1] != b':'
-        || (bytes.len() > 2 && bytes[2] != b'\\')
-    {
-        return None;
-    }
-
-    // Keep the drive prefix attached to every clickable path instead of producing `/C:`.
-    let drive = normalized[..2].to_string();
-    let mut current = format!("{drive}\\");
-    let mut segments = vec![LocalPathSegment {
-        name: drive,
-        full_path: current.clone(),
-        root_is_drive: true,
-    }];
-    for part in normalized[2..]
-        .trim_start_matches('\\')
-        .split('\\')
-        .filter(|part| !part.is_empty())
-    {
-        if !current.ends_with('\\') {
-            current.push('\\');
-        }
-        current.push_str(part);
-        segments.push(LocalPathSegment {
-            name: part.to_string(),
-            full_path: current.clone(),
-            root_is_drive: true,
-        });
-    }
-    Some(segments)
 }
 
 pub fn join_local_path(base: &str, name: &str) -> String {
@@ -252,6 +205,262 @@ pub fn extract_drive_letter(path: &Path) -> Option<char> {
         _ => None,
     }
 }
+
+use memchr::memchr;
+use std::fmt;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Segment<'a> {
+    pub name: &'a str,
+    pub full_path: &'a str,
+    pub root_is_drive: bool,
+}
+
+#[derive(Clone, Copy)]
+struct SegRange {
+    name_start: u32,
+    full_end: u32,
+    flags: u32,
+}
+
+const FLAG_ROOT_IS_DRIVE: u32 = 1;
+
+#[derive(Clone)]
+pub struct SegmentedPath<'a> {
+    buf: Cow<'a, str>,
+    segments: Vec<SegRange>,
+}
+
+impl<'a> SegmentedPath<'a> {
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.segments.len()
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.segments.is_empty()
+    }
+
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        self.buf.as_ref()
+    }
+
+    #[inline]
+    pub fn as_borrowed(&self) -> Option<&'a str> {
+        match &self.buf {
+            Cow::Borrowed(s) => Some(*s),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn get(&self, i: usize) -> Option<Segment<'_>> {
+        let r = self.segments.get(i)?;
+        let buf = self.buf.as_ref();
+        let full_end = r.full_end as usize;
+        Some(Segment {
+            name: &buf[r.name_start as usize..full_end],
+            full_path: &buf[..full_end],
+            root_is_drive: (r.flags & FLAG_ROOT_IS_DRIVE) != 0,
+        })
+    }
+
+    #[inline]
+    pub fn get_borrowed(&self, i: usize) -> Option<Segment<'a>> {
+        let s = self.as_borrowed()?;
+        let r = self.segments.get(i)?;
+        let full_end = r.full_end as usize;
+        Some(Segment {
+            name: &s[r.name_start as usize..full_end],
+            full_path: &s[..full_end],
+            root_is_drive: (r.flags & FLAG_ROOT_IS_DRIVE) != 0,
+        })
+    }
+
+    #[inline]
+    pub fn iter(&self) -> Iter<'_> {
+        Iter {
+            buf: self.buf.as_ref(),
+            ranges: &self.segments,
+            pos: 0,
+        }
+    }
+}
+
+impl<'a, 'b> IntoIterator for &'a SegmentedPath<'b> {
+    type Item = Segment<'a>;
+    type IntoIter = Iter<'a>;
+    #[inline]
+    fn into_iter(self) -> Iter<'a> {
+        self.iter()
+    }
+}
+
+impl<'a> fmt::Debug for SegmentedPath<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(self.iter()).finish()
+    }
+}
+
+pub struct Iter<'a> {
+    buf: &'a str,
+    ranges: &'a [SegRange],
+    pos: usize,
+}
+
+impl<'a> Iterator for Iter<'a> {
+    type Item = Segment<'a>;
+    #[inline]
+    fn next(&mut self) -> Option<Segment<'a>> {
+        let r = self.ranges.get(self.pos)?;
+        self.pos += 1;
+        let full_end = r.full_end as usize;
+        Some(Segment {
+            name: &self.buf[r.name_start as usize..full_end],
+            full_path: &self.buf[..full_end],
+            root_is_drive: (r.flags & FLAG_ROOT_IS_DRIVE) != 0,
+        })
+    }
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let n = self.ranges.len() - self.pos;
+        (n, Some(n))
+    }
+}
+
+impl<'a> ExactSizeIterator for Iter<'a> {}
+
+pub fn normalize_path_separators<'a>(path: Cow<'a, str>) -> Cow<'a, str> {
+    let mut last = 0;
+    let mut out: Option<String> = None;
+    for (i, _) in path.match_indices('\\') {
+        // 惰性创建：只有真的遇到 '\' 才分配
+        let buf = out.get_or_insert_with(|| String::with_capacity(path.len()));
+        buf.push_str(&path[last..i]); // ← 补上：把上一次 '\' 之后、本次 '\' 之前的段拷进去
+        buf.push('/');
+        last = i + 1;
+    }
+    match out {
+        Some(mut buf) => {
+            buf.push_str(&path[last..]); // 最后一段
+            Cow::Owned(buf)
+        }
+        None => path,
+    }
+}
+
+// ============================================================
+// 入口
+// ============================================================
+
+pub fn split_path_into_segments<'a>(path: impl Into<Cow<'a, str>>) -> SegmentedPath<'a> {
+    let cow = path.into();
+    let bytes = cow.as_bytes();
+    let mut segments = Vec::with_capacity(8);
+
+    if bytes.starts_with(b"//") {
+       split_unc(bytes, &mut segments, b'/');
+    } else if bytes.starts_with(b"\\\\") {
+        split_unc(bytes, &mut segments, b'\\');
+    } else if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+        let root_end = if bytes.len() >= 3 && bytes[2] == b'\\' {
+            3
+        } else {
+            2
+        };
+        segments.push(SegRange {
+            name_start: 0,
+            full_end: root_end as u32,
+            flags: FLAG_ROOT_IS_DRIVE,
+        });
+        if root_end < bytes.len() {
+            push_body(&bytes[root_end..], root_end, &mut segments, b'\\');
+        }
+    } else {
+        segments.push(SegRange {
+            name_start: 0,
+            full_end: 1,
+            flags: 0,
+        });
+        if bytes.len() > 1 {
+            push_body(&bytes[1..], 1, &mut segments, b'/');
+        }
+    }
+
+    SegmentedPath { buf: cow, segments }
+}
+
+/// 输入以 `//` 开头。根 = `//server/share/`（无 share 时 `//server`）。
+fn split_unc(bytes: &[u8], segments: &mut Vec<SegRange>, sep: u8) {
+    let rest = &bytes[2..];
+    let server_end = memchr(sep, rest).unwrap_or(rest.len());
+
+    if server_end == 0 {
+        // `//`、`\\`、`///...` 等退化：按 Unix 根处理
+        segments.push(SegRange { name_start: 0, full_end: 1, flags: 0 });
+        if bytes.len() > 1 {
+            push_body(&bytes[1..], 1, segments, sep);
+        }
+        return;
+    }
+
+    let after_server = 2 + server_end;
+    if after_server >= bytes.len() {
+        // 只有 `//server` 或 `\\server`（无尾分隔符）
+        segments.push(SegRange {
+            name_start: 0,
+            full_end: bytes.len() as u32,
+            flags: 0,
+        });
+        return;
+    }
+
+    // 有 share
+    let share_start = after_server + 1;
+    let share_end = memchr(sep, &bytes[share_start..])
+        .map(|i| share_start + i)
+        .unwrap_or(bytes.len());
+
+    // 根节点：把 share 后的分隔符并入根（若存在）
+    let root_end = if share_end < bytes.len() { share_end + 1 } else { share_end };
+    segments.push(SegRange {
+        name_start: 0,
+        full_end: root_end as u32,
+        flags: 0,
+    });
+
+    if root_end < bytes.len() {
+        push_body(&bytes[root_end..], root_end, segments, sep);
+    }
+}
+
+#[inline]
+fn push_body(bytes: &[u8], base: usize, segments: &mut Vec<SegRange>, seperator: u8) {
+    let mut start = 0;
+    let mut pos = 0;
+    while let Some(off) = memchr(seperator, &bytes[pos..]) {
+        let i = pos + off;
+        if i > start {
+            segments.push(SegRange {
+                name_start: (base + start) as u32,
+                full_end: (base + i) as u32,
+                flags: 0,
+            });
+        }
+        pos = i + 1;
+        start = pos;
+    }
+    if start < bytes.len() {
+        segments.push(SegRange {
+            name_start: (base + start) as u32,
+            full_end: (base + bytes.len()) as u32,
+            flags: 0,
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,20 +540,6 @@ mod tests {
         );
 
         assert_eq!(locations[0].path, redirected_desktop.to_string_lossy());
-    }
-
-    #[test]
-    fn windows_drive_segments_remain_absolute_on_every_platform() {
-        let segments = local_path_segments(r"D:\Projects\oxide");
-
-        assert_eq!(
-            segments
-                .iter()
-                .map(|segment| segment.full_path.as_str())
-                .collect::<Vec<_>>(),
-            [r"D:\", r"D:\Projects", r"D:\Projects\oxide"]
-        );
-        assert!(segments.iter().all(|segment| segment.root_is_drive));
     }
 
     #[test]

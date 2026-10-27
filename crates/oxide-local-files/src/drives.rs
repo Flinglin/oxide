@@ -118,7 +118,7 @@ fn platform_local_drives() -> Vec<LocalDrive> {
                 {
                     drives.push(LocalDrive {
                         name: name.clone(),
-                        path: format!("//wsl.localhost/{}/home", name),
+                        path: format!("\\\\wsl.localhost\\{}\\home", name),
                         drive_type: DiskType::Network,
                         total_space: disk.total_space(),
                         available_space: disk.available_space(),

@@ -1,42 +1,68 @@
+use std::{path::PathBuf, time::Instant};
+
 use crate::{LocalFileEntry, LocalFileType, LocalSortDirection, LocalSortField};
 
 pub fn list_local_files(path: &str) -> std::io::Result<Vec<LocalFileEntry>> {
-    let mut entries = Vec::new();
-    for entry in std::fs::read_dir(path)? {
+    let dir = std::fs::read_dir(path)?;
+    let mut entries = Vec::with_capacity(64);
+    let mut path_buf = PathBuf::with_capacity(256);
+
+    for entry in dir {
         let entry = entry?;
-        let path_buf = entry.path();
-        let Ok(symlink_metadata) = std::fs::symlink_metadata(&path_buf) else {
-            // Some platform entries can be listed but fail metadata probing.
-            // Keep the directory usable instead of failing the whole listing.
-            continue;
+        let file_name = entry.file_name(); // OsString，一次分配
+
+        // 复用 path_buf：clear + push 不重新分配
+        path_buf.clear();
+        path_buf.push(path);
+        path_buf.push(&file_name);
+
+        // 一次 lstat 拿所有信息。非 symlink 时 lstat == stat，无需二次调用。
+        let symlink_metadata = match std::fs::symlink_metadata(&path_buf) {
+            Ok(m) => m,
+            Err(_) => continue,
         };
-        let target_metadata = std::fs::metadata(&path_buf).ok();
+
+        let is_symlink = symlink_metadata.file_type().is_symlink();
+
+        // 只有 symlink 才需要二次 stat + readlink
+        let (target_metadata, symlink_target) = if is_symlink {
+            let target = std::fs::metadata(&path_buf).ok();
+            let link = std::fs::read_link(&path_buf)
+                .ok()
+                .map(|t| t.to_string_lossy().into_owned());
+            (target, link)
+        } else {
+            (None, None)
+        };
         let metadata = target_metadata.as_ref().unwrap_or(&symlink_metadata);
-        let file_type = if symlink_metadata.file_type().is_symlink() {
+
+        let is_dir = metadata.is_dir();
+        let file_type = if is_symlink {
             LocalFileType::Symlink
-        } else if metadata.is_dir() {
+        } else if is_dir {
             LocalFileType::Directory
         } else {
             LocalFileType::File
         };
+
         let modified = metadata
             .modified()
             .ok()
-            .and_then(|mtime| mtime.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|duration| duration.as_secs() as i64);
+            .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64);
+
         entries.push(LocalFileEntry {
-            name: entry.file_name().to_string_lossy().to_string(),
-            path: path_buf.to_string_lossy().to_string(),
+            name: file_name.to_string_lossy().into_owned(),
+            path: path_buf.to_string_lossy().into_owned(),
             file_type,
-            size: if metadata.is_dir() { 0 } else { metadata.len() },
+            size: if is_dir { 0 } else { metadata.len() },
             modified,
             readonly: metadata.permissions().readonly(),
-            symlink_target: std::fs::read_link(&path_buf)
-                .ok()
-                .map(|target| target.to_string_lossy().to_string()),
+            symlink_target,
         });
     }
-    entries.sort_by(local_file_default_cmp);
+
+    entries.sort_unstable_by(local_file_default_cmp);
     Ok(entries)
 }
 

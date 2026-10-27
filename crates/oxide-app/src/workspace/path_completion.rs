@@ -200,7 +200,7 @@ pub(super) fn local_path_completion_request(input: &str) -> Option<PathCompletio
     if input.trim().is_empty() {
         return None;
     }
-    let normalized = oxide_local_files::normalize_local_path(input);
+    let normalized = oxide_local_files::resolve_home_path(input);
     split_path_completion_request(
         &normalized,
         input.ends_with(['/', '\\']),

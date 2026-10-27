@@ -1168,7 +1168,7 @@ impl WorkspaceApp {
             .flex_row()
             .items_center()
             .gap(px(SFTP_BREADCRUMB_ROW_GAP));
-        for (index, segment) in segments.iter().cloned().enumerate() {
+        for (index, segment) in segments.iter().enumerate() {
             if index > 0 {
                 inner = inner.child(Self::render_lucide_icon(
                     LucideIcon::ChevronRight,
@@ -1177,10 +1177,10 @@ impl WorkspaceApp {
                 ));
             }
             let is_last = index + 1 == segments.len();
-            let full_path = segment.full_path.clone();
+            let full_path = segment.full_path.to_owned();
             let selection_group_id = crate::workspace::selectable_text::selectable_text_id(
                 "sftp-breadcrumb-segment",
-                (pane as u64, segment.full_path.as_str()),
+                (pane as u64, segment.full_path),
             );
             let segment_text_color = if is_last {
                 theme.text_heading
@@ -1225,7 +1225,7 @@ impl WorkspaceApp {
                         self.render_row_safe_selectable_display_text_in_group(
                             selection_group_id,
                             "sftp-breadcrumb-cell",
-                            ("name", pane as u64, segment.full_path.as_str()),
+                            ("name", pane as u64, segment.full_path),
                             0,
                             segment.name,
                             segment_text_color,

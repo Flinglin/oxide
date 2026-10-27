@@ -1,5 +1,6 @@
 use super::*;
 
+use oxide_local_files::resolve_home_path;
 pub(in crate::workspace::sftp) use oxide_sftp::{
     join_remote_path as join_sftp_path, normalize_remote_path, remote_directory_prefixes,
 };
@@ -50,7 +51,7 @@ pub(in crate::workspace::sftp) fn default_download_path() -> String {
 pub(in crate::workspace::sftp) fn list_local_files(
     path: &str,
 ) -> std::io::Result<Vec<SftpFileEntry>> {
-    oxide_local_files::list_local_files(&oxide_local_files::normalize_local_path(path))
+    oxide_local_files::list_local_files(&oxide_local_files::resolve_home_path(path))
         .map(|files| files.into_iter().map(sftp_file_entry_from_local).collect())
 }
 
@@ -163,43 +164,24 @@ pub(in crate::workspace::sftp) fn sorted_sftp_files(
     filtered
 }
 
-pub(in crate::workspace::sftp) fn sftp_path_segments(
-    path: &str,
+pub(in crate::workspace::sftp) fn sftp_path_segments<'a>(
+    path: &'a str,
     is_remote: bool,
-) -> Vec<oxide_local_files::LocalPathSegment> {
-    if !is_remote {
-        return oxide_local_files::local_path_segments(path);
-    }
-
-    let normalized = normalize_remote_path(path);
-    let mut segments = vec![oxide_local_files::LocalPathSegment {
-        name: "/".to_string(),
-        full_path: "/".to_string(),
-        root_is_drive: false,
-    }];
-    let without_root = normalized.trim_start_matches('/');
-    let mut current = String::from("/");
-    for part in without_root.split('/').filter(|part| !part.is_empty()) {
-        current = if current == "/" {
-            format!("/{part}")
-        } else {
-            format!("{current}/{part}")
-        };
-        segments.push(oxide_local_files::LocalPathSegment {
-            name: part.to_string(),
-            full_path: current.clone(),
-            root_is_drive: false,
-        });
-    }
-    segments
+) -> oxide_local_files::SegmentedPath<'a> {
+    let normalized = if !is_remote {
+        resolve_home_path(path)
+    } else {
+        normalize_remote_path(path)
+    };
+    return oxide_local_files::split_path_into_segments(normalized);
 }
 
-pub(in crate::workspace::sftp) fn parent_path(path: &str, remote: bool) -> String {
+pub(in crate::workspace::sftp) fn parent_path<'a>(path: &'a str, remote: bool) -> Cow<'a,str> {
     if remote {
         return oxide_sftp::remote_parent_path(path);
     }
     oxide_local_files::local_parent_path(path)
-        .unwrap_or_else(|| oxide_local_files::normalize_local_path(path))
+        .unwrap_or_else(|| oxide_local_files::resolve_home_path(path))
 }
 
 pub(in crate::workspace::sftp) fn join_local_path(base: &str, name: &str) -> String {
@@ -941,7 +923,7 @@ mod sftp_helper_tests {
         assert_eq!(
             segments
                 .iter()
-                .map(|segment| segment.full_path.as_str())
+                .map(|segment| segment.full_path)
                 .collect::<Vec<_>>(),
             [r"D:\", r"D:\Projects", r"D:\Projects\oxide"]
         );

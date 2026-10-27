@@ -276,7 +276,9 @@ impl WorkspaceApp {
                             cx,
                         ),
                     FileManagerWorkspaceEvent::OpenEntry(entry) => {
+                  
                         workspace.open_file_manager_entry(entry.clone(), cx);
+                
                     }
                 }
                 cx.notify();

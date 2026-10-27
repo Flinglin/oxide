@@ -30,7 +30,6 @@ gpui.workspace = true
 image.workspace = true
 oxide-backend-classification = { path = "../oxide-backend-classification" }
 
-
 oxide-secret-key-store = { path = "../oxide-secret-key-store" }
 oxide-atomic-file = { path = "../oxide-atomic-file" }
 oxide-app-lock = { path = "../oxide-app-lock" }

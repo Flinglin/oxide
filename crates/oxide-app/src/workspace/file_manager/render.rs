@@ -973,14 +973,15 @@ impl WorkspaceApp {
 
     fn render_file_manager_breadcrumb(&self, path: &str, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme_tokens.ui;
-        let segments = file_manager_path_segments(path);
+        let normalized=resolve_home_path(path);
+        let segments = file_manager_path_segments(normalized);
         let mut inner = div()
             .flex_none()
             .flex()
             .flex_row()
             .items_center()
             .gap(px(FILE_MANAGER_BREADCRUMB_ROW_GAP));
-        for (index, segment) in segments.iter().cloned().enumerate() {
+        for (index, segment) in segments.iter().enumerate() {
             if index > 0 {
                 inner = inner.child(Self::render_lucide_icon(
                     LucideIcon::ChevronRight,
@@ -989,7 +990,6 @@ impl WorkspaceApp {
                 ));
             }
             let is_last = index + 1 == segments.len();
-            let full_path = segment.full_path.clone();
             let selection_group_id = crate::workspace::selectable_text::selectable_text_id(
                 "file-manager-breadcrumb-segment",
                 &segment.full_path,
@@ -999,6 +999,7 @@ impl WorkspaceApp {
             } else {
                 theme.text
             };
+            let full_path=segment.full_path.to_owned();
             inner = inner.child(
                 div()
                     .max_w(px(120.0))
@@ -1040,7 +1041,7 @@ impl WorkspaceApp {
                         self.render_row_safe_selectable_display_text_in_group(
                             selection_group_id,
                             "file-manager-breadcrumb-cell",
-                            ("name", segment.full_path.as_str()),
+                            ("name", segment.full_path),
                             0,
                             segment.name,
                             segment_text_color,

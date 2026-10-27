@@ -7262,6 +7262,7 @@ dependencies = [
  "dirs 7.0.0",
  "encoding_rs",
  "md5 0.7.0",
+ "memchr",
  "serde",
  "sha2 0.10.9",
  "sysinfo 0.33.1",

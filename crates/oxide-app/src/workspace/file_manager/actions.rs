@@ -489,7 +489,7 @@ impl WorkspaceApp {
     pub(super) fn navigate_file_manager_parent(&mut self, cx: &mut Context<Self>) {
         let current_path = self.file_manager.read(cx).path.clone();
         if let Some(parent) = local_parent_path(&current_path) {
-            self.set_file_manager_path(parent, cx);
+            self.set_file_manager_path(parent.into_owned(), cx);
         } else {
             self.open_file_manager_drives_dialog(cx);
         }

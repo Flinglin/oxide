@@ -1,7 +1,7 @@
 // Copyright (C) 2026 AnalyseDeCircuit
 // SPDX-License-Identifier: GPL-3.0-only
 
-use std::{collections::HashSet, path::PathBuf};
+use std::{borrow::Cow, collections::HashSet, path::PathBuf};
 
 use crate::SftpError;
 
@@ -46,35 +46,92 @@ pub fn join_remote_path(base: &str, component: &str) -> String {
 }
 
 /// Normalizes a remote path to the absolute forward-slash form used by SFTP.
-pub fn normalize_remote_path(path: &str) -> String {
+pub fn normalize_remote_path(path: &str) -> Cow<'_, str> {
+    // trim 产生的是原串的子切片，生命周期仍是 'a，可安全借用
     let trimmed = path.trim();
-    if trimmed.is_empty() || trimmed == "/" {
-        return "/".to_string();
+
+    if trimmed.is_empty() {
+        return Cow::Borrowed("/"); // 'static，零分配
     }
-    let normalized = trimmed.replace('\\', "/").replace("//", "/");
-    if normalized.starts_with('/') {
-        normalized
-    } else {
-        format!("/{normalized}")
+
+    // 快路径：已规范化则直接借用
+    if is_normalized_remote(trimmed) {
+        return Cow::Borrowed(trimmed);
     }
+
+    // 慢路径：一次遍历完成 反斜杠→正斜杠、折叠重复分隔符、补前导 /
+    let needs_prefix = !trimmed.starts_with('/') && !trimmed.starts_with('\\');
+    let mut out = String::with_capacity(trimmed.len() + needs_prefix as usize);
+    let mut prev_slash = false;
+
+    if needs_prefix {
+        out.push('/');
+        prev_slash = true;
+    }
+
+    for ch in trimmed.chars() {
+        let c = if ch == '\\' { '/' } else { ch };
+        if c == '/' {
+            if !prev_slash {
+                out.push('/');
+                prev_slash = true;
+            }
+        } else {
+            out.push(c);
+            prev_slash = false;
+        }
+    }
+
+    Cow::Owned(out)
 }
 
-/// Returns the parent of an absolute remote path without crossing the root.
-pub fn remote_parent_path(path: &str) -> String {
-    let normalized = normalize_remote_path(path);
-    if normalized == "/" {
-        return normalized;
+#[inline]
+fn is_normalized_remote(s: &str) -> bool {
+    if !s.starts_with('/') {
+        return false;
     }
-    let mut parts = normalized
-        .trim_end_matches('/')
-        .split('/')
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>();
-    parts.pop();
-    if parts.is_empty() {
-        "/".to_string()
-    } else {
-        format!("/{}", parts.join("/"))
+    let bytes = s.as_bytes();
+    let mut prev = 0u8;
+    for &b in bytes {
+        if b == b'\\' {
+            return false;
+        }
+        if b == b'/' && prev == b'/' {
+            return false;
+        }
+        prev = b;
+    }
+    true
+}
+/// Returns the parent of an absolute remote path without crossing the root.
+pub fn remote_parent_path(path: &str) -> Cow<'_, str> {
+    match normalize_remote_path(path) {
+        Cow::Borrowed(s) => {
+            // s: &'a str，结果可以借它，生命周期仍是 'a
+            let trimmed = s.trim_end_matches('/');
+            if trimmed.is_empty() {
+                return Cow::Borrowed("/");
+            }
+            match trimmed.rfind('/') {
+                Some(0) | None => Cow::Borrowed("/"),
+                Some(idx) => Cow::Borrowed(&trimmed[..idx]),
+            }
+        }
+        Cow::Owned(mut s) => {
+            // 已分配 String，就地截断，零额外分配
+            let new_len = s.trim_end_matches('/').len();
+            s.truncate(new_len);
+            if s.is_empty() {
+                s.push('/');
+            } else if let Some(idx) = s.rfind('/') {
+                s.truncate(if idx == 0 { 1 } else { idx });
+            } else {
+                // 防御：理论上 normalize 后必以 '/' 开头，rfind 不会 None
+                s.clear();
+                s.push('/');
+            }
+            Cow::Owned(s)
+        }
     }
 }
 

@@ -1,3 +1,6 @@
+use std::borrow::Cow;
+
+use oxide_local_files::normalize_path_separators;
 use oxide_terminal_core::TerminalRelay;
 
 use super::*;
@@ -38,7 +41,7 @@ impl WorkspaceApp {
     ) -> String {
         if let Some(tab) = self.tab_host.read(cx).active_tab() {
             if let TabKind::LocalTerminal(TerminalRelay::Wsl(distribution)) = &tab.kind {
-                return format!("//wsl.localhost/{}{}", distribution, original_path);
+                return format!("\\\\wsl.localhost\\{}{}", distribution, normalize_path_separators(Cow::Owned(original_path)));
             }
         }
         original_path
