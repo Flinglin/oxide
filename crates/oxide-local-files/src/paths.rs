@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 
 use crate::{LocalPathSegment, LocalSidebarLocation, LocalSidebarLocationKind};
 
@@ -239,7 +239,19 @@ pub fn would_move_directory_into_itself(source: &Path, target: &Path) -> bool {
         .unwrap_or_else(|| target.to_path_buf());
     target.starts_with(source)
 }
-
+pub fn extract_drive_prefix(path: &Path) -> Option<char> {
+    match path.components().next()? {
+        Component::Prefix(prefix) => match prefix.kind() {
+            // 普通盘符：C:
+            Prefix::Disk(d)
+            // 扩展长度路径：\\?\C:
+            | Prefix::VerbatimDisk(d) => Some(d as char),
+            // UNC、DeviceNS 等没有盘符
+            _ => None,
+        },
+        _ => None,
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

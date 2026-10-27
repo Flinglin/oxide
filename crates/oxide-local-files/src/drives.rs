@@ -5,7 +5,7 @@ use std::collections::HashMap;
 #[cfg(not(unix))]
 use std::{collections::HashSet, path::PathBuf};
 
-use crate::LocalDrive;
+use crate::{LocalDrive, paths::extract_drive_prefix};
 
 pub fn local_drives() -> Vec<LocalDrive> {
     let mut drives = platform_local_drives();
@@ -163,12 +163,15 @@ fn is_blocked_run_mount(mount: &str) -> bool {
 }
 
 fn drive_display_name(disk: &sysinfo::Disk, mount_point: &Path) -> String {
-    let raw_name = disk.name().to_string_lossy().to_string();
+    let raw_name = disk.name().to_string_lossy();
     if !raw_name.is_empty() {
-        return raw_name;
+        if let Some(drive) = extract_drive_prefix(mount_point) {
+            return format!("{}({}:)", raw_name, drive);
+        }
+        return raw_name.to_string();
     }
     let mount = mount_point.to_string_lossy();
-    mount_point
+    let drive_char = mount_point
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
         .unwrap_or_else(|| {
@@ -177,7 +180,8 @@ fn drive_display_name(disk: &sysinfo::Disk, mount_point: &Path) -> String {
             } else {
                 mount.to_string()
             }
-        })
+        });
+    return format!("{}({})", raw_name, drive_char);
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -287,15 +291,6 @@ fn query_value(key: &str, value_name: &str) -> Option<String> {
     None
 }
 
-fn extract_drive(path: &str) -> Option<char> {
-    let mut chars = path.chars();
-    let first = chars.next()?;
-    if first.is_ascii_alphabetic() && chars.next()? == ':' {
-        Some(first.to_ascii_uppercase())
-    } else {
-        None
-    }
-}
 fn get_wsl_drive_char() -> Option<Vec<(String, char)>> {
     let root = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss";
     let keys_text = reg_query(&["query", root])?;
@@ -318,7 +313,7 @@ fn get_wsl_drive_char() -> Option<Vec<(String, char)>> {
                 continue;
             }
         };
-        let drive = match extract_drive(&path) {
+        let drive = match extract_drive_prefix(Path::new(&path)) {
             Some(d) => d,
             None => {
                 continue;
