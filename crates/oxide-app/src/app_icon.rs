@@ -1,6 +1,53 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use oxide_settings::AppIconVariant;
+
+pub(crate) const APP_ICON_PREVIEW_SIZE: f32 = 42.0;
+
+pub(crate) fn app_icon_preview_source(variant: AppIconVariant) -> gpui::ImageSource {
+    let path = app_icon_variant_resource_path(variant);
+    gpui::ImageSource::Custom(Arc::new(move |window, cx| {
+        // Minify before atlas upload: a single bilinear GPU sample misses fine icon edges.
+        let pixels = (APP_ICON_PREVIEW_SIZE * window.scale_factor())
+            .round()
+            .max(1.0) as u32;
+        window.use_asset::<gpui::AssetLogger<AppIconPreview>>(&(path.clone(), pixels), cx)
+    }))
+}
+
+enum AppIconPreview {}
+
+impl gpui::Asset for AppIconPreview {
+    type Source = (PathBuf, u32);
+    type Output = Result<Arc<gpui::RenderImage>, gpui::ImageCacheError>;
+
+    fn load(
+        (path, pixels): Self::Source,
+        _: &mut gpui::App,
+    ) -> impl Future<Output = Self::Output> + Send + 'static {
+        async move {
+            // The asset cache owns loading and reuse per path/DPI; the shared poster decoder
+            // performs alpha-aware downsampling off the UI thread and accounts for its memory.
+            let (_, mut frame) = oxide_background_media::decode_poster(
+                &path,
+                oxide_background_media::OutputParams {
+                    width: pixels,
+                    height: pixels,
+                    fit: oxide_background_media::BackgroundFit::Contain,
+                    blur: 0.0,
+                    limits: Default::default(),
+                },
+            )
+            .map_err(|error| gpui::ImageCacheError::Other(Arc::new(error.into())))?;
+            let pixels = std::mem::take(&mut frame.pixels);
+            let pixels = image::RgbaImage::from_raw(frame.width, frame.height, pixels)
+                .expect("poster decoder returns validated BGRA dimensions");
+            Ok(Arc::new(
+                gpui::RenderImage::new(vec![image::Frame::new(pixels)]).retaining(frame),
+            ))
+        }
+    }
+}
 
 pub(crate) const APP_ICON_VARIANTS: &[AppIconVariant] = &[
     AppIconVariant::Default,

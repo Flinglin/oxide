@@ -104,6 +104,7 @@ pub enum GeneratedBackgroundKind {
     #[default]
     Fog,
     Tide,
+    TideParticles,
     Meteor,
     Particles,
     Caustics,
