@@ -710,6 +710,18 @@ fn execute_macos_app_replacement(
 
     let script_path = plan.package_path.with_extension("install.sh");
     let backup_bundle = current_bundle.with_extension("old");
+    let mut restore_portable_data = String::new();
+    if plan.portable_root.as_deref() == Some(current_bundle.as_path()) {
+        // Bundle-local portable data must survive replacement just like sibling data.
+        let info = oxideterm_portable_runtime::portable_info()
+            .map_err(|error| NativeUpdateError::State(error.to_string()))?;
+        let data_entry = info
+            .data_dir
+            .strip_prefix(&current_bundle)
+            .map_err(|error| NativeUpdateError::State(error.to_string()))?;
+        restore_portable_data =
+            macos_portable_data_restore_script(&current_bundle, &backup_bundle, data_entry);
+    }
     let install_source = match plan.package_kind {
         InstallPackageKind::MacAppBundle => format!(
             r#"new_app="{package}""#,
@@ -754,7 +766,11 @@ rm -rf "{backup}"
 if [ -d "{current}" ]; then
   mv "{current}" "{backup}"
 fi
-if ! /usr/bin/ditto "$new_app" "{current}"; then
+replace_failed=0
+/usr/bin/ditto "$new_app" "{current}" || replace_failed=1
+{restore_portable_data}
+if [ "$replace_failed" != 0 ]; then
+  rm -rf "{current}"
   if [ -d "{backup}" ]; then
     mv "{backup}" "{current}"
   fi
@@ -770,6 +786,7 @@ fi
         install_source = install_source,
         current = shell_escape_path(&current_bundle),
         backup = shell_escape_path(&backup_bundle),
+        restore_portable_data = restore_portable_data,
     );
     std::fs::write(&script_path, script).map_err(|error| {
         NativeUpdateError::State(format!("write macOS installer failed: {error}"))
@@ -786,7 +803,29 @@ fi
         should_quit_app: true,
     })
 }
-
+#[cfg(target_os = "macos")]
+fn macos_portable_data_restore_script(
+    current_bundle: &Path,
+    backup_bundle: &Path,
+    data_entry: &Path,
+) -> String {
+    let mut script = String::new();
+    for entry in [
+        Path::new(oxideterm_portable_runtime::PORTABLE_MARKER_FILENAME),
+        Path::new(oxideterm_portable_runtime::PORTABLE_CONFIG_FILENAME),
+        data_entry,
+    ] {
+        script.push_str(&format!(
+            r#"if [ "$replace_failed" = 0 ] && [ -e "{backup}" ]; then
+  /usr/bin/ditto "{backup}" "{current}" || replace_failed=1
+fi
+"#,
+            backup = shell_escape_path(&backup_bundle.join(entry)),
+            current = shell_escape_path(&current_bundle.join(entry)),
+        ));
+    }
+    script
+}
 #[cfg(not(target_os = "macos"))]
 fn execute_macos_app_replacement(
     plan: &NativeInstallPlan,
