@@ -66,8 +66,16 @@ impl SshPtyCore {
         encoding: TerminalEncoding,
         scrollback_lines: usize,
     ) -> Self {
-        Self::new_inner(config, audit, cols, rows, graphics_options, encoding,
-            scrollback_lines, true)
+        Self::new_inner(
+            config,
+            audit,
+            cols,
+            rows,
+            graphics_options,
+            encoding,
+            scrollback_lines,
+            true,
+        )
     }
 
     #[cfg(test)]
@@ -122,8 +130,44 @@ impl SshPtyCore {
         } else {
             None
         };
-        let runtime_handle = runtime.as_ref().map(|runtime| runtime.handle().clone());
-        let connect_audit = audit.clone();
+        let (connect_tx, connect_rx) = unbounded();
+        drop(connect_tx);
+        let mut core = Self {
+            audit,
+            parser_state,
+            config,
+            activity,
+            lifecycle: TerminalLifecycle::Running,
+            runtime,
+            connect_task: None,
+            consumed_sequence: 0,
+            last_parse_completed: None,
+            connect_rx,
+            handle: None,
+            layout_resize_seen: false,
+            post_connect_input_sent: false,
+            output_queue: VecDeque::new(),
+            output_queue_bytes: 0,
+        };
+        if start_connection {
+            core.start_connection();
+        }
+        core
+    }
+
+    fn start_connection(&mut self) {
+        let previous_task = self.connect_task.take();
+        if let Some(task) = &previous_task {
+            task.abort();
+        }
+        let config = &mut self.config;
+        let resize = self.parser_state.resize;
+        let activity = self.activity.clone();
+        let runtime_handle = self
+            .runtime
+            .as_ref()
+            .map(|runtime| runtime.handle().clone());
+        let connect_audit = self.audit.clone();
         let mut connect_task = None;
         let (connect_tx, connect_rx) = unbounded();
         if let Some(runtime_handle) = runtime_handle {
@@ -137,8 +181,12 @@ impl SshPtyCore {
             } else {
                 (resize.cols as u32, resize.rows as u32)
             };
-            let connect_activity = activity.clone();
+            let connect_activity = activity;
             connect_task = Some(runtime_handle.spawn(async move {
+                                // A cancelled startup must release its consumer before the next acquire.
+                if let Some(task) = previous_task {
+                    let _ = task.await;
+                }
                 let result = match connection {
                     Some(SshSessionConnection::New(mut ssh_config)) => {
                         ssh_config.cols = cols;
@@ -228,28 +276,34 @@ impl SshPtyCore {
                 let _ = connect_tx.send(result);
                 connect_activity.notify();
             }));
-        } else if start_connection {
+        } else {
             let _ = connect_tx.send(Err("failed to initialize SSH runtime".to_string()));
             activity.notify();
         }
 
-        Self {
-            audit,
-            parser_state,
-            config,
-            activity,
-            lifecycle: TerminalLifecycle::Running,
-            runtime,
-            connect_task,
-            consumed_sequence: 0,
-            last_parse_completed: None,
-            connect_rx,
-            handle: None,
-            layout_resize_seen: false,
-            post_connect_input_sent: false,
-            output_queue: VecDeque::new(),
-            output_queue_bytes: 0,
-        }
+        self.connect_task = connect_task;
+        self.connect_rx = connect_rx;
+    }
+
+    fn reconnect(&mut self, mut config: SshSessionConfig) -> Result<()> {
+        // Retire this channel's lease before reacquiring the same consumer identity.
+        // The node and any SFTP/forwarding consumers retain their own transport owners.
+        self.handle.take();
+        self.parser_state.restart_transport(config.trzsz_policy());
+        self.output_queue.clear();
+        self.output_queue_bytes = 0;
+        self.consumed_sequence = 0;
+        self.last_parse_completed = None;
+        self.post_connect_input_sent = false;
+        self.runtime = config.runtime.take().or_else(|| self.runtime.take());
+        self.config = config;
+        self.lifecycle = TerminalLifecycle::Running;
+        self.parser_state
+            .pending_events
+            .push(TerminalEvent::SessionRestarted);
+        self.start_connection();
+        self.activity.notify();
+        Ok(())
     }
 
     fn title_text(&self) -> String {
@@ -266,7 +320,10 @@ impl SshPtyCore {
                 // The established transport supplies the recording identity; keep this pane's consumer ID.
                 let mut audit = handle.audit_context().or_else(|| self.audit.clone());
                 if let Some(context) = &mut audit {
-                    context.consumer_id = self.audit.as_ref().and_then(|owner| owner.consumer_id.clone());
+                    context.consumer_id = self
+                        .audit
+                        .as_ref()
+                        .and_then(|owner| owner.consumer_id.clone());
                 }
                 self.audit = audit;
                 self.parser_state.set_recording_context(self.audit.as_ref());
@@ -416,7 +473,11 @@ impl SshPtyCore {
                         if !self.parser_state.flush_recording() {
                             break;
                         }
-                        if self.handle.as_ref().is_some_and(SshPtyHandle::shell_started) {
+                        if self
+                            .handle
+                            .as_ref()
+                            .is_some_and(SshPtyHandle::shell_started)
+                        {
                             self.parser_state.close_recording();
                         } else {
                             self.parser_state.interrupt_recording();
@@ -643,7 +704,11 @@ impl TerminalSessionBackend for SshPtyCore {
         self.parser_state.tmux_state()
     }
 
-    fn tmux_action(&mut self, action: crate::TmuxAction, audit: oxide_audit::AuditOperation) -> Result<bool> {
+    fn tmux_action(
+        &mut self,
+        action: crate::TmuxAction,
+        audit: oxide_audit::AuditOperation,
+    ) -> Result<bool> {
         self.parser_state.tmux_action(action, audit)
     }
 
@@ -664,8 +729,20 @@ impl TerminalSessionBackend for SshPtyCore {
     }
 
     fn resize_with_cell_size(&mut self, resize: TerminalResize) -> Result<()> {
+        let opening_shell = self.lifecycle.is_running()
+            && self
+                .handle
+                .as_ref()
+                .is_none_or(|handle| !handle.shell_started());
         self.layout_resize_seen = true;
         self.parser_state.resize_with_cell_size(resize)?;
+        if opening_shell {
+            // A larger viewport can pull history back onto the screen before login output arrives.
+            self.parser_state
+                .term
+                .lock()
+                .reset_session_preserving_history();
+        }
         // Deferred SSH sessions use this first real GPUI layout resize as the
         // remote PTY allocation boundary. Post-connect input must follow it so
         // the transport cannot fall back to a synthetic 120x40 shell.
@@ -968,36 +1045,48 @@ mod ssh_output_protocol_tests {
     #[test]
     fn ssh_parser_records_display_output_after_trzsz_filter_without_ui_events() {
         use oxide_audit::{
-            AuditContext, AuditKeyProvider, AuditPolicy, AuditService, AuditSource,
-            RecordingState, StoredRecordingFrameKind,
+            AuditContext, AuditKeyProvider, AuditPolicy, AuditService, AuditSource, RecordingState,
+            StoredRecordingFrameKind,
         };
         use zeroize::Zeroizing;
 
         struct Keys;
         impl AuditKeyProvider for Keys {
-            fn load(&self, _: &str) -> std::result::Result<Zeroizing<Vec<u8>>, oxide_audit::AuditError> {
+            fn load(
+                &self,
+                _: &str,
+            ) -> std::result::Result<Zeroizing<Vec<u8>>, oxide_audit::AuditError> {
                 Ok(Zeroizing::new(vec![13; 32]))
             }
-            fn create(&self, id: &str) -> std::result::Result<Zeroizing<Vec<u8>>, oxide_audit::AuditError> {
+            fn create(
+                &self,
+                id: &str,
+            ) -> std::result::Result<Zeroizing<Vec<u8>>, oxide_audit::AuditError> {
                 self.load(id)
             }
         }
 
         let directory = tempfile::tempdir().unwrap();
-        let service = AuditService::with_key_provider(directory.path().join("audit.db"), Keys).unwrap();
+        let service =
+            AuditService::with_key_provider(directory.path().join("audit.db"), Keys).unwrap();
         let client = service.client();
         let runtime = tokio::runtime::Runtime::new().unwrap();
-        runtime.block_on(client.set_policy(AuditPolicy {
-            enabled: true,
-            record_output: true,
-            ..Default::default()
-        })).unwrap();
+        runtime
+            .block_on(client.set_policy(AuditPolicy {
+                enabled: true,
+                record_output: true,
+                ..Default::default()
+            }))
+            .unwrap();
         let context = AuditContext::new(client.clone(), AuditSource::User)
-            .session("ssh", "test@example.invalid:22").consumer();
+            .session("ssh", "test@example.invalid:22")
+            .consumer();
         let mut session = session();
         session.set_output_events_enabled(false);
         session.parser_state.set_recording_context(Some(&context));
-        session.parser_state.feed_transport_output(b"visible-shell-output\r\n");
+        session
+            .parser_state
+            .feed_transport_output(b"visible-shell-output\r\n");
         let handshake = b"::TRZSZ:TRANSFER:R:1.1.6:9\n";
         let config = b"#CFG:eJyrVkrKzEssqlSySkvMKU7VUUrJLEpNLsmHi9QCANctDJE=\n";
         session.parser_state.feed_transport_output(handshake);
@@ -1013,19 +1102,38 @@ mod ssh_output_protocol_tests {
             {
                 break recording.id.clone();
             }
-            assert!(Instant::now() < deadline, "SSH parser recording should close");
+            assert!(
+                Instant::now() < deadline,
+                "SSH parser recording should close"
+            );
             std::thread::sleep(Duration::from_millis(20));
         };
-        let page = runtime.block_on(client.read_recording_page(recording_id, None, None, 10)).unwrap();
-        let output: Vec<u8> = page.chunks.iter().flat_map(|chunk| &chunk.frames)
+        let page = runtime
+            .block_on(client.read_recording_page(recording_id, None, None, 10))
+            .unwrap();
+        let output: Vec<u8> = page
+            .chunks
+            .iter()
+            .flat_map(|chunk| &chunk.frames)
             .filter_map(|frame| match &frame.kind {
                 StoredRecordingFrameKind::Output(bytes) => Some(bytes.as_slice()),
                 _ => None,
-            }).flatten().copied().collect();
-        assert!(output.windows(b"VISIBLE-SHELL-OUTPUT".len())
-            .any(|window| window == b"VISIBLE-SHELL-OUTPUT"));
+            })
+            .flatten()
+            .copied()
+            .collect();
+        assert!(
+            output
+                .windows(b"VISIBLE-SHELL-OUTPUT".len())
+                .any(|window| window == b"VISIBLE-SHELL-OUTPUT")
+        );
         assert!(!output.windows(config.len()).any(|window| window == config));
-        assert!(session.take_events().into_iter().all(|event| !matches!(event, TerminalEvent::Output(_))));
+        assert!(
+            session
+                .take_events()
+                .into_iter()
+                .all(|event| !matches!(event, TerminalEvent::Output(_)))
+        );
     }
 
     #[test]

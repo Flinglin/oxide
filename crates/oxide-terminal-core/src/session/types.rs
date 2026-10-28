@@ -42,8 +42,7 @@ pub enum SerialControlLine {
     RequestToSend,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize, Default)]
 pub enum SerialLineEnding {
     Lf,
     CrLf,
@@ -52,9 +51,7 @@ pub enum SerialLineEnding {
     None,
 }
 
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize, Default)]
 pub enum SerialDisplayMode {
     #[default]
     Text,
@@ -62,15 +59,12 @@ pub enum SerialDisplayMode {
     Mixed,
 }
 
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize, Default)]
 pub enum SerialSendMode {
     #[default]
     Text,
     Hex,
 }
-
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SerialRuntimeOptions {
@@ -137,6 +131,9 @@ pub trait TerminalSessionBackend: Send {
     fn activity_receiver(&self) -> TerminalActivityReceiver;
     fn take_events(&mut self) -> Vec<TerminalEvent>;
     fn write_input(&mut self, bytes: &[u8]) -> Result<()>;
+    fn reconnect_ssh(&mut self, _config: SshSessionConfig) -> Result<()> {
+        bail!("Only SSH terminals support this reconnect operation")
+    }
     fn write_protocol_bytes(&mut self, bytes: &[u8]) -> Result<()>;
     fn write_text(&mut self, text: &str) -> Result<()>;
     fn paste_text(&mut self, text: &str) -> Result<()>;
@@ -159,11 +156,7 @@ pub trait TerminalSessionBackend: Send {
     fn serial_control_state(&self) -> Option<SerialControlState> {
         None
     }
-    fn set_serial_control_line(
-        &mut self,
-        _line: SerialControlLine,
-        _asserted: bool,
-    ) -> Result<()> {
+    fn set_serial_control_line(&mut self, _line: SerialControlLine, _asserted: bool) -> Result<()> {
         bail!("Serial control lines are only supported by serial sessions")
     }
     fn send_serial_break(&mut self) -> Result<()> {
@@ -214,8 +207,17 @@ pub trait TerminalSessionBackend: Send {
     fn tmux_state(&self) -> Option<crate::TmuxUiState> {
         None
     }
-    fn tmux_action(&mut self, _action: crate::TmuxAction, audit: oxide_audit::AuditOperation) -> Result<bool> {
-        audit.finish(oxide_audit::AuditOutcome::Unchanged, oxide_audit::AuditEvidence::Dispatch, None, None);
+    fn tmux_action(
+        &mut self,
+        _action: crate::TmuxAction,
+        audit: oxide_audit::AuditOperation,
+    ) -> Result<bool> {
+        audit.finish(
+            oxide_audit::AuditOutcome::Unchanged,
+            oxide_audit::AuditEvidence::Dispatch,
+            None,
+            None,
+        );
         Ok(false)
     }
     fn tmux_separator_at(&self, _col: usize, _row: usize) -> Option<crate::TmuxSeparator> {
@@ -268,22 +270,28 @@ pub trait TerminalSessionBackend: Send {
         &self,
         previous: &TerminalSnapshot,
         allow_defer: bool,
-    ) -> Option<(TerminalSnapshot, Option<crate::TerminalSelectionRange>, TermMode)> {
+    ) -> Option<(
+        TerminalSnapshot,
+        Option<crate::TerminalSelectionRange>,
+        TermMode,
+    )> {
         let _ = allow_defer;
-        Some((self.snapshot_incremental(previous), self.selection(), self.mode()))
+        Some((
+            self.snapshot_incremental(previous),
+            self.selection(),
+            self.mode(),
+        ))
     }
-    fn snapshot_with_display_offset(
-        &self,
-        display_offset: usize,
-        rows: usize,
-    ) -> TerminalSnapshot {
+    fn snapshot_with_display_offset(&self, display_offset: usize, rows: usize) -> TerminalSnapshot {
         let _ = (display_offset, rows);
         self.snapshot()
     }
     fn terminate_active_task(&mut self) -> Result<()>;
     fn kill_active_task(&mut self) -> Result<()>;
     fn shutdown(&mut self);
-    fn audit_context(&self) -> Option<oxide_audit::AuditContext> { None }
+    fn audit_context(&self) -> Option<oxide_audit::AuditContext> {
+        None
+    }
     fn ssh_connection_handle(&self) -> Option<SshConnectionHandle> {
         None
     }
