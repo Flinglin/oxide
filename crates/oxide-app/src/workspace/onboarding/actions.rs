@@ -28,6 +28,9 @@ impl WorkspaceApp {
     }
 
     pub(in crate::workspace) fn complete_onboarding(&mut self, cx: &mut Context<Self>) {
+        if !self.onboarding.disclaimer_accepted {
+            return;
+        }
         let previous_settings = self.settings_store.settings().clone();
         let mut next_settings = previous_settings.clone();
         next_settings.onboarding_completed = true;
@@ -44,6 +47,9 @@ impl WorkspaceApp {
                 self.sync_tab_titles(cx);
                 self.onboarding.save_failed = false;
                 self.onboarding.open = false;
+                self.close_settings_select();
+                self.blur_text_inputs(cx);
+                self.finish_settings_slider_drag(cx);
             }
             Err(_) => {
                 // Settings errors may contain file content; expose only a localized save failure.
