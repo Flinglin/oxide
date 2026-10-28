@@ -41,7 +41,7 @@ impl WorkspaceApp {
     ) -> String {
         if let Some(tab) = self.tab_host.read(cx).active_tab() {
             if let TabKind::LocalTerminal(TerminalRelay::Wsl(distribution)) = &tab.kind {
-                return format!("\\\\wsl.localhost\\{}{}", distribution, normalize_path_separators(Cow::Owned(original_path)));
+                return format!("\\\\wsl.localhost\\{}{}", distribution, normalize_path_separators(Cow::Borrowed(&original_path),'/','\\'));
             }
         }
         original_path

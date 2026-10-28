@@ -4,6 +4,8 @@ mod bookmarks;
 mod external;
 
 pub(in crate::workspace::file_manager) use external::{open_path_external, reveal_path_external};
+use oxide_local_files::normalize_path_separators;
+use oxide_terminal_core::TerminalRelay;
 
 const FILE_MANAGER_DIALOG_FOOTER_ACTIONS: [ConfirmDialogAction; 2] =
     [ConfirmDialogAction::Cancel, ConfirmDialogAction::Confirm];
@@ -2153,13 +2155,44 @@ impl WorkspaceApp {
         cx: &mut Context<Self>,
     ) {
         let mut terminal_config = self.local_terminal_config();
-        terminal_config.cwd = Some(PathBuf::from(self.file_manager.read(cx).path.clone()));
-        if let Err(error) = self.create_local_terminal_tab_with_config(
-            terminal_config,
-            self.local_terminal_tab_title(),
-            window,
-            cx,
-        ) {
+        let mut path = self.file_manager.read(cx).path.clone();
+
+        let bytes: &[u8] = path.as_bytes();
+        let title = if bytes.len() >= 5 && bytes[0..5] == [92, 92, 119, 115, 108] {
+            let mut i = 5;
+            let mut cnt: u8 = 2;
+            while i + 1 < bytes.len() {
+                i += 1;
+                if bytes[i] == b'\\' {
+                    cnt -= 1;
+                    if cnt == 0 {
+                        break;
+                    }
+                }
+            }
+            if cnt == 0 {
+                path.drain(..i);
+            }
+            path = normalize_path_separators(Cow::Borrowed(&path), '\\', '/').into_owned();
+            let shell = self
+                .local_shells
+                .iter()
+                .find(|s| matches!(s.terminal_relay, TerminalRelay::Wsl(_)))
+                .map(|s| s.clone());
+            let title = shell
+                .as_ref()
+                .map(|s| s.label.clone())
+                .unwrap_or("Local".to_owned());
+            terminal_config.shell = shell;
+            title
+        } else {
+            self.local_terminal_tab_title()
+        };
+
+        terminal_config.cwd = Some(PathBuf::from(path));
+        if let Err(error) =
+            self.create_local_terminal_tab_with_config(terminal_config, title, window, cx)
+        {
             self.push_file_manager_toast(
                 self.i18n.t("fileManager.error"),
                 Some(error.to_string()),

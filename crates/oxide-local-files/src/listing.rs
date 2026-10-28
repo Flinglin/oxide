@@ -1,4 +1,4 @@
-use std::{path::PathBuf, time::Instant};
+use std::{path::PathBuf};
 
 use crate::{LocalFileEntry, LocalFileType, LocalSortDirection, LocalSortField};
 
@@ -9,14 +9,12 @@ pub fn list_local_files(path: &str) -> std::io::Result<Vec<LocalFileEntry>> {
 
     for entry in dir {
         let entry = entry?;
-        let file_name = entry.file_name(); // OsString，一次分配
+        let file_name = entry.file_name();
 
-        // 复用 path_buf：clear + push 不重新分配
         path_buf.clear();
         path_buf.push(path);
         path_buf.push(&file_name);
 
-        // 一次 lstat 拿所有信息。非 symlink 时 lstat == stat，无需二次调用。
         let symlink_metadata = match std::fs::symlink_metadata(&path_buf) {
             Ok(m) => m,
             Err(_) => continue,
@@ -24,7 +22,6 @@ pub fn list_local_files(path: &str) -> std::io::Result<Vec<LocalFileEntry>> {
 
         let is_symlink = symlink_metadata.file_type().is_symlink();
 
-        // 只有 symlink 才需要二次 stat + readlink
         let (target_metadata, symlink_target) = if is_symlink {
             let target = std::fs::metadata(&path_buf).ok();
             let link = std::fs::read_link(&path_buf)

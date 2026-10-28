@@ -332,28 +332,27 @@ impl<'a> Iterator for Iter<'a> {
 
 impl<'a> ExactSizeIterator for Iter<'a> {}
 
-pub fn normalize_path_separators<'a>(path: Cow<'a, str>) -> Cow<'a, str> {
-    let mut last = 0;
+pub fn normalize_path_separators<'a>(
+    path: Cow<'a, str>,
+    from_sep: char,
+    to_sep: char,
+) -> Cow<'a, str> {
+  let mut last = 0;
     let mut out: Option<String> = None;
-    for (i, _) in path.match_indices('\\') {
-        // 惰性创建：只有真的遇到 '\' 才分配
+    for (i, _) in path.match_indices(from_sep) {
         let buf = out.get_or_insert_with(|| String::with_capacity(path.len()));
-        buf.push_str(&path[last..i]); // ← 补上：把上一次 '\' 之后、本次 '\' 之前的段拷进去
-        buf.push('/');
+        buf.push_str(&path[last..i]); 
+        buf.push(to_sep);
         last = i + 1;
     }
     match out {
         Some(mut buf) => {
-            buf.push_str(&path[last..]); // 最后一段
+            buf.push_str(&path[last..]);
             Cow::Owned(buf)
         }
         None => path,
     }
 }
-
-// ============================================================
-// 入口
-// ============================================================
 
 pub fn split_path_into_segments<'a>(path: impl Into<Cow<'a, str>>) -> SegmentedPath<'a> {
     let cow = path.into();
@@ -392,13 +391,12 @@ pub fn split_path_into_segments<'a>(path: impl Into<Cow<'a, str>>) -> SegmentedP
     SegmentedPath { buf: cow, segments }
 }
 
-/// 输入以 `//` 开头。根 = `//server/share/`（无 share 时 `//server`）。
 fn split_unc(bytes: &[u8], segments: &mut Vec<SegRange>, sep: u8) {
     let rest = &bytes[2..];
     let server_end = memchr(sep, rest).unwrap_or(rest.len());
 
     if server_end == 0 {
-        // `//`、`\\`、`///...` 等退化：按 Unix 根处理
+ 
         segments.push(SegRange { name_start: 0, full_end: 1, flags: 0 });
         if bytes.len() > 1 {
             push_body(&bytes[1..], 1, segments, sep);
@@ -408,7 +406,7 @@ fn split_unc(bytes: &[u8], segments: &mut Vec<SegRange>, sep: u8) {
 
     let after_server = 2 + server_end;
     if after_server >= bytes.len() {
-        // 只有 `//server` 或 `\\server`（无尾分隔符）
+   
         segments.push(SegRange {
             name_start: 0,
             full_end: bytes.len() as u32,
@@ -417,13 +415,13 @@ fn split_unc(bytes: &[u8], segments: &mut Vec<SegRange>, sep: u8) {
         return;
     }
 
-    // 有 share
+
     let share_start = after_server + 1;
     let share_end = memchr(sep, &bytes[share_start..])
         .map(|i| share_start + i)
         .unwrap_or(bytes.len());
 
-    // 根节点：把 share 后的分隔符并入根（若存在）
+
     let root_end = if share_end < bytes.len() { share_end + 1 } else { share_end };
     segments.push(SegRange {
         name_start: 0,
