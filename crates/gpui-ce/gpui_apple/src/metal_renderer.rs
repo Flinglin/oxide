@@ -1014,7 +1014,7 @@ impl MetalRenderer {
                                     boundary.corner_radii,
                                     max_blur_radius(&boundary.filters),
                                     boundary.opacity,
-                                    false,
+                                    boundary.clip_rounded,
                                 );
                             }
                             current_target = parent;

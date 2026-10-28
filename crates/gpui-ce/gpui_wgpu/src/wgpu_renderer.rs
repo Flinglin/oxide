@@ -2433,7 +2433,7 @@ impl WgpuRendererCore {
                                     ],
                                     max_blur_radius(&boundary.filters),
                                     boundary.opacity,
-                                    false,
+                                    boundary.clip_rounded,
                                 );
                                 current_target = parent;
                                 pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
