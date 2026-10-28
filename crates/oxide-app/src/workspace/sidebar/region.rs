@@ -127,6 +127,11 @@ impl WorkspaceApp {
     ) -> AnyElement {
         right_sidebar_frame_chrome(self.right_sidebar_width)
             .child(self.render_context_right_sidebar_region(cx))
+            .child(oxide_ui::surface::panel_edge_highlight(
+                &self.theme_tokens,
+                self.workspace_sidebar_background(self.theme_tokens.ui.bg).a,
+                0.0,
+            ))
             .into_any_element()
     }
 
