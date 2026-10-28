@@ -28,9 +28,6 @@ impl WorkspaceApp {
     }
 
     pub(in crate::workspace) fn complete_onboarding(&mut self, cx: &mut Context<Self>) {
-        if !self.onboarding.disclaimer_accepted {
-            return;
-        }
         let previous_settings = self.settings_store.settings().clone();
         let mut next_settings = previous_settings.clone();
         next_settings.onboarding_completed = true;
@@ -47,9 +44,6 @@ impl WorkspaceApp {
                 self.sync_tab_titles(cx);
                 self.onboarding.save_failed = false;
                 self.onboarding.open = false;
-                self.close_settings_select();
-                self.blur_text_inputs(cx);
-                self.finish_settings_slider_drag(cx);
             }
             Err(_) => {
                 // Settings errors may contain file content; expose only a localized save failure.
@@ -289,5 +283,85 @@ impl WorkspaceApp {
             settings.set_active_tab(SettingsTab::General, cx)
         });
         self.open_settings(window, cx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workspace::window_shell::WorkspaceWindowShell;
+    use gpui::TestAppContext;
+
+    #[gpui::test]
+    fn onboarding_completion_waits_for_durable_settings_and_survives_restart(
+        cx: &mut TestAppContext,
+    ) {
+        let executable = std::env::current_exe().unwrap();
+        let fixture_key = "OXIDETERM_ONBOARDING_SAVE_TEST_DIR";
+        let Some(fixture_dir) = std::env::var_os(fixture_key) else {
+            // Workspace storage is process-wide; keep the real workspace in a portable child.
+            let directory = tempfile::tempdir_in(executable.parent().unwrap()).unwrap();
+            let child = directory.path().join(executable.file_name().unwrap());
+            std::fs::hard_link(&executable, &child).unwrap();
+            std::fs::write(directory.path().join("portable"), []).unwrap();
+            let output = std::process::Command::new(child)
+                .arg(cx.test_function_name().unwrap())
+                .arg("--nocapture")
+                .env(fixture_key, directory.path())
+                .env_remove("APPIMAGE")
+                .current_dir(directory.path())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let settings_path = default_settings_path();
+        assert!(settings_path.starts_with(PathBuf::from(fixture_dir)));
+        let mut store = SettingsStore::load_from_path(&settings_path).unwrap();
+        store.settings_mut().ssh_config.auto_load_hosts = false;
+        store.save().unwrap();
+        cx.executor().allow_parking();
+        let (shell, cx) = cx.add_window_view(|window, cx| {
+            let workspace = cx.new(|cx| WorkspaceApp::new(window, cx, None, None).unwrap());
+            WorkspaceWindowShell::new(workspace, window, cx)
+        });
+        let workspace = shell.read_with(cx, |shell, _| shell.session_entity());
+        cx.run_until_parked();
+        let unreadable = b"unreadable settings fixture";
+        std::fs::write(&settings_path, unreadable).unwrap();
+        let recovered = SettingsStore::load_from_path(&settings_path).unwrap();
+        let previous_settings = recovered.settings().clone();
+        workspace.update(cx, |this, cx| {
+            this.settings_store = recovered;
+            this.onboarding.disclaimer_accepted = true;
+            this.onboarding.step = ONBOARDING_TOTAL_STEPS - 1;
+            this.complete_onboarding(cx);
+            assert!(
+                this.onboarding.open,
+                "a failed save must keep onboarding open"
+            );
+            assert!(this.onboarding.save_failed);
+            assert_eq!(this.onboarding.step, ONBOARDING_TOTAL_STEPS - 1);
+            assert_eq!(this.settings_store.settings(), &previous_settings);
+        });
+        assert_eq!(std::fs::read(&settings_path).unwrap(), unreadable);
+        // Recover the isolated fixture and retry the same user choices.
+        std::fs::remove_file(&settings_path).unwrap();
+        let restored = SettingsStore::load_from_path(&settings_path).unwrap();
+        workspace.update(cx, |this, cx| {
+            this.settings_store = restored;
+            this.complete_onboarding(cx);
+            assert!(!this.onboarding.open);
+            assert!(!this.onboarding.save_failed);
+        });
+        let restarted = SettingsStore::load_from_path(&settings_path).unwrap();
+        assert!(restarted.settings().onboarding_completed);
+        assert!(restarted.settings().onboarding_disclaimer_accepted);
+        assert!(!OnboardingState::from_settings(restarted.settings()).open);
     }
 }
