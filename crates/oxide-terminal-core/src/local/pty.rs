@@ -106,7 +106,8 @@ impl LocalPtySession {
         let shell = local_config.shell.clone().unwrap_or_else(default_shell);
         // Some PTY backends report a successful fork even when chdir or exec fails in the child.
         // Reject known-invalid launch targets before a session can be registered by the caller.
-        if !shell.id.starts_with("wsl")
+        let is_wsl = matches!(shell.terminal_relay, TerminalRelay::Wsl(_));
+        if !is_wsl
             && local_config
                 .cwd
                 .as_ref()
@@ -146,6 +147,13 @@ impl LocalPtySession {
         let cwd = local_config
             .cwd
             .filter(|path| !path.as_os_str().is_empty())
+            .or_else(|| {
+                if is_wsl {
+                    Some(PathBuf::from("\\home"))
+                } else {
+                    None
+                }
+            })
             .or_else(|| env::var_os("HOME").map(PathBuf::from))
             .or_else(|| env::var_os("USERPROFILE").map(PathBuf::from))
             .or_else(|| env::current_dir().ok());

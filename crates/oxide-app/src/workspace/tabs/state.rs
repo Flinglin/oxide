@@ -6,7 +6,7 @@ use oxide_terminal_core::TerminalRelay;
 use super::*;
 
 impl WorkspaceApp {
-    /// 插入新的tab同时将活跃tab更换为新tab
+    /// 插入新的tab，同时将活跃tab更换为新tab
     pub(in crate::workspace) fn insert_and_change_active_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
         let tab_id = tab.id;
         if tab.kind == TabKind::Sftp {
