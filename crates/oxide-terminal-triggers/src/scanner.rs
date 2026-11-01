@@ -124,7 +124,7 @@ pub struct TerminalTriggerStream {
 }
 
 impl TerminalTriggerStream {
-        /// A new shell keeps the rules but cannot complete matches from the old stream.
+    /// A new shell keeps the rules but cannot complete matches from the old stream.
     pub fn reset_stream(&mut self) {
         *self = Self::new(self.rules.clone());
     }

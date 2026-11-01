@@ -56,7 +56,7 @@ fn activate_client_titlebar_control(
                 window.zoom_window();
             }
         }
-               gpui::WindowControlArea::Close => {
+        gpui::WindowControlArea::Close => {
             // The close guard updates the same workspace leased by the button listener.
             window.defer(cx, |window, cx| window.request_close(cx));
         }

@@ -166,7 +166,7 @@ pub(crate) fn install_native_plugin_package_bytes(
         let imported_backgrounds = if background_sources.is_empty() {
             Vec::new()
         } else {
-            match oxideterm_settings::import_background_pack(
+            match oxide_settings::import_background_pack(
                 settings_path,
                 &format!("{}-{}", manifest.id, manifest.version),
                 &background_sources,

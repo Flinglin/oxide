@@ -17,10 +17,10 @@ pub enum InstallFlavor {
 }
 
 impl InstallFlavor {
- // Portable storage does not change the launch entry point of an app bundle or AppImage.
+    // Portable storage does not change the launch entry point of an app bundle or AppImage.
     pub fn infer(target: &PlatformTarget, current_exe: &Path, portable: bool) -> Self {
         if portable {
-                      return match target.os() {
+            return match target.os() {
                 "macos"
                     if current_exe.ancestors().any(|path| {
                         path.extension().and_then(|extension| extension.to_str()) == Some("app")

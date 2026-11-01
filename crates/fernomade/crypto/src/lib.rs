@@ -177,10 +177,7 @@ impl SecureChannel {
         let nonce = make_nonce(prefix);
         let mut plaintext = self
             .inbound_cipher
-            .decrypt(
-                &nonce.into(),
-                &packet[PACKET_PREFIX_BYTES..],
-            )
+            .decrypt(&nonce.into(), &packet[PACKET_PREFIX_BYTES..])
             .map_err(|_| OpenError::AuthenticationFailed)?;
 
         if direction != self.inbound_direction {

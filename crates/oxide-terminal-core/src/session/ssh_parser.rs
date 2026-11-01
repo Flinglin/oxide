@@ -174,7 +174,7 @@ impl SshParser {
         self.transport_running = true;
         self.term.lock().reset_session_preserving_history();
     }
-    
+
     pub(super) fn set_recording_context(&mut self, context: Option<&oxide_audit::AuditContext>) {
         if let Some(sink) = self.recording_sink.take() {
             sink.interrupt();

@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use std::{
-    collections::HashSet, ffi::{OsStr, OsString}, fs, io::{self, Read}, path::{Component, Path, PathBuf}, process::Command,
+    collections::HashSet,
+    ffi::{OsStr, OsString},
+    fs,
+    io::{self, Read},
+    path::{Component, Path, PathBuf},
+    process::Command,
 };
 
 #[cfg(not(windows))]
@@ -334,7 +339,7 @@ fn extract_zip_archive(package_path: &Path, destination: &Path) -> Result<(), Na
     Ok(())
 }
 
-fn zip_entry_is_symlink<R: Read>(entry: &zip::read::ZipFile<'_,R>) -> bool {
+fn zip_entry_is_symlink<R: Read>(entry: &zip::read::ZipFile<'_, R>) -> bool {
     const UNIX_FILE_TYPE_MASK: u32 = 0o170000;
     const UNIX_SYMLINK_TYPE: u32 = 0o120000;
     entry

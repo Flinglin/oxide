@@ -95,7 +95,7 @@ pub(crate) fn validate_native_plugin_manifest(
         }
     }
     let runtime_plan = native_runtime_plan_for_manifest(manifest)?;
-        if let Some(backgrounds) = manifest
+    if let Some(backgrounds) = manifest
         .contributes
         .as_ref()
         .and_then(|value| value.backgrounds.as_ref())
@@ -110,7 +110,7 @@ pub(crate) fn validate_native_plugin_manifest(
             || manifest
                 .engines
                 .as_ref()
-                .and_then(|engines| engines.oxideterm.as_deref())
+                .and_then(|engines| engines.oxide.as_deref())
                 .is_none()
         {
             return Err("Background packs must contain only media declarations".into());
@@ -125,7 +125,7 @@ pub(crate) fn validate_native_plugin_manifest(
                 || path
                     .components()
                     .any(|component| !matches!(component, std::path::Component::Normal(_)))
-                || !oxideterm_settings::is_supported_background_image(path)
+                || !oxide_settings::is_supported_background_image(path)
                 || !names.insert(
                     path.file_name()
                         .map(|name| name.to_string_lossy().to_ascii_lowercase()),

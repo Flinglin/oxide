@@ -176,7 +176,7 @@ pub(in crate::workspace::sftp) fn sftp_path_segments<'a>(
     return oxide_local_files::split_path_into_segments(normalized);
 }
 
-pub(in crate::workspace::sftp) fn parent_path<'a>(path: &'a str, remote: bool) -> Cow<'a,str> {
+pub(in crate::workspace::sftp) fn parent_path<'a>(path: &'a str, remote: bool) -> Cow<'a, str> {
     if remote {
         return oxide_sftp::remote_parent_path(path);
     }

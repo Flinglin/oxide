@@ -731,12 +731,12 @@ impl PreparedSync {
             backend: self.backend,
             settings: self.settings,
             secrets: self.secrets,
-              direction: self.direction,
+            direction: self.direction,
             outcome: SyncOutcome {
                 switched_settings: None,
                 applied: changed,
                 published: false,
-                 downloaded: false,
+                downloaded: false,
                 publication_pending,
                 recovered: self.recovered,
                 cleanup_pending,
@@ -750,7 +750,7 @@ impl PreparedSync {
 }
 
 impl AppliedSync {
-        /// A download commits the local baseline without making any remote writes.
+    /// A download commits the local baseline without making any remote writes.
     fn finish_download(mut self) -> SyncOutcome {
         self.outcome.downloaded = true;
         self.outcome.publication = self.local.observed.values().last().cloned();
@@ -758,7 +758,7 @@ impl AppliedSync {
     }
 
     pub async fn publish(mut self) -> Result<SyncOutcome> {
-                if self.direction == SyncDirection::Download {
+        if self.direction == SyncDirection::Download {
             return Ok(self.finish_download());
         }
         self.outcome.publication = self.local.observed.get(&self.local.writer).cloned();

@@ -337,7 +337,7 @@ pub fn theme_card_surface(
         has_background_image,
         background_alpha,
     ));
-       theme_card_surface_shadow(surface, tokens).child(panel_edge_highlight(
+    theme_card_surface_shadow(surface, tokens).child(panel_edge_highlight(
         tokens,
         if has_background_image {
             background_alpha as f32 / 255.0

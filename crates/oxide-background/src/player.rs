@@ -1007,7 +1007,7 @@ impl Player {
         #[cfg(target_os = "macos")]
         {
             let _ = window;
-            Some(oxideterm_background_media::NativeVideoDevice::Metal)
+            Some(oxide_background_media::NativeVideoDevice::Metal)
         }
         #[cfg(target_os = "windows")]
         {
@@ -1022,7 +1022,7 @@ impl Player {
             self.importer = crate::dma_buf::Importer::new(window.gpu_context()?);
             self.importer
                 .as_ref()
-                .map(|_| oxideterm_background_media::NativeVideoDevice::DmaBuf)
+                .map(|_| oxide_background_media::NativeVideoDevice::DmaBuf)
         }
     }
 }

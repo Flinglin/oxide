@@ -730,8 +730,11 @@ impl WorkspaceApp {
             (SftpPane::Local, "..") => parent_path(
                 &self.sftp_view().read(cx).local_path,
                 self.sftp_pair_primary_remote_id(cx).is_some(),
-            ).into_owned(),
-            (SftpPane::Remote, "..") => parent_path(&self.sftp_view().read(cx).remote_path, true).into_owned(),
+            )
+            .into_owned(),
+            (SftpPane::Remote, "..") => {
+                parent_path(&self.sftp_view().read(cx).remote_path, true).into_owned()
+            }
             _ => target.to_string(),
         };
         self.set_sftp_path(pane, next, cx);

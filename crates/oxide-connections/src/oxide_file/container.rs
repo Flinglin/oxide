@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use chacha20poly1305::{
-    ChaCha20Poly1305, KeyInit, Nonce, aead::{Aead, Payload},
+    ChaCha20Poly1305, KeyInit, Nonce,
+    aead::{Aead, Payload},
 };
 use rand::{TryRng, rngs::SysRng};
 use zeroize::Zeroizing;
@@ -104,7 +105,9 @@ pub(super) fn seal(
         encrypted_data_length: plaintext_len.try_into().map_err(|_| invalid_container())?,
     };
     let mut nonce = [0; NONCE_LEN];
-    SysRng.try_fill_bytes(&mut nonce).map_err(|_|OxideFileError::CryptoError)?;
+    SysRng
+        .try_fill_bytes(&mut nonce)
+        .map_err(|_| OxideFileError::CryptoError)?;
     let mut bytes = Vec::with_capacity(PREFIX_LEN + plaintext_len + TAG_LEN);
     bytes.extend_from_slice(&header.to_bytes());
     bytes.extend_from_slice(&salt);
@@ -135,7 +138,8 @@ pub(super) fn open(
 ) -> Result<Zeroizing<Vec<u8>>, OxideFileError> {
     let cipher = ChaCha20Poly1305::new_from_slice(key).map_err(|_| OxideFileError::CryptoError)?;
 
-      let nonce_array = Nonce::try_from(&bytes[HEADER_LEN + SALT_LEN..PREFIX_LEN]).map_err(|_| OxideFileError::CryptoError)?;
+    let nonce_array = Nonce::try_from(&bytes[HEADER_LEN + SALT_LEN..PREFIX_LEN])
+        .map_err(|_| OxideFileError::CryptoError)?;
     let mut plaintext = Zeroizing::new(
         cipher
             .decrypt(

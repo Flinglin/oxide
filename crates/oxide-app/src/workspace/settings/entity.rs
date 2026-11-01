@@ -623,7 +623,7 @@ impl SettingsWorkspaceEntity {
             background_media_info: HashMap::new(),
             background_media_info_tasks: HashMap::new(),
             background_gallery_task: None,
-                        background_pack_images_pending: Vec::new(),
+            background_pack_images_pending: Vec::new(),
             background_gallery_system_dark: None,
             background_gallery_results: VecDeque::new(),
             theme_import_task: None,
@@ -1478,7 +1478,7 @@ impl SettingsWorkspaceEntity {
             let Some(paths) = selection.await else {
                 let _ = settings.update(cx, |settings, cx| {
                     settings.background_gallery_task = None;
-                     settings.background_pack_images_pending.clear();
+                    settings.background_pack_images_pending.clear();
                     cx.notify();
                 });
                 return;
@@ -2513,7 +2513,7 @@ mod tests {
 
     use super::{
         ExternalStoreWatch, KeybindingFileOperationResult, LaunchAtLoginError,
-        SettingsWorkspaceEntity, ThemeEditorOperationResult,
+        SettingsWorkspaceEntity,
     };
 
     struct DropSignal(Arc<AtomicBool>);

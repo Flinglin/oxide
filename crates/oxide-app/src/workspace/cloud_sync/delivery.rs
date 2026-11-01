@@ -505,7 +505,7 @@ impl WorkspaceApp {
                 if self.persist_cloud_sync_configuration(false, cx) {
                     self.start_causal_sync_with_direction(
                         false,
-                        oxideterm_cloud_sync::operation::SyncDirection::Download,
+                        oxide_cloud_sync::operation::SyncDirection::Download,
                         cx,
                     );
                 }

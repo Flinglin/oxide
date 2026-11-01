@@ -155,7 +155,9 @@ struct PasswordVerifier {
 impl PasswordVerifier {
     fn create(password: &str) -> Result<Self> {
         let mut salt = [0_u8; SALT_LENGTH];
-        SysRng.try_fill_bytes(&mut salt).context("failed generate password salt")?;
+        SysRng
+            .try_fill_bytes(&mut salt)
+            .context("failed generate password salt")?;
         let digest = derive_digest(password, &salt)?;
         Ok(Self {
             version: VERIFIER_VERSION,

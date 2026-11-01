@@ -52,7 +52,7 @@ impl X11AuthCookie {
         // infallible for callers that mirror OpenSSH's fake-cookie generation.
         let len = len.max(1);
         let mut bytes = vec![0u8; len];
-        let mut rng=rand::rng();
+        let mut rng = rand::rng();
         rng.fill_bytes(&mut bytes);
         Self {
             bytes: Zeroizing::new(bytes),

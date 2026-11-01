@@ -458,7 +458,7 @@ impl WorkspaceRuntimeEntity {
         self.terminal_endpoint_sessions.remove(&session_id);
         self.pending_ssh_terminal_opens
             .retain(|request| request.reconnect_session_id != Some(session_id));
-        
+
         let node_id = self.terminal_ssh_nodes.remove(&session_id)?;
         let endpoint_session_id = session_id.0.to_string();
         let _ = self

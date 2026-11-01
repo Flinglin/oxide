@@ -80,7 +80,7 @@ impl LocalReplica {
     pub(crate) fn accept_download(&mut self) {
         self.published_document = Some(self.snapshot.document_digest());
     }
-    
+
     pub fn superseded_publications(&self, now_ms: i64) -> Vec<PublicationId> {
         let retained = self.publications.len().saturating_sub(5);
         self.publications

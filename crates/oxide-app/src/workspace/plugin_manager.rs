@@ -2940,10 +2940,6 @@ impl WorkspaceApp {
                 self.settings_workspace.update(cx, |settings, cx| {
                     settings.add_background_pack_images(&imported_backgrounds, cx);
                 });
-                if was_installing && self.plugin_manager_state(cx).active_install.is_none() {
-                    self.acp_entity
-                        .update(cx, |entity, _| entity.finish_plugin_update());
-                }
                 if bootstrap_runtime {
                     self.bootstrap_native_plugin_runtime(cx);
                 }
@@ -3117,7 +3113,7 @@ impl WorkspaceApp {
                                 } else {
                                     LucideIcon::Puzzle
                                 },
-                                self.tokens.metrics.ui_menu_icon_size,
+                                self.theme_tokens.metrics.ui_menu_icon_size,
                                 rgb(theme.text_muted),
                             )))
                             .child(
@@ -3194,7 +3190,7 @@ impl WorkspaceApp {
                                     .when(is_background_pack, |description| {
                                         description.child(
                                             div()
-                                                .text_size(px(self.tokens.metrics.ui_text_xs))
+                                                .text_size(px(self.theme_tokens.metrics.ui_text_xs))
                                                 .text_color(rgb(theme.text_muted))
                                                 .child(self.i18n.t("plugin.background_pack_hint")),
                                         )
@@ -3243,7 +3239,7 @@ impl WorkspaceApp {
                                 }),
                                 cx.entity(),
                             ))
-                             .when(!is_background_pack && (is_error || is_active), |right| {
+                            .when(!is_background_pack && (is_error || is_active), |right| {
                                 right.child(self.render_native_plugin_row_icon_button(
                                     LucideIcon::RefreshCw,
                                     theme.text_muted,
@@ -3274,56 +3270,57 @@ impl WorkspaceApp {
                                     )),
                                 ))
                             })
-                                       .when(!is_background_pack, |actions| {
+                            .when(!is_background_pack, |actions| {
                                 actions.child(self.render_native_plugin_row_icon_button(
-                                LucideIcon::Power,
-                                toggle_color,
-                                (!locked).then_some(cx.listener(
-                                    move |this, _event, _window, cx| {
-                                        let result =
-                                            this.plugin_entity.update(cx, |plugins, _cx| {
-                                                plugins.set_plugin_enabled(
-                                                    &plugin_id,
-                                                    next_enabled,
-                                                    _cx,
-                                                )
-                                            });
-                                        if let Err(error) = result {
-                                            this.update_plugin_manager_state(cx, |manager| {
-                                                manager.operation_status =
-                                                    NativePluginManagerOperationStatus::Error(
-                                                        error.clone(),
-                                                    );
-                                            });
+                                    LucideIcon::Power,
+                                    toggle_color,
+                                    (!locked).then_some(cx.listener(
+                                        move |this, _event, _window, cx| {
+                                            let result =
+                                                this.plugin_entity.update(cx, |plugins, _cx| {
+                                                    plugins.set_plugin_enabled(
+                                                        &plugin_id,
+                                                        next_enabled,
+                                                        _cx,
+                                                    )
+                                                });
+                                            if let Err(error) = result {
+                                                this.update_plugin_manager_state(cx, |manager| {
+                                                    manager.operation_status =
+                                                        NativePluginManagerOperationStatus::Error(
+                                                            error.clone(),
+                                                        );
+                                                });
                                                 this.plugin_entity.update(cx, |plugins, _cx| {
                                                     plugins.registry_mut().record_manager_error(
                                                         plugin_id.clone(),
                                                         error,
                                                     );
-                                            });
-                                        } else {
-                                            this.bootstrap_native_plugin_runtime(cx);
-                                            let success_key = if next_enabled {
-                                                "plugin.enable_success"
+                                                });
                                             } else {
-                                                "plugin.disable_success"
-                                            };
-                                            let message = this
-                                                .i18n
-                                                .t(success_key)
-                                                .replace("{{name}}", &plugin_name);
-                                            this.update_plugin_manager_state(cx, |manager| {
-                                                manager.operation_status =
-                                                    NativePluginManagerOperationStatus::Success(
-                                                        message,
-                                                    );
-                                            });
-                                        }
-                                        cx.stop_propagation();
-                                        cx.notify();
-                                    },
-                                )),
-                            ))})
+                                                this.bootstrap_native_plugin_runtime(cx);
+                                                let success_key = if next_enabled {
+                                                    "plugin.enable_success"
+                                                } else {
+                                                    "plugin.disable_success"
+                                                };
+                                                let message = this
+                                                    .i18n
+                                                    .t(success_key)
+                                                    .replace("{{name}}", &plugin_name);
+                                                this.update_plugin_manager_state(cx, |manager| {
+                                                    manager.operation_status =
+                                                        NativePluginManagerOperationStatus::Success(
+                                                            message,
+                                                        );
+                                                });
+                                            }
+                                            cx.stop_propagation();
+                                            cx.notify();
+                                        },
+                                    )),
+                                ))
+                            })
                             .child(self.render_native_plugin_row_icon_button(
                                 LucideIcon::Trash2,
                                 theme.text_muted,

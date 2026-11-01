@@ -7,7 +7,11 @@ use super::*;
 
 impl WorkspaceApp {
     /// 插入新的tab，同时将活跃tab更换为新tab
-    pub(in crate::workspace) fn insert_and_change_active_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
+    pub(in crate::workspace) fn insert_and_change_active_tab(
+        &mut self,
+        tab: Tab,
+        cx: &mut Context<Self>,
+    ) {
         let tab_id = tab.id;
         if tab.kind == TabKind::Sftp {
             self.ensure_sftp_page(tab_id, cx);
@@ -41,7 +45,11 @@ impl WorkspaceApp {
     ) -> String {
         if let Some(tab) = self.tab_host.read(cx).active_tab() {
             if let TabKind::LocalTerminal(TerminalRelay::Wsl(distribution)) = &tab.kind {
-                return format!("\\\\wsl.localhost\\{}{}", distribution, normalize_path_separators(Cow::Borrowed(&original_path),'/','\\'));
+                return format!(
+                    "\\\\wsl.localhost\\{}{}",
+                    distribution,
+                    normalize_path_separators(Cow::Borrowed(&original_path), '/', '\\')
+                );
             }
         }
         original_path

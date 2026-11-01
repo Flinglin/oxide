@@ -880,7 +880,7 @@ impl WorkspaceApp {
             | SettingsSlider::BackgroundEffectBrightness
             | SettingsSlider::BackgroundEffectRoughness
             | SettingsSlider::BackgroundEffectDirection => {
-                 let (min, max) = match slider {
+                let (min, max) = match slider {
                     SettingsSlider::BackgroundEffectSpeed => (0.0, 300.0),
                     SettingsSlider::BackgroundEffectSize => (30.0, 200.0),
                     SettingsSlider::BackgroundEffectDirection => (0.0, 360.0),

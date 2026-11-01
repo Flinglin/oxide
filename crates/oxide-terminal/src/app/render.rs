@@ -576,7 +576,7 @@ impl Render for TerminalPane {
             .when(self.is_serial_transport(), |pane| {
                 pane.child(self.render_serial_control_bar(cx))
             })
-                        .when(
+            .when(
                 self.can_reconnect_ssh() || self.ssh_reconnect_pending(),
                 |pane| {
                     pane.child(

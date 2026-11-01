@@ -1,8 +1,6 @@
-use criterion::{
-    BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main,
-};
-use std::time::Duration;
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
+use std::time::Duration;
 // Include the private scanner directly without expanding the production API.
 #[allow(unused_imports)]
 #[path = "../src/privilege_prompt.rs"]

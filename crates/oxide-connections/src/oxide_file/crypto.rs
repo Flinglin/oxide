@@ -48,7 +48,9 @@ impl OxideBatchEncryptionContext {
             return Err(OxideFileError::PasswordTooShort);
         }
         let mut salt = [0u8; SALT_LEN];
-        SysRng.try_fill_bytes(&mut salt).map_err(|_|OxideFileError::CryptoError)?;
+        SysRng
+            .try_fill_bytes(&mut salt)
+            .map_err(|_| OxideFileError::CryptoError)?;
         let kdf_version = kdf_flags::CURRENT_KDF;
         let key = derive_key(password, &salt, kdf_version)?;
         Ok(Self {
@@ -142,7 +144,9 @@ where
     F: FnMut(&'static str),
 {
     let mut salt = [0u8; SALT_LEN];
-        SysRng.try_fill_bytes(&mut salt).map_err(|_|OxideFileError::CryptoError)?;
+    SysRng
+        .try_fill_bytes(&mut salt)
+        .map_err(|_| OxideFileError::CryptoError)?;
     on_progress("generating_salt_nonce");
 
     let key = derive_key(password, &salt, kdf_flags::CURRENT_KDF)?;
@@ -306,10 +310,7 @@ where
 
     let plaintext = Zeroizing::new(
         cipher
-            .decrypt(
-                &oxide_file.nonce.into(),
-                ciphertext_with_tag.as_ref(),
-            )
+            .decrypt(&oxide_file.nonce.into(), ciphertext_with_tag.as_ref())
             .map_err(|_| OxideFileError::DecryptionFailed)?,
     );
     on_progress("decrypting_payload");

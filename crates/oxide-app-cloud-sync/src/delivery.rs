@@ -86,7 +86,7 @@ pub async fn deliver_causal_sync(
     scope: oxide_cloud_sync::SyncScope,
     filter: oxide_cloud_sync::operation::StructuredUploadItemFilter,
     automatic: bool,
-    direction: oxideterm_cloud_sync::operation::SyncDirection,
+    direction: oxide_cloud_sync::operation::SyncDirection,
 ) {
     let mut provider = CloudSyncKeychainSecretProvider::new(hints);
     let result = service
@@ -99,7 +99,7 @@ pub async fn deliver_causal_sync(
             scope,
             filter,
             // The GUI offers directional previews, so it needs the complete remote view.
-            oxideterm_cloud_sync::operation::SyncDirection::Download,
+            oxide_cloud_sync::operation::SyncDirection::Download,
         )
         .await
         .map(|mut prepared| {

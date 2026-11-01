@@ -3,9 +3,7 @@
 
 use std::{sync::Arc, time::Duration};
 
-use criterion::{
-    BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main,
-};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use oxide_terminal_triggers::{
     CompiledTriggerSet, TERMINAL_TRIGGERS_SCHEMA_VERSION, TerminalTrigger, TerminalTriggerAction,
     TerminalTriggerDispatch, TerminalTriggerMatch, TerminalTriggerMatchMode, TerminalTriggerScope,

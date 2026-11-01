@@ -345,8 +345,8 @@ impl TerminalPane {
                         // The focused editor owns text input; the terminal skips keys while editing.
                         return;
                     }
-                cx.stop_propagation();
-            }));
+                    cx.stop_propagation();
+                }));
         gpui::deferred(
             gpui::anchored()
                 .anchor(gpui::Anchor::TopLeft)

@@ -318,7 +318,7 @@ pub(super) enum CloudSyncUiIntent {
     StartGoogleOauth,
     StartUploadPreview,
     ViewRemote,
-    ChooseDirection(oxideterm_cloud_sync::operation::SyncDirection),
+    ChooseDirection(oxide_cloud_sync::operation::SyncDirection),
     PullPreview,
     RestoreLatestBackup,
     SaveConfiguration,

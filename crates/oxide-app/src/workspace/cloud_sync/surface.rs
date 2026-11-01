@@ -753,7 +753,7 @@ impl CloudSyncPageRenderer {
                                 busy,
                                 self.intent_listener(CloudSyncUiIntent::StartUploadPreview),
                             ))
-                                                        .when(!local_file, |toolbar| {
+                            .when(!local_file, |toolbar| {
                                 toolbar.child(self.render_cloud_sync_toolbar_button(
                                     LucideIcon::Download,
                                     "plugin.cloud_sync.causal.view_remote",

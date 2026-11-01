@@ -973,7 +973,7 @@ impl WorkspaceApp {
 
     fn render_file_manager_breadcrumb(&self, path: &str, cx: &mut Context<Self>) -> AnyElement {
         let theme = self.theme_tokens.ui;
-        let normalized=resolve_home_path(path);
+        let normalized = resolve_home_path(path);
         let segments = file_manager_path_segments(normalized);
         let mut inner = div()
             .flex_none()
@@ -999,7 +999,7 @@ impl WorkspaceApp {
             } else {
                 theme.text
             };
-            let full_path=segment.full_path.to_owned();
+            let full_path = segment.full_path.to_owned();
             inner = inner.child(
                 div()
                     .max_w(px(120.0))

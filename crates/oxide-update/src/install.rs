@@ -713,7 +713,7 @@ fn execute_macos_app_replacement(
     let mut restore_portable_data = String::new();
     if plan.portable_root.as_deref() == Some(current_bundle.as_path()) {
         // Bundle-local portable data must survive replacement just like sibling data.
-        let info = oxideterm_portable_runtime::portable_info()
+        let info = oxide_portable_runtime::portable_info()
             .map_err(|error| NativeUpdateError::State(error.to_string()))?;
         let data_entry = info
             .data_dir
@@ -811,8 +811,8 @@ fn macos_portable_data_restore_script(
 ) -> String {
     let mut script = String::new();
     for entry in [
-        Path::new(oxideterm_portable_runtime::PORTABLE_MARKER_FILENAME),
-        Path::new(oxideterm_portable_runtime::PORTABLE_CONFIG_FILENAME),
+        Path::new(oxide_portable_runtime::PORTABLE_MARKER_FILENAME),
+        Path::new(oxide_portable_runtime::PORTABLE_CONFIG_FILENAME),
         data_entry,
     ] {
         script.push_str(&format!(

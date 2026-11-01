@@ -9,9 +9,7 @@ use alacritty_terminal::{
         ansi::{Processor, StdSyncHandler},
     },
 };
-use criterion::{
-    BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main,
-};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use oxide_terminal_core::{GraphicsOptions, TerminalSession};
 use std::hint::black_box;
 

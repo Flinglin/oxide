@@ -337,11 +337,11 @@ pub fn normalize_path_separators<'a>(
     from_sep: char,
     to_sep: char,
 ) -> Cow<'a, str> {
-  let mut last = 0;
+    let mut last = 0;
     let mut out: Option<String> = None;
     for (i, _) in path.match_indices(from_sep) {
         let buf = out.get_or_insert_with(|| String::with_capacity(path.len()));
-        buf.push_str(&path[last..i]); 
+        buf.push_str(&path[last..i]);
         buf.push(to_sep);
         last = i + 1;
     }
@@ -360,7 +360,7 @@ pub fn split_path_into_segments<'a>(path: impl Into<Cow<'a, str>>) -> SegmentedP
     let mut segments = Vec::with_capacity(8);
 
     if bytes.starts_with(b"//") {
-       split_unc(bytes, &mut segments, b'/');
+        split_unc(bytes, &mut segments, b'/');
     } else if bytes.starts_with(b"\\\\") {
         split_unc(bytes, &mut segments, b'\\');
     } else if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
@@ -396,8 +396,11 @@ fn split_unc(bytes: &[u8], segments: &mut Vec<SegRange>, sep: u8) {
     let server_end = memchr(sep, rest).unwrap_or(rest.len());
 
     if server_end == 0 {
- 
-        segments.push(SegRange { name_start: 0, full_end: 1, flags: 0 });
+        segments.push(SegRange {
+            name_start: 0,
+            full_end: 1,
+            flags: 0,
+        });
         if bytes.len() > 1 {
             push_body(&bytes[1..], 1, segments, sep);
         }
@@ -406,7 +409,6 @@ fn split_unc(bytes: &[u8], segments: &mut Vec<SegRange>, sep: u8) {
 
     let after_server = 2 + server_end;
     if after_server >= bytes.len() {
-   
         segments.push(SegRange {
             name_start: 0,
             full_end: bytes.len() as u32,
@@ -415,14 +417,16 @@ fn split_unc(bytes: &[u8], segments: &mut Vec<SegRange>, sep: u8) {
         return;
     }
 
-
     let share_start = after_server + 1;
     let share_end = memchr(sep, &bytes[share_start..])
         .map(|i| share_start + i)
         .unwrap_or(bytes.len());
 
-
-    let root_end = if share_end < bytes.len() { share_end + 1 } else { share_end };
+    let root_end = if share_end < bytes.len() {
+        share_end + 1
+    } else {
+        share_end
+    };
     segments.push(SegRange {
         name_start: 0,
         full_end: root_end as u32,

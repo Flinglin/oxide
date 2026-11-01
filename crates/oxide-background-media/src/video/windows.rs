@@ -292,7 +292,7 @@ impl VideoDecoder {
         &mut self,
         cancelled: &std::sync::atomic::AtomicBool,
     ) -> Result<Option<NativeVideoFrame>, MediaError> {
-      let device = self.device.clone().ok_or(MediaError::Unsupported)?;
+        let device = self.device.clone().ok_or(MediaError::Unsupported)?;
         unsafe {
             loop {
                 if cancelled.load(std::sync::atomic::Ordering::Acquire) {
@@ -315,7 +315,7 @@ impl VideoDecoder {
                     return Ok(None);
                 }
                 if flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED.0 as u32 != 0 {
-                     self.refresh_output_format()?;
+                    self.refresh_output_format()?;
                 }
                 let Some(sample) = sample else { continue };
                 let buffer = sample.GetBufferByIndex(0).map_err(decode_error)?;
@@ -433,7 +433,7 @@ impl VideoDecoder {
                     return Ok(None);
                 }
                 if flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED.0 as u32 != 0 {
-                     self.refresh_output_format()?;
+                    self.refresh_output_format()?;
                 }
                 let Some(sample) = sample else {
                     continue;

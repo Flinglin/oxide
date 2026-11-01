@@ -285,7 +285,7 @@ impl SyncReplica {
             .map(|key| SyncField::from_key(&key))
             .collect()
     }
-    
+
     fn write(&mut self, field: &SyncField, value: Option<&FieldValue>) -> Result<()> {
         let scalar = if let Some(value) = value {
             let digest = value.digest();
