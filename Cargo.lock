@@ -7398,6 +7398,7 @@ dependencies = [
  "oxide-plugin-manifest",
  "oxide-plugin-protocol",
  "oxide-remote-desktop-core",
+ "oxide-settings",
  "reqwest",
  "semver",
  "serde_json",

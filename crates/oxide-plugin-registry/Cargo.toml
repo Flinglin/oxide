@@ -8,7 +8,7 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-oxideterm-settings = { path = "../oxideterm-settings" }
+oxide-settings = { path = "../oxide-settings" }
 futures-util.workspace = true
 oxide-remote-desktop-core = { path = "../oxide-remote-desktop-core" }
 oxide-atomic-file = { path = "../oxide-atomic-file" }
