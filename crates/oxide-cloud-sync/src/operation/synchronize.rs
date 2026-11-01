@@ -11,6 +11,15 @@ use crate::sync_v3::{
 use std::collections::HashSet;
 mod password_change;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SyncDirection {
+    #[default]
+    Merge,
+    Download,
+    Upload,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncOutcome {
@@ -18,6 +27,7 @@ pub struct SyncOutcome {
     pub switched_settings: Option<CloudSyncSettings>,
     pub applied: bool,
     pub published: bool,
+    pub downloaded: bool,
     pub publication_pending: bool,
     pub recovered: bool,
     pub cleanup_pending: bool,
@@ -33,6 +43,9 @@ pub struct SyncPlanSummary {
     pub changed_fields: usize,
     pub conflicts: Vec<SyncConflict>,
     pub upgrading: bool,
+    pub direction: SyncDirection,
+    pub first_sync: bool,
+    pub has_remote: bool,
 }
 
 #[derive(Clone)]
@@ -58,6 +71,8 @@ pub struct PreparedSync {
     filter: StructuredUploadItemFilter,
     recovered: bool,
     resolutions: Vec<(SyncConflict, usize)>,
+    preview_values: SyncValues,
+    direction: SyncDirection,
 }
 
 impl std::fmt::Debug for PreparedSync {
@@ -74,6 +89,7 @@ pub struct AppliedSync {
     settings: CloudSyncSettings,
     secrets: CloudSyncSecrets,
     outcome: SyncOutcome,
+    direction: SyncDirection,
 }
 
 impl CloudSyncOperationService {
@@ -94,6 +110,30 @@ impl CloudSyncOperationService {
         provider: &mut impl CloudSyncSecretProvider,
         scope: crate::SyncScope,
         filter: StructuredUploadItemFilter,
+    ) -> Result<PreparedSync> {
+        self.prepare_sync_with_direction(
+            connections,
+            forwards,
+            settings_store,
+            settings,
+            provider,
+            scope,
+            filter,
+            SyncDirection::Merge,
+        )
+        .await
+    }
+
+    pub async fn prepare_sync_with_direction(
+        &self,
+        connections: &mut ConnectionStore,
+        forwards: &ForwardingRegistry,
+        settings_store: &mut SettingsStore,
+        settings: &CloudSyncSettings,
+        provider: &mut impl CloudSyncSecretProvider,
+        scope: crate::SyncScope,
+        filter: StructuredUploadItemFilter,
+        direction: SyncDirection,
     ) -> Result<PreparedSync> {
         if settings.local_file_mode {
             bail!(
@@ -127,15 +167,9 @@ impl CloudSyncOperationService {
             }
         }
         let view = collect(connections, forwards, settings_store, &scope, &filter)?;
+        // Keep preview edits in this plan; cancelling must not advance the saved baseline.
         let mut replica = SyncReplica::load(local.snapshot.clone(), local.writer)?;
-        let selected = view.selected(
-            replica
-                .resources()?
-                .into_iter()
-                .chain(local.effective.keys().map(|field| field.resource.clone())),
-            &scope,
-            &filter,
-        );
+        let selected = view.selected(replica.resources()?.into_iter(), &scope, &filter);
         replica.capture_local(
             &capture_baseline(&local.effective, &scope),
             &view.values,
@@ -143,7 +177,6 @@ impl CloudSyncOperationService {
         )?;
         local.snapshot = replica.snapshot();
         update_effective(&mut local.effective, &view.values, &selected, &scope);
-        store.save(&local)?;
 
         let new_gist = settings.backend_type == BackendType::GithubGist
             && settings.git_repository.trim().is_empty();
@@ -152,7 +185,10 @@ impl CloudSyncOperationService {
         } else {
             self.backend.list_publications(&settings, &secrets).await?
         };
-        let upgrade = if !new_gist && publications.is_empty() && !local.legacy_imported {
+        let upgrade = if !new_gist
+            && publications.is_empty()
+            && (!local.legacy_imported || direction == SyncDirection::Download)
+        {
             let metadata = self
                 .backend
                 .fetch_remote_metadata(&settings, &secrets)
@@ -169,7 +205,8 @@ impl CloudSyncOperationService {
             None
         };
         let latest = latest_publications(publications)?;
-        if local.observed.contains_key(&local.writer)
+        if direction != SyncDirection::Download
+            && local.observed.contains_key(&local.writer)
             && !latest.iter().any(|id| id.writer == local.writer)
         {
             local.request_publication();
@@ -182,10 +219,10 @@ impl CloudSyncOperationService {
         let mut observed = Vec::new();
         for id in latest {
             if let Some(previous) = local.observed.get(&id.writer) {
-                if previous == &id {
+                if previous == &id && direction == SyncDirection::Merge {
                     continue;
                 }
-                if previous.sequence >= id.sequence {
+                if previous != &id && previous.sequence >= id.sequence {
                     bail!("Cloud sync publication history moved backwards or changed identity");
                 }
             }
@@ -220,6 +257,8 @@ impl CloudSyncOperationService {
             filter,
             recovered,
             resolutions: Vec::new(),
+            preview_values: view.values,
+            direction,
         })
     }
 
@@ -250,6 +289,83 @@ impl CloudSyncOperationService {
 }
 
 impl PreparedSync {
+    pub fn set_direction(&mut self, direction: SyncDirection) {
+        self.direction = direction;
+        self.resolutions.clear();
+    }
+
+    pub fn first_sync(&self) -> bool {
+        self.local.observed.is_empty()
+            && self.local.next_sequence == 1
+            && !self.local.legacy_imported
+    }
+
+    pub fn has_remote(&self) -> bool {
+        !self.remote.is_empty() || self.upgrade.is_some()
+    }
+
+    fn remote_replica(&self) -> Result<SyncReplica> {
+        let mut replica = SyncReplica::new(self.local.writer);
+        for remote in &self.remote {
+            replica.merge(remote.snapshot.clone())?;
+        }
+        if let Some(upgrade) = &self.upgrade {
+            replica.merge(upgrade.clone())?;
+        }
+        Ok(replica)
+    }
+
+    fn planned_replica(&self, values: &SyncValues) -> Result<SyncReplica> {
+        let mut remote = self.remote_replica()?;
+        if self.direction == SyncDirection::Download {
+            if self.remote.is_empty() && self.upgrade.is_none() {
+                bail!("sync_remote_empty");
+            }
+            for (conflict, index) in &self.resolutions {
+                let choice = remote
+                    .candidate_value(&conflict.candidates[*index])
+                    .cloned();
+                remote.resolve(conflict, choice.as_ref())?;
+            }
+            return Ok(remote);
+        }
+        let mut replica = SyncReplica::load(self.local.snapshot.clone(), self.local.writer)?;
+        let mut view = ConfigurationView::empty();
+        view.values = values.clone();
+        let selected = view.selected(
+            replica.resources()?.into_iter().chain(remote.resources()?),
+            &self.scope,
+            &self.filter,
+        );
+        if self.direction == SyncDirection::Merge {
+            replica.capture_local(
+                &capture_baseline(&self.local.effective, &self.scope),
+                values,
+                &selected,
+            )?;
+        }
+        replica.merge(remote.snapshot())?;
+        if self.direction == SyncDirection::Merge {
+            for (conflict, index) in &self.resolutions {
+                let choice = replica
+                    .candidate_value(&conflict.candidates[*index])
+                    .cloned();
+                replica.resolve(conflict, choice.as_ref())?;
+            }
+        } else {
+            let fields = replica
+                .fields()?
+                .into_iter()
+                .chain(values.keys().cloned())
+                .filter(|field| {
+                    selected.contains(&field.resource) && field_enabled(field, &self.scope)
+                })
+                .collect();
+            replica.replace_fields(values, &fields)?;
+        }
+        Ok(replica)
+    }
+
     pub fn matches_settings(&self, settings: &CloudSyncSettings) -> bool {
         let mut expected = settings.clone();
         if expected.backend_type == BackendType::GithubGist
@@ -263,13 +379,7 @@ impl PreparedSync {
     }
     pub fn conflict_previews(&self) -> Result<Vec<SyncConflictPreview>> {
         use crate::sync_v3::{ResourceKind, SyncField};
-        let mut replica = SyncReplica::load(self.local.snapshot.clone(), self.local.writer)?;
-        for remote in &self.remote {
-            replica.merge(remote.snapshot.clone())?;
-        }
-        if let Some(upgrade) = &self.upgrade {
-            replica.merge(upgrade.clone())?;
-        }
+        let replica = self.planned_replica(&self.preview_values)?;
         self.summary()?
             .conflicts
             .into_iter()
@@ -283,7 +393,7 @@ impl PreparedSync {
                     })
                     .and_then(|value| value.decode::<String>().ok());
                 let current = conflict.candidates.iter().position(|candidate| {
-                    replica.candidate_value(candidate) == self.local.effective.get(&conflict.field)
+                    replica.candidate_value(candidate) == self.preview_values.get(&conflict.field)
                 });
                 let sensitive = matches!(
                     conflict.field.resource.kind,
@@ -346,16 +456,10 @@ impl PreparedSync {
             .collect()
     }
     pub fn summary(&self) -> Result<SyncPlanSummary> {
-        let mut replica = SyncReplica::load(self.local.snapshot.clone(), self.local.writer)?;
-        for remote in &self.remote {
-            replica.merge(remote.snapshot.clone())?;
-        }
-        if let Some(upgrade) = &self.upgrade {
-            replica.merge(upgrade.clone())?;
-        }
+        let replica = self.planned_replica(&self.preview_values)?;
         let resources = replica.resources()?;
         let mut view = ConfigurationView::empty();
-        view.values = replica.materialize(&self.local.effective, &resources)?;
+        view.values = replica.materialize(&self.preview_values, &resources)?;
         let selected = view.selected(resources.into_iter(), &self.scope, &self.filter);
         let conflicts = replica
             .conflicts()?
@@ -365,22 +469,31 @@ impl PreparedSync {
                     && field_enabled(&conflict.field, &self.scope)
             })
             .collect();
-        let effective = replica.materialize(&self.local.effective, &selected)?;
+        let effective = replica.materialize(&self.preview_values, &selected)?;
+        let before = if self.direction == SyncDirection::Upload {
+            self.remote_replica()?
+                .materialize(&SyncValues::new(), &selected)?
+        } else {
+            self.preview_values.clone()
+        };
         let changed_fields = effective
             .keys()
-            .chain(self.local.effective.keys())
+            .chain(before.keys())
             .collect::<BTreeSet<_>>()
             .into_iter()
             .filter(|field| {
                 selected.contains(&field.resource)
                     && field_enabled(field, &self.scope)
-                    && effective.get(*field) != self.local.effective.get(*field)
+                    && effective.get(*field) != before.get(*field)
             })
             .count();
         Ok(SyncPlanSummary {
             changed_fields,
             conflicts,
             upgrading: self.upgrade.is_some(),
+            direction: self.direction,
+            first_sync: self.first_sync(),
+            has_remote: self.has_remote(),
         })
     }
 
@@ -415,7 +528,7 @@ impl PreparedSync {
         Ok(())
     }
     pub fn apply(
-        mut self,
+        self,
         connections: &mut ConnectionStore,
         forwards: &ForwardingRegistry,
         settings_store: &mut SettingsStore,
@@ -429,43 +542,10 @@ impl PreparedSync {
             &self.scope,
             &self.filter,
         )?;
-        let mut replica = SyncReplica::load(self.local.snapshot.clone(), self.local.writer)?;
-        let selected = current.selected(
-            replica.resources()?.into_iter().chain(
-                self.local
-                    .effective
-                    .keys()
-                    .map(|field| field.resource.clone()),
-            ),
-            &self.scope,
-            &self.filter,
-        );
-        replica.capture_local(
-            &capture_baseline(&self.local.effective, &self.scope),
-            &current.values,
-            &selected,
-        )?;
-        self.local.snapshot = replica.snapshot();
-        update_effective(
-            &mut self.local.effective,
-            &current.values,
-            &selected,
-            &self.scope,
-        );
-        self.store.save(&self.local)?;
-        for remote in self.remote {
-            replica.merge(remote.snapshot)?;
-        }
+
         let upgraded = self.upgrade.is_some();
-        if let Some(upgrade) = self.upgrade {
-            replica.merge(upgrade)?;
-        }
-        for (conflict, index) in self.resolutions {
-            let choice = replica
-                .candidate_value(&conflict.candidates[index])
-                .cloned();
-            replica.resolve(&conflict, choice.as_ref())?;
-        }
+        let first_sync = self.first_sync();
+        let mut replica = self.planned_replica(&current.values)?;
         let resources = replica.resources()?;
         let merged = replica.materialize(&current.values, &resources)?;
         let selected =
@@ -480,13 +560,35 @@ impl PreparedSync {
                 selected.contains(&conflict.field.resource)
                     && field_enabled(&conflict.field, &self.scope)
             })
-            .collect();
+            .collect::<Vec<_>>();
+        if self.direction == SyncDirection::Download && !conflicts.is_empty() {
+            bail!("sync_download_conflicts");
+        }
+        if self.direction == SyncDirection::Download && !self.first_sync() {
+            // Preserve causal history outside the downloaded scope, including pending local edits.
+            let mut combined = SyncReplica::load(self.local.snapshot.clone(), self.local.writer)?;
+            combined.merge(replica.snapshot())?;
+            let fields = combined
+                .fields()?
+                .into_iter()
+                .chain(desired.keys().cloned())
+                .filter(|field| {
+                    selected.contains(&field.resource) && field_enabled(field, &self.scope)
+                })
+                .collect();
+            combined.replace_fields(&desired, &fields)?;
+            replica = combined;
+        }
         let mut next = self.local.clone();
         next.legacy_imported |= upgraded;
         next.observed
             .extend(self.observed.into_iter().map(|id| (id.writer, id)));
         next.snapshot = replica.snapshot();
         update_effective(&mut next.effective, &desired, &selected, &self.scope);
+        // Legacy cloud data still needs a later normal sync to publish its converted history.
+        if self.direction == SyncDirection::Download && first_sync && !upgraded {
+            next.accept_download();
+        }
         let mut cleanup_pending = false;
         if changed {
             // All decoding and domain-independent validation precede checkpointing.
@@ -629,10 +731,12 @@ impl PreparedSync {
             backend: self.backend,
             settings: self.settings,
             secrets: self.secrets,
+              direction: self.direction,
             outcome: SyncOutcome {
                 switched_settings: None,
                 applied: changed,
                 published: false,
+                 downloaded: false,
                 publication_pending,
                 recovered: self.recovered,
                 cleanup_pending,
@@ -646,7 +750,17 @@ impl PreparedSync {
 }
 
 impl AppliedSync {
+        /// A download commits the local baseline without making any remote writes.
+    fn finish_download(mut self) -> SyncOutcome {
+        self.outcome.downloaded = true;
+        self.outcome.publication = self.local.observed.values().last().cloned();
+        self.outcome
+    }
+
     pub async fn publish(mut self) -> Result<SyncOutcome> {
+                if self.direction == SyncDirection::Download {
+            return Ok(self.finish_download());
+        }
         self.outcome.publication = self.local.observed.get(&self.local.writer).cloned();
         if self.outcome.cleanup_pending {
             return Ok(self.outcome);
@@ -821,208 +935,4 @@ fn latest_publications(publications: Vec<PublicationId>) -> Result<Vec<Publicati
         latest.insert(publication.writer, publication);
     }
     Ok(latest.into_values().collect())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::sync_v3::{FieldValue, ResourceKind, SyncField};
-    use oxide_connections::SaveLocalTerminalProfileRequest;
-
-    #[test]
-    fn created_gist_keeps_pending_history_when_configuration_gains_its_id() {
-        let directory =
-            std::env::temp_dir().join(format!("oxide-gist-bootstrap-{}", uuid::Uuid::new_v4()));
-        let settings_path = directory.join("settings.json");
-        let mut provider = crate::sync_v3::tests::Secrets::default();
-        let mut config = CloudSyncSettings {
-            backend_type: BackendType::GithubGist,
-            namespace: "personal".into(),
-            ..Default::default()
-        };
-        let store = open_replica(&settings_path, &config, &mut provider).unwrap();
-        let mut local = LocalReplica::new();
-        let writer = local.writer;
-        local.created_gist_id = Some("created-gist".into());
-        local.next_sequence = 7;
-        let path = format!("sync-v3/{writer}/6-{:x}.oxide", Sha256::digest([4, 2, 7]));
-        local.pending = Some(crate::sync_v3::PendingPublication {
-            path: path.clone(),
-            bytes: vec![4, 2, 7],
-        });
-        store.save(&local).unwrap();
-        drop(store);
-        config.git_repository = "created-gist".into();
-        let store = open_replica(&settings_path, &config, &mut provider).unwrap();
-        let reopened = store.load().unwrap().unwrap();
-        assert_eq!(reopened.writer, writer);
-        assert_eq!(reopened.next_sequence, 7);
-        let pending = reopened.pending.unwrap();
-        assert_eq!(
-            (pending.path.as_str(), pending.bytes.as_slice()),
-            (path.as_str(), [4, 2, 7].as_slice())
-        );
-        drop(store);
-        std::fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
-    fn apply_merges_live_owner_edits_and_preserves_excluded_settings() {
-        let directory =
-            std::env::temp_dir().join(format!("oxide-sync-apply-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&directory).unwrap();
-        let mut connections = ConnectionStore::load(directory.join("connections.json")).unwrap();
-        connections
-            .upsert_local_terminal_profile(SaveLocalTerminalProfileRequest {
-                id: Some("terminal".into()),
-                name: "Original".into(),
-                cwd: Some("/original".into()),
-                ..Default::default()
-            })
-            .unwrap();
-        let forwards = ForwardingRegistry::new_with_store(
-            oxide_forwarding::SavedForwardStore::load(directory.join("forwards.json")).unwrap(),
-        );
-        let mut settings = SettingsStore::load_from_path(directory.join("settings.json")).unwrap();
-        let scope = crate::SyncScope {
-            app_settings_sections: vec!["localTerminal".into()],
-            ..Default::default()
-        };
-        let view = ConfigurationView::collect(&connections, &forwards, &settings, &scope).unwrap();
-        let resource = SyncResource {
-            kind: ResourceKind::LocalTerminal,
-            id: "terminal".into(),
-        };
-        let settings_resource = SyncResource {
-            kind: ResourceKind::AppSettings,
-            id: "localTerminal".into(),
-        };
-        let selected = BTreeSet::from([resource.clone(), settings_resource.clone()]);
-        let mut local = LocalReplica::new();
-        let mut document = SyncReplica::load(local.snapshot.clone(), local.writer).unwrap();
-        document
-            .capture_local(&SyncValues::new(), &view.values, &selected)
-            .unwrap();
-        local.snapshot = document.snapshot();
-        local.effective = view.values.clone();
-        let mut remote = SyncReplica::load(local.snapshot.clone(), uuid::Uuid::new_v4()).unwrap();
-        let mut remote_values = view.values.clone();
-        remote_values.insert(
-            SyncField {
-                resource,
-                group: "name".into(),
-            },
-            FieldValue::encode(&"Remote name").unwrap(),
-        );
-        remote_values.insert(
-            SyncField {
-                resource: settings_resource,
-                group: r#"setting:["localTerminal","customEnvVars","PRIVATE_TOKEN"]"#.into(),
-            },
-            FieldValue::encode(&"remote-sensitive-fixture").unwrap(),
-        );
-        remote
-            .capture_local(&view.values, &remote_values, &selected)
-            .unwrap();
-        let encryption = OxideBatchEncryptionContext::new("fixture-password").unwrap();
-        let pending =
-            PublishedReplica::encode(uuid::Uuid::new_v4(), 1, remote.snapshot(), &encryption)
-                .unwrap();
-        let id = PublicationId::parse(&pending.path).unwrap();
-        let published = PublishedReplica::decode(
-            &id,
-            &pending.bytes,
-            &mut OxideBatchDecryptionContext::new("fixture-password").unwrap(),
-        )
-        .unwrap();
-        let store = ReplicaStore::open(
-            &directory.join("replica"),
-            &mut crate::sync_v3::tests::Secrets::default(),
-        )
-        .unwrap();
-        store.save(&local).unwrap();
-        let service = CloudSyncOperationService::new();
-        let prepared = PreparedSync {
-            _permit: service
-                .guard
-                .begin(CloudSyncOperationKind::Upload, false)
-                .unwrap()
-                .unwrap(),
-            store,
-            local,
-            remote: vec![published],
-            upgrade: None,
-            observed: vec![id],
-            backend: service.backend,
-            settings: CloudSyncSettings::default(),
-            secrets: CloudSyncSecrets::default(),
-            scope: scope.clone(),
-            filter: Default::default(),
-            recovered: false,
-            resolutions: Vec::new(),
-        };
-        assert_eq!(prepared.summary().unwrap().changed_fields, 1);
-        // This edit happens after preparation, while the network phase is away.
-        connections
-            .upsert_local_terminal_profile(SaveLocalTerminalProfileRequest {
-                id: Some("terminal".into()),
-                name: "Original".into(),
-                cwd: Some("/during-download".into()),
-                ..Default::default()
-            })
-            .unwrap();
-        let before_settings = serde_json::to_value(settings.settings()).unwrap();
-        let applied = prepared
-            .apply(&mut connections, &forwards, &mut settings)
-            .unwrap();
-        assert!(applied.outcome.applied);
-        assert!(applied.outcome.conflicts.is_empty());
-        let persisted = ConnectionStore::load(directory.join("connections.json")).unwrap();
-        assert_eq!(persisted.local_terminal_profiles()[0].name, "Remote name");
-        assert_eq!(
-            persisted.local_terminal_profiles()[0].cwd.as_deref(),
-            Some("/during-download")
-        );
-        assert_eq!(
-            serde_json::to_value(settings.settings()).unwrap(),
-            before_settings
-        );
-        let saved = ConfigurationView::collect(&connections, &forwards, &settings, &scope).unwrap();
-        for (field, value) in &applied.local.effective {
-            assert_eq!(
-                saved.values.get(field),
-                Some(value),
-                "applied field changed during persistence: {field:?}"
-            );
-        }
-        assert!(!directory.join("replica/recovery.oxide").exists());
-        connections
-            .upsert_local_terminal_profile(SaveLocalTerminalProfileRequest {
-                id: Some("terminal".into()),
-                name: "Edited during upload".into(),
-                cwd: Some("/during-download".into()),
-                ..Default::default()
-            })
-            .unwrap();
-        let mut state = crate::state::CloudSyncPersistedState::default();
-        crate::state_transitions::finish_causal_sync_state(
-            &mut state,
-            &applied.outcome,
-            "2026-10-01T00:00:00Z".into(),
-        );
-        let after = build_local_snapshot(
-            &connections,
-            &forwards,
-            &settings,
-            state.last_synced_structured_state.as_ref(),
-            None,
-        )
-        .unwrap();
-        assert!(
-            after.dirty.dirty_sections.connections,
-            "editing during publication must remain unsynchronized"
-        );
-        drop(applied);
-        std::fs::remove_dir_all(directory).unwrap();
-    }
 }

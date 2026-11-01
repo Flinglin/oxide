@@ -66,6 +66,7 @@ impl AppliedSync {
         outcome.published = false;
         outcome.publication_pending = true;
         let next = AppliedSync {
+            direction: SyncDirection::Merge,
             _permit: self._permit,
             store,
             local,
