@@ -1,4 +1,5 @@
-use std::{fmt::Display, path::Path, process::Command};
+use std::{fmt::Display, path::Path};
+use windows_registry::{CURRENT_USER, Key, Result};
 
 #[cfg(unix)]
 use std::collections::HashMap;
@@ -250,75 +251,35 @@ pub fn directory_stats(path: &Path) -> (u64, u64, u64) {
     }
     (files, dirs, size)
 }
-fn decode_output(bytes: &[u8]) -> String {
-    match std::str::from_utf8(bytes) {
-        Ok(s) => s.to_string(),
-        Err(_) => {
-            let (text, _, _) = encoding_rs::GBK.decode(bytes);
-            text.into_owned()
+
+fn enum_lxss_subkeys() -> Result<Vec<String>> {
+    let root = CURRENT_USER.open(r"Software\Microsoft\Windows\CurrentVersion\Lxss")?;
+    let mut keys = Vec::new();
+    for key_name in root.keys()? {
+        if key_name.starts_with('{') && key_name.ends_with('}') {
+            keys.push(key_name.to_string());
         }
     }
+    Ok(keys)
 }
 
-fn reg_query(args: &[&str]) -> Option<String> {
-    let out = Command::new("reg").args(args).output().ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    Some(decode_output(&out.stdout))
-}
-
-fn query_value(key: &str, value_name: &str) -> Option<String> {
-    let text = reg_query(&["query", key, "/v", value_name])?;
-    for line in text.lines() {
-        let trimmed = line.trim_start();
-        if !trimmed.starts_with(value_name) {
-            continue;
-        }
-        let rest = &trimmed[value_name.len()..];
-        if !rest.starts_with(char::is_whitespace) {
-            continue;
-        }
-        let rest = rest.trim_start();
-        let type_end = rest.find(char::is_whitespace)?;
-        let typ = &rest[..type_end];
-        if !typ.starts_with("REG_") {
-            continue;
-        }
-        let data = rest[type_end..].trim_start();
-        return Some(data.to_string());
-    }
-    None
+fn query_value(key: &Key, value_name: &str) -> Option<String> {
+    key.get_string(value_name).ok().filter(|s| !s.is_empty())
 }
 
 fn get_wsl_drive_letter() -> Option<Vec<(String, char)>> {
-    let root = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss";
-    let keys_text = reg_query(&["query", root])?;
+    let root_path = r"Software\Microsoft\Windows\CurrentVersion\Lxss";
+    let guids = enum_lxss_subkeys().ok()?;
 
     let mut result = Vec::new();
-    for line in keys_text.lines() {
-        let line = line.trim();
-        let guid = match line.rsplit('\\').next() {
-            Some(g) if g.starts_with('{') && g.ends_with('}') => g,
-            _ => continue,
-        };
-        let key = format!(r"{}\{}", root, guid);
-        let name = match query_value(&key, "DistributionName") {
-            Some(n) if !n.is_empty() => n,
-            _ => continue,
-        };
-        let path = match query_value(&key, "BasePath") {
-            Some(p) if !p.is_empty() => p,
-            _ => {
-                continue;
-            }
-        };
-        let drive = match extract_drive_letter(Path::new(&path)) {
-            Some(d) => d,
-            None => {
-                continue;
-            }
-        };
+    for guid in guids {
+        let key = CURRENT_USER
+            .open(&format!(r"{}\{}", root_path, guid))
+            .ok()?;
+
+        let name = query_value(&key, "DistributionName")?;
+        let path = query_value(&key, "BasePath")?;
+        let drive = extract_drive_letter(Path::new(&path))?;
 
         result.push((name, drive));
     }

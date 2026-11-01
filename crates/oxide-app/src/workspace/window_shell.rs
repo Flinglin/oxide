@@ -216,12 +216,11 @@ pub(crate) struct WorkspaceWindowShell {
 }
 
 impl WorkspaceWindowShell {
-
     #[cfg(test)]
     pub(crate) fn session_entity(&self) -> Entity<WorkspaceApp> {
         self.session.clone()
     }
-    
+
     pub(crate) fn new(
         session: Entity<WorkspaceApp>,
         window: &mut Window,
