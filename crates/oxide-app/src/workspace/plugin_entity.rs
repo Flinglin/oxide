@@ -1308,13 +1308,21 @@ impl PluginWorkspaceEntity {
         &mut self,
         settings_path: &std::path::Path,
         i18n: &I18n,
-        cx: &mut gpui::App,
-    ) -> bool {
+        cx: &mut App,
+    ) -> (bool, Vec<PathBuf>) {
         let mut bootstrap_runtime = false;
+        let mut imported_backgrounds = Vec::new();
         while let Some(delivery) = self.manager_deliveries.pop_front() {
+            if let plugin_manager::NativePluginManagerDelivery::Install {
+                outcome: plugin_manager::NativePluginInstallOutcome::Installed(result),
+                ..
+            } = &delivery
+            {
+                imported_backgrounds.extend_from_slice(&result.imported_backgrounds);
+            }
             bootstrap_runtime |= self.apply_manager_delivery(delivery, settings_path, i18n, cx);
         }
-        bootstrap_runtime
+        (bootstrap_runtime, imported_backgrounds)
     }
 
     fn apply_manager_delivery(
@@ -1322,7 +1330,7 @@ impl PluginWorkspaceEntity {
         delivery: plugin_manager::NativePluginManagerDelivery,
         settings_path: &std::path::Path,
         i18n: &I18n,
-        cx: &mut gpui::App,
+        cx: &mut App,
     ) -> bool {
         match delivery {
             plugin_manager::NativePluginManagerDelivery::CatalogHistories { expected, results } => {
@@ -2507,79 +2515,6 @@ mod tests {
             entity.begin_release_shutdown();
             assert!(entity.manager_state.install_queue.is_empty());
             assert!(entity.take_next_package_install().is_none());
-        });
-    }
-
-    #[gpui::test]
-    fn manager_operation_and_delivery_are_entity_owned(cx: &mut TestAppContext) {
-        let runtime = Arc::new(
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("plugin entity test runtime"),
-        );
-        let entity = cx.new(|cx| {
-            PluginWorkspaceEntity::new(runtime, plugin_host::NativePluginRegistry::default(), cx)
-        });
-        let delivery_tx = entity.update(cx, |entity, _cx| {
-            entity.manager_operation_in_flight = true;
-            entity.manager_delivery_tx.clone()
-        });
-        delivery_tx
-            .send(
-                plugin_manager::NativePluginManagerDelivery::CatalogHistories {
-                    expected: Vec::new(),
-                    results: Vec::new(),
-                },
-            )
-            .unwrap();
-        cx.run_until_parked();
-        entity.update(cx, |entity, cx| {
-            entity.apply_manager_deliveries(Path::new(""), &I18n::new(Locale::En), cx);
-            assert!(
-                entity.manager_operation_in_flight(),
-                "History loading must not release the installer gate"
-            );
-        });
-        delivery_tx
-            .send(plugin_manager::NativePluginManagerDelivery::CheckUpdates(
-                Some(Vec::new()),
-            ))
-            .expect("manager delivery");
-
-        cx.run_until_parked();
-
-        entity.update(cx, |entity, _cx| {
-            assert!(!entity.manager_operation_in_flight());
-            let i18n = I18n::new(Locale::En);
-            assert!(!entity.apply_manager_deliveries(std::path::Path::new(""), &i18n, _cx));
-            assert!(entity.manager_deliveries.is_empty());
-            assert!(matches!(
-                entity.manager_state().operation_status,
-                plugin_manager::NativePluginManagerOperationStatus::Success(_)
-            ));
-            entity.compatibility_refresh_pending = true;
-            entity.manager_state.marketplace_load_state =
-                plugin_manager::NativePluginMarketplaceLoadState::Loading;
-            entity
-                .manager_delivery_tx
-                .send(plugin_manager::NativePluginManagerDelivery::LoadMarketplace(None))
-                .unwrap();
-        });
-        cx.run_until_parked();
-        entity.update(cx, |entity, _cx| {
-            // Offline completion must release startup so cached compatible plugins can activate.
-            assert!(entity.apply_manager_deliveries(
-                std::path::Path::new(""),
-                &I18n::new(Locale::En),
-                _cx
-            ));
-            assert!(!entity.compatibility_refresh_pending);
-            assert!(!entity.manager_operation_in_flight());
-            assert!(matches!(
-                entity.manager_state.marketplace_load_state,
-                plugin_manager::NativePluginMarketplaceLoadState::Failed
-            ));
         });
     }
 

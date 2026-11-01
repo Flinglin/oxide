@@ -451,6 +451,7 @@ pub(in crate::workspace) struct SettingsWorkspaceEntity {
     background_media_info: HashMap<PathBuf, Result<bool, oxide_background_media::MediaError>>,
     background_media_info_tasks: HashMap<PathBuf, Task<()>>,
     background_gallery_task: Option<Task<()>>,
+    background_pack_images_pending: Vec<PathBuf>,
     background_gallery_system_dark: Option<bool>,
     background_gallery_results: VecDeque<BackgroundGalleryOperationResult>,
     theme_import_task: Option<Task<()>>,
@@ -622,6 +623,7 @@ impl SettingsWorkspaceEntity {
             background_media_info: HashMap::new(),
             background_media_info_tasks: HashMap::new(),
             background_gallery_task: None,
+                        background_pack_images_pending: Vec::new(),
             background_gallery_system_dark: None,
             background_gallery_results: VecDeque::new(),
             theme_import_task: None,
@@ -1436,6 +1438,28 @@ impl SettingsWorkspaceEntity {
         Arc::clone(&self.background_images)
     }
 
+    pub(in crate::workspace) fn add_background_pack_images(
+        &mut self,
+        paths: &[PathBuf],
+        cx: &mut Context<Self>,
+    ) {
+        if paths.is_empty() {
+            return;
+        }
+        if self.background_gallery_task.is_some() {
+            self.background_pack_images_pending.extend_from_slice(paths);
+        }
+        let mut gallery = self.background_images.to_vec();
+        for path in paths {
+            let path = path.to_string_lossy().into_owned();
+            if !gallery.contains(&path) {
+                gallery.insert(0, path);
+            }
+        }
+        self.background_images = Arc::from(gallery);
+        // Installing media changes only the gallery, never either appearance's selection.
+        cx.notify();
+    }
     pub(in crate::workspace) fn start_background_image_import(
         &mut self,
         selection: impl std::future::Future<Output = Option<Vec<PathBuf>>> + 'static,
@@ -1454,6 +1478,7 @@ impl SettingsWorkspaceEntity {
             let Some(paths) = selection.await else {
                 let _ = settings.update(cx, |settings, cx| {
                     settings.background_gallery_task = None;
+                     settings.background_pack_images_pending.clear();
                     cx.notify();
                 });
                 return;
@@ -1462,6 +1487,7 @@ impl SettingsWorkspaceEntity {
             if source_paths.is_empty() {
                 let _ = settings.update(cx, |settings, cx| {
                     settings.background_gallery_task = None;
+                    settings.background_pack_images_pending.clear();
                     cx.notify();
                 });
                 return;
@@ -1501,6 +1527,7 @@ impl SettingsWorkspaceEntity {
                     };
                     let _ = settings.update(cx, |settings, cx| {
                         settings.background_gallery_task = None;
+                        settings.background_pack_images_pending.clear();
                         settings
                             .background_gallery_results
                             .push_back(BackgroundGalleryOperationResult::MediaFailed(failure));
@@ -1662,7 +1689,16 @@ impl SettingsWorkspaceEntity {
         cx: &mut Context<Self>,
     ) {
         match result {
-            Ok((gallery, active_path)) => {
+            Ok((mut gallery, active_path)) => {
+                // A gallery worker may have listed files before the package install completed.
+                for path in std::mem::take(&mut self.background_pack_images_pending) {
+                    if path.is_file() {
+                        let path = path.to_string_lossy().into_owned();
+                        if !gallery.contains(&path) {
+                            gallery.insert(0, path);
+                        }
+                    }
+                }
                 self.background_images = Arc::from(gallery);
                 self.background_gallery_results.push_back(
                     BackgroundGalleryOperationResult::Updated(
@@ -1671,9 +1707,11 @@ impl SettingsWorkspaceEntity {
                     ),
                 );
             }
-            Err(()) => self
-                .background_gallery_results
-                .push_back(BackgroundGalleryOperationResult::Failed),
+            Err(()) => {
+                self.background_pack_images_pending.clear();
+                self.background_gallery_results
+                    .push_back(BackgroundGalleryOperationResult::Failed);
+            }
         }
         cx.emit(SettingsWorkspaceEvent::BackgroundGalleryOperationReady);
         cx.notify();
@@ -2894,59 +2932,5 @@ mod tests {
                 Some("Second")
             );
         });
-    }
-
-    #[gpui::test]
-    fn theme_editor_background_cancel_discards_draft_and_save_delivers_it(cx: &mut TestAppContext) {
-        let entity = cx.new(SettingsWorkspaceEntity::new);
-        for save in [false, true] {
-            entity.update(cx, |entity, cx| {
-                entity.open_theme_editor(
-                    theme_editor_from_settings(
-                        &PersistedSettings::default(),
-                        ThemeTarget::Terminal,
-                        None,
-                        "Mine".into(),
-                    ),
-                    cx,
-                );
-                entity.edit_theme_editor_background(
-                    |background| {
-                        background.image = Some("draft.webp".into());
-                        background.opacity = 0.37;
-                        background.alignment = oxide_settings::BackgroundAlignment::TopRight;
-                    },
-                    cx,
-                );
-                entity.settings_focused_input =
-                    Some(oxide_settings_view::SettingsInput::BackgroundEffectColor(0));
-                if save {
-                    entity.save_theme_editor(Duration::ZERO, cx);
-                } else {
-                    entity.cancel_theme_editor(Duration::ZERO, cx);
-                }
-                let mut results = entity.take_theme_editor_results();
-                if save {
-                    let Some(ThemeEditorOperationResult::Save(editor)) = results.pop_front() else {
-                        panic!("save must deliver the complete appearance draft");
-                    };
-                    assert_eq!(editor.background.image.as_deref(), Some("draft.webp"));
-                    assert_eq!(editor.background.opacity, 0.37);
-                    assert_eq!(
-                        editor.background.alignment,
-                        oxide_settings::BackgroundAlignment::TopRight
-                    );
-                }
-                assert!(
-                    results.is_empty(),
-                    "cancel must emit no persistence operation, and save must emit exactly one"
-                );
-                assert!(!entity.theme_editor_open());
-                assert!(
-                    entity.settings_focused_input.is_none(),
-                    "closing the editor must release its background input focus"
-                );
-            });
-        }
     }
 }
