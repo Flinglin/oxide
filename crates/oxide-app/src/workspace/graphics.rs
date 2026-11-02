@@ -2207,6 +2207,13 @@ impl GraphicsWorkspaceEntity {
             self.reset_vnc_viewer(true);
             return;
         };
+        // A failed or closed viewer stays disconnected until an explicit reconnect.
+        if !matches!(
+            self.status,
+            GraphicsStatus::Starting | GraphicsStatus::Active
+        ) {
+            return;
+        }
         if self.vnc_session_id.as_deref() == Some(session.id.as_str()) && self.vnc_input.is_some() {
             return;
         }
