@@ -750,10 +750,10 @@ impl WorkspaceApp {
             snapshot.phase,
             ConfirmDialogView {
                 variant: ConfirmDialogVariant::Danger,
-title: div().child(self.i18n.t(title_key)).into_any_element(),
+                title: div().child(self.i18n.t(title_key)).into_any_element(),
                 description: Some(
                     div()
-                                             .child(self.i18n.t(if clear_current {
+                        .child(self.i18n.t(if clear_current {
                             "terminal.history.clear_confirm_current"
                         } else if clear_history {
                             "terminal.history.clear_confirm"
@@ -765,7 +765,7 @@ title: div().child(self.i18n.t(title_key)).into_any_element(),
                 cancel_label: div()
                     .child(self.i18n.t("common.actions.cancel"))
                     .into_any_element(),
-confirm_label: div().child(self.i18n.t(title_key)).into_any_element(),
+                confirm_label: div().child(self.i18n.t(title_key)).into_any_element(),
             },
             snapshot.focused_action,
             cx.listener(|this, _event, _window, cx| {

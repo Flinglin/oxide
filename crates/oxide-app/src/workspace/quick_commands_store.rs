@@ -44,7 +44,7 @@ impl QuickCommandsState {
         &self,
         target: Option<&oxide_quick_commands::QuickCommandTargetContext>,
     ) -> Vec<QuickCommand> {
-    visible_quick_commands(&self.commands, &self.active_category, &self.query, target)
+        visible_quick_commands(&self.commands, &self.active_category, &self.query, target)
     }
 
     pub(super) fn visible_commands_for_management(&self) -> Vec<QuickCommand> {
@@ -406,7 +406,7 @@ mod quick_command_tests {
             description: Some("root listing".to_string()),
             parameters: None,
             protocols: None,
-                       host_patterns: Some(vec!["prod-*".into()]),
+            host_patterns: Some(vec!["prod-*".into()]),
             match_field: Some(oxide_quick_commands::QuickCommandMatchField::ConnectionName),
             confirmation: None,
         });
@@ -416,7 +416,7 @@ mod quick_command_tests {
             command.name == "List root"
                 && command.command == "ls /"
                 && command.description.as_deref() == Some("root listing")
-                                && command.availability.match_field
+                && command.availability.match_field
                     == oxide_quick_commands::QuickCommandMatchField::ConnectionName
                 && command.availability.host_patterns == ["prod-*"]
         }));

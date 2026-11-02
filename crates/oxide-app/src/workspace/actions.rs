@@ -1780,7 +1780,7 @@ impl WorkspaceApp {
         if pane.is_tmux_control_mode() {
             protocol = QuickCommandTargetProtocol::Tmux;
         }
-                if let Some(node) = self
+        if let Some(node) = self
             .session_id_for_pane(pane_id, cx)
             .and_then(|session_id| {
                 self.workspace_runtime

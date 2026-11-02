@@ -79,11 +79,7 @@ impl WorkspaceApp {
                         oxide_ui::segmented_control(
                             &self.theme_tokens,
                             "command-history-scope",
-                            oxide_ui::SegmentedControlOptions::new(
-                                active_scope,
-                                active_scope,
-                                2,
-                            ),
+                            oxide_ui::SegmentedControlOptions::new(active_scope, active_scope, 2),
                             scope_items,
                         )
                         .w(px(240.0)),

@@ -66,7 +66,7 @@ pub struct QuickCommandAvailability {
     pub protocols: Vec<QuickCommandTargetProtocol>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub host_patterns: Vec<String>,
-        #[serde(default)]
+    #[serde(default)]
     pub match_field: QuickCommandMatchField,
 }
 

@@ -90,7 +90,7 @@ impl WorkspaceApp {
                     kind: TerminalCommandSuggestionKind::History,
                     label: entry.command.clone(),
                     insert_text: entry.command.clone(),
-                                        description: self
+                    description: self
                         .terminal_history_all_connections
                         .then(|| origins.get(&entry.command).map(|(_, label)| label.clone()))
                         .flatten(),

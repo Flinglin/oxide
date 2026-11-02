@@ -133,7 +133,7 @@ impl RemoteShellIntegrationRuntimeState {
         if self.node_id.as_ref() == Some(node_id) {
             self.node_id = None;
             self.status = None;
-                       self.failure = None;
+            self.failure = None;
         }
         if self
             .maintenance
@@ -189,13 +189,13 @@ impl RemoteShellIntegrationRuntimeState {
                     .retain(|queued| queued != &node_id);
                 self.node_id = Some(node_id);
                 self.status = Some(status);
-             self.failure = None;
+                self.failure = None;
                 RemoteShellIntegrationGateOutcome::Applied
             }
             Ok((status, _)) if self.mode == RemoteShellIntegrationMode::Ask => {
                 self.node_id = Some(node_id.clone());
                 self.status = Some(status);
-                 self.failure = None;
+                self.failure = None;
                 if !self.terminal_prompt_nodes.contains(&node_id)
                     && self.confirm_node_id.as_ref() != Some(&node_id)
                 {
@@ -207,7 +207,7 @@ impl RemoteShellIntegrationRuntimeState {
             Ok(_) | Err(_)
                 if self.mode == RemoteShellIntegrationMode::Disabled || !self.awareness_enabled =>
             {
-               self.failure = None;
+                self.failure = None;
                 RemoteShellIntegrationGateOutcome::Applied
             }
             Ok((_, false)) if self.mode == RemoteShellIntegrationMode::Enabled => {
@@ -216,7 +216,7 @@ impl RemoteShellIntegrationRuntimeState {
             Ok((status, _)) => {
                 self.node_id = Some(node_id);
                 self.status = Some(status);
-             self.failure = Some(RemoteShellIntegrationFailure::InstallationIncomplete);
+                self.failure = Some(RemoteShellIntegrationFailure::InstallationIncomplete);
                 RemoteShellIntegrationGateOutcome::Failed(
                     RemoteShellIntegrationFailure::InstallationIncomplete,
                 )
@@ -287,7 +287,7 @@ impl RemoteShellIntegrationRuntimeState {
         let state_matches_node = self.node_id.as_ref() == node_id;
         RemoteShellIntegrationCardSnapshot {
             status: state_matches_node.then(|| self.status.clone()).flatten(),
-           failure: state_matches_node.then_some(self.failure).flatten(),
+            failure: state_matches_node.then_some(self.failure).flatten(),
             pending: self.pending(),
         }
     }
@@ -306,7 +306,7 @@ impl RemoteShellIntegrationRuntimeState {
         let generation = self.next_generation();
         self.node_id = Some(node_id.clone());
         self.status = status;
-         self.failure = None;
+        self.failure = None;
         self.confirm_node_id = None;
         self.confirm_source = None;
         self.maintenance = Some((node_id, generation));
@@ -359,7 +359,7 @@ impl RemoteShellIntegrationRuntimeState {
                 })
             }
             Err(failure) => {
-               self.failure = Some(failure);
+                self.failure = Some(failure);
                 Some(RemoteShellIntegrationNotice::Failed(failure))
             }
         }
@@ -625,7 +625,7 @@ impl WorkspaceApp {
             .read(cx)
             .remote_shell_integration_card_snapshot(node_id.as_ref());
         let status = state.status;
-let failure = state.failure;
+        let failure = state.failure;
         // The backend owns one operation at a time even if the user selects a
         // different host while the previous operation is still completing.
         let pending = state.pending;

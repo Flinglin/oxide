@@ -122,7 +122,7 @@ pub fn prepare_quick_command(
     let mut prepared_targets = Vec::new();
     let mut unavailable_targets = Vec::new();
     for target in targets {
-if !quick_command_available_for_target(command, target) {
+        if !quick_command_available_for_target(command, target) {
             unavailable_targets.push(target.label.clone());
             continue;
         }
@@ -679,7 +679,7 @@ mod tests {
             availability: QuickCommandAvailability {
                 protocols: vec![QuickCommandTargetProtocol::Ssh],
                 host_patterns: vec!["alice@*.example.com".to_string()],
-                  ..QuickCommandAvailability::default()
+                ..QuickCommandAvailability::default()
             },
             confirmation: QuickCommandConfirmationPolicy::Inherit,
             sort_order: 0,

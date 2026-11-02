@@ -63,7 +63,6 @@ impl TerminalCommandContext {
             .or_else(|| self.tab_id.map(|tab_id| tab_id.0.to_string()))
             .unwrap_or_default()
     }
-
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize)]

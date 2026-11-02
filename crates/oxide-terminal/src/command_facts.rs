@@ -94,7 +94,7 @@ pub struct SharedTerminalCommandHistory {
 #[derive(Default)]
 struct TerminalCommandHistoryState {
     records: Vec<TerminalAutosuggestCommandRecord>,
-        persistence: Option<persistence::HistoryBinding>,
+    persistence: Option<persistence::HistoryBinding>,
     persistent_ids: std::collections::HashSet<String>,
     removed_before_restore: std::collections::HashSet<String>,
     restore_cleared: bool,
@@ -167,7 +167,7 @@ impl SharedTerminalCommandHistory {
         }
         let now = now_millis();
         let mut state = self.state.lock();
-                if state.paused {
+        if state.paused {
             return false;
         }
         let id = uuid::Uuid::new_v4().to_string();
@@ -176,13 +176,13 @@ impl SharedTerminalCommandHistory {
             state.persistent_ids.insert(id.clone());
         }
         state.records.push(TerminalAutosuggestCommandRecord {
-                command_id: id,
+            command_id: id,
             command: command.to_string(),
             started_at: now,
             finished_at: now,
         });
         trim_autosuggest_records(&mut state.records);
-                if state.persistent_ids.len() > MAX_AUTOSUGGEST_RECORDS {
+        if state.persistent_ids.len() > MAX_AUTOSUGGEST_RECORDS {
             let retained = state
                 .records
                 .iter()
@@ -770,7 +770,7 @@ fn autosuggest_candidates_for_records(
 fn trim_autosuggest_records(records: &mut Vec<TerminalAutosuggestCommandRecord>) {
     if records.len() > MAX_AUTOSUGGEST_RECORDS {
         let overflow = records.len() - MAX_AUTOSUGGEST_RECORDS;
-                for record in &mut records[..overflow] {
+        for record in &mut records[..overflow] {
             record.command.zeroize();
         }
         records.drain(0..overflow);

@@ -708,7 +708,7 @@ fn sanitize_command(
         )?,
         parameters,
         availability: QuickCommandAvailability {
-             match_field: command.availability.match_field,
+            match_field: command.availability.match_field,
             protocols,
             host_patterns,
         },

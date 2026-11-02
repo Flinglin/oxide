@@ -1850,7 +1850,7 @@ mod tests {
     fn visibility_stops_page_samplers_but_keeps_reliable_actions_and_node_owner(
         cx: &mut TestAppContext,
     ) {
-                // Real Tokio samplers wake delivery tasks from outside the GPUI test scheduler.
+        // Real Tokio samplers wake delivery tasks from outside the GPUI test scheduler.
         cx.executor().allow_parking();
         let runtime = tokio::runtime::Runtime::new().expect("create test runtime");
         let registry = SshConnectionRegistry::default();

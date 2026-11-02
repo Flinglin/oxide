@@ -22,7 +22,7 @@ pub struct QuickCommandDraft {
     pub parameters: Option<Vec<crate::QuickCommandParameter>>,
     pub protocols: Option<Vec<QuickCommandTargetProtocol>>,
     pub host_patterns: Option<Vec<String>>,
-        pub match_field: Option<QuickCommandMatchField>,
+    pub match_field: Option<QuickCommandMatchField>,
     pub confirmation: Option<QuickCommandConfirmationPolicy>,
 }
 
@@ -52,7 +52,7 @@ pub fn visible_quick_commands(
         .iter()
         .filter(|command| command.category == active_category)
         .filter(|command| {
-                       target.map_or_else(
+            target.map_or_else(
                 || {
                     command.availability.protocols.is_empty()
                         && command.availability.host_patterns.is_empty()
@@ -141,7 +141,7 @@ pub fn upsert_quick_command(
             .unwrap_or(existing_description),
         parameters: draft.parameters.unwrap_or(existing_parameters),
         availability: QuickCommandAvailability {
-                        match_field: draft.match_field.unwrap_or_else(|| {
+            match_field: draft.match_field.unwrap_or_else(|| {
                 existing
                     .map(|command| command.availability.match_field)
                     .unwrap_or_default()
@@ -278,10 +278,10 @@ pub fn match_quick_command_host_patterns(patterns: &[String], target_fields: &[S
 
 pub fn quick_command_available_for_target(
     command: &QuickCommand,
- target: &QuickCommandTargetContext,
+    target: &QuickCommandTargetContext,
 ) -> bool {
     let protocol_matches = command.availability.protocols.is_empty()
-               || command.availability.protocols.contains(&target.protocol);
+        || command.availability.protocols.contains(&target.protocol);
     let target_fields = match command.availability.match_field {
         QuickCommandMatchField::All => crate::quick_command_target_match_fields(target),
         QuickCommandMatchField::Host => target
@@ -300,7 +300,7 @@ pub fn quick_command_available_for_target(
             .collect(),
     };
     let host_matches =
-         match_quick_command_host_patterns(&command.availability.host_patterns, &target_fields);
+        match_quick_command_host_patterns(&command.availability.host_patterns, &target_fields);
     protocol_matches && host_matches
 }
 
@@ -380,7 +380,7 @@ mod tests {
                 parameters: None,
                 protocols: None,
                 host_patterns: Some(vec![" *.example.com ".to_string()]),
-                  match_field: None,
+                match_field: None,
                 confirmation: None,
             },
             11,
@@ -444,7 +444,7 @@ mod tests {
             [QuickCommandTargetProtocol::Ssh]
         );
         assert_eq!(commands[0].availability.host_patterns.len(), 2);
-                assert_eq!(
+        assert_eq!(
             commands[0].availability.match_field,
             QuickCommandMatchField::ConnectionName
         );

@@ -2454,7 +2454,7 @@ mod tests {
             Some("/home/fish-test/config")
         );
     }
-    
+
     #[test]
     fn dedicated_child_retirement_releases_parent_ownership() {
         let registry = SshConnectionRegistry::default();

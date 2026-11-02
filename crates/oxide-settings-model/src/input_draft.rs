@@ -36,7 +36,7 @@ pub fn persisted_settings_input_value(
         SettingsInput::TerminalFontSize => settings.terminal.font_size.to_string(),
         SettingsInput::TerminalFontWeight => settings.terminal.font_weight.to_string(),
         SettingsInput::TerminalScrollback => settings.terminal.scrollback.to_string(),
-                SettingsInput::CommandHistoryRetention => settings
+        SettingsInput::CommandHistoryRetention => settings
             .terminal
             .autosuggest
             .history_retention_days
@@ -340,7 +340,7 @@ pub fn apply_persisted_settings_input_draft(
         SettingsInput::TerminalScrollback => parse_i64(draft)
             .map(|value| settings.terminal.scrollback = value.clamp(500, 20_000))
             .into(),
-                    SettingsInput::CommandHistoryRetention => parse_i64(draft)
+        SettingsInput::CommandHistoryRetention => parse_i64(draft)
             .map(|value| {
                 settings.terminal.autosuggest.history_retention_days =
                     value.clamp(0, u32::MAX as i64) as u32

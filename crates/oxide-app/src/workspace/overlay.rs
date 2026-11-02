@@ -64,7 +64,7 @@ pub(in crate::workspace) enum WorkspaceOverlayIntent {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::workspace) enum WorkspaceOverlayConfirmKind {
     SettingsReset,
-        CommandHistoryClear {
+    CommandHistoryClear {
         all: bool,
     },
     LegalNotice,
@@ -85,7 +85,7 @@ pub(in crate::workspace) struct WorkspaceOverlayConfirmSnapshot {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::workspace) enum WorkspaceOverlayConfirmEffect {
     ResetSettings,
-        ClearCommandHistory { all: bool },
+    ClearCommandHistory { all: bool },
     DisconnectNode { node_id: NodeId },
 }
 
@@ -99,7 +99,7 @@ pub(in crate::workspace) enum WorkspaceOverlayConfirmKeyAction {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::workspace) enum WorkspaceOverlayConfirmOwnerKind {
     SettingsReset,
-        CommandHistoryClear,
+    CommandHistoryClear,
     LegalNotice,
     NativeUpdateReleaseNotes,
     NodeDisconnect,
@@ -382,7 +382,7 @@ impl WorkspaceOverlayEntity {
             .as_ref()
             .map(|confirm| WorkspaceOverlayConfirmOwnerSnapshot {
                 kind: match confirm {
-                                        WorkspaceOverlayConfirmKind::CommandHistoryClear { .. } => {
+                    WorkspaceOverlayConfirmKind::CommandHistoryClear { .. } => {
                         WorkspaceOverlayConfirmOwnerKind::CommandHistoryClear
                     }
                     WorkspaceOverlayConfirmKind::SettingsReset => {
@@ -421,7 +421,7 @@ impl WorkspaceOverlayEntity {
         let actions = if matches!(
             confirm,
             WorkspaceOverlayConfirmKind::SettingsReset
-                            | WorkspaceOverlayConfirmKind::CommandHistoryClear { .. }
+                | WorkspaceOverlayConfirmKind::CommandHistoryClear { .. }
                 | WorkspaceOverlayConfirmKind::NodeDisconnect { .. }
         ) {
             &FULL_ACTIONS[..]
@@ -470,7 +470,7 @@ impl WorkspaceOverlayEntity {
         self.confirm_focused_action = None;
         let effect = if confirmed {
             match confirm {
-                                WorkspaceOverlayConfirmKind::CommandHistoryClear { all } => {
+                WorkspaceOverlayConfirmKind::CommandHistoryClear { all } => {
                     Some(WorkspaceOverlayConfirmEffect::ClearCommandHistory { all: *all })
                 }
                 WorkspaceOverlayConfirmKind::SettingsReset => {

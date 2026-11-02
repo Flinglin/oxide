@@ -80,7 +80,6 @@ pub(super) fn terminal_command_risk_score_penalty(risk: Option<&'static str>) ->
     }
 }
 
-
 #[cfg(test)]
 mod history_tests {
     use super::*;

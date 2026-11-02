@@ -1710,7 +1710,7 @@ impl TerminalPane {
         self.autosuggest_dismissed_query = None;
         cx.notify();
     }
-    
+
     fn history_input_available(&self, mode: TermMode) -> bool {
         let prompt_available = match &self.serial_session_config {
             Some(config) => {

@@ -65,7 +65,7 @@ fn migrate_v1(snapshot: QuickCommandsSnapshotV1) -> QuickCommandsSnapshot {
             description: command.description,
             parameters: Vec::new(),
             availability: QuickCommandAvailability {
-                  match_field: Default::default(),
+                match_field: Default::default(),
                 protocols: Vec::new(),
                 host_patterns: command.host_pattern.into_iter().collect(),
             },
@@ -115,7 +115,7 @@ mod tests {
             ["*.example.com"]
         );
         assert_eq!(snapshot.commands[0].created_at, 7);
-                assert_eq!(
+        assert_eq!(
             snapshot.commands[0].availability.match_field,
             crate::QuickCommandMatchField::All
         );

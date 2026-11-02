@@ -313,7 +313,7 @@ impl WorkspaceApp {
                             .child(compact_input),
                     ),
             )
-                        .child(self.command_history_icon_button(
+            .child(self.command_history_icon_button(
                 LucideIcon::History,
                 14.0,
                 "terminal.command_bar.group_history",

@@ -1046,7 +1046,7 @@ impl WorkspaceApp {
         }
         self.i18n
             .set_locale(locale_from_settings(settings.general.language));
-                if previous_settings.terminal.autosuggest != settings.terminal.autosuggest {
+        if previous_settings.terminal.autosuggest != settings.terminal.autosuggest {
             self.terminal_history_store.configure(
                 settings.terminal.autosuggest.save_history,
                 settings.terminal.autosuggest.history_retention_days,

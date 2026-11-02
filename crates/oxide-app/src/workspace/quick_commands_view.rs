@@ -405,9 +405,9 @@ pub(super) struct QuickCommandsRenderSnapshot {
 impl TerminalQuickCommandsState {
     fn visible_commands_for_targets(
         &self,
-target: Option<&QuickCommandTargetContext>,
+        target: Option<&QuickCommandTargetContext>,
     ) -> Vec<QuickCommand> {
- self.store.visible_commands_for_targets(target)
+        self.store.visible_commands_for_targets(target)
     }
 
     pub(in crate::workspace) fn quick_bar_snapshot(
@@ -422,7 +422,7 @@ target: Option<&QuickCommandTargetContext>,
                 .commands
                 .iter()
                 .filter(|command| {
-                     target.map_or_else(
+                    target.map_or_else(
                         || {
                             command.availability.protocols.is_empty()
                                 && command.availability.host_patterns.is_empty()
@@ -773,10 +773,10 @@ target: Option<&QuickCommandTargetContext>,
 
     fn move_highlight(
         &mut self,
-target: Option<&QuickCommandTargetContext>,
+        target: Option<&QuickCommandTargetContext>,
         direction: QuickCommandKeyDirection,
     ) {
-       let visible_commands = self.visible_commands_for_targets(target);
+        let visible_commands = self.visible_commands_for_targets(target);
         self.store.highlighted_command = quick_command_keyboard_highlight(
             &visible_commands,
             self.store.highlighted_command.as_deref(),
@@ -863,7 +863,7 @@ target: Option<&QuickCommandTargetContext>,
             category: self.store.active_category.clone(),
             description: String::new(),
             host_patterns: String::new(),
-             match_field: QuickCommandMatchField::Host,
+            match_field: QuickCommandMatchField::Host,
             parameters: Vec::new(),
             protocols: Vec::new(),
             confirmation: QuickCommandConfirmationPolicy::Inherit,
@@ -891,7 +891,7 @@ target: Option<&QuickCommandTargetContext>,
             category: command.category,
             description: command.description.unwrap_or_default(),
             host_patterns: command.availability.host_patterns.join(", "),
-             match_field: command.availability.match_field,
+            match_field: command.availability.match_field,
             parameters: command
                 .parameters
                 .into_iter()
@@ -1086,12 +1086,12 @@ target: Option<&QuickCommandTargetContext>,
 
     fn render_snapshot(
         &self,
- target: Option<&QuickCommandTargetContext>,
+        target: Option<&QuickCommandTargetContext>,
     ) -> QuickCommandsRenderSnapshot {
         let visible_commands = Arc::new(if self.manager_open {
             self.store.visible_commands_for_management()
         } else {
-           self.visible_commands_for_targets(target)
+            self.visible_commands_for_targets(target)
         });
         let mut category_counts = HashMap::new();
         for command in &self.store.commands {
@@ -1320,7 +1320,7 @@ impl WorkspaceApp {
                     self.terminal.update(cx, |terminal, _cx| {
                         terminal
                             .quick_commands
-                           .highlight_edge(target.as_ref(), true)
+                            .highlight_edge(target.as_ref(), true)
                     });
                     cx.notify();
                     return;
@@ -3056,7 +3056,7 @@ impl WorkspaceApp {
                 }),
             );
         }
-                let mut match_fields = div().flex().items_center().gap(px(4.0)).flex_wrap();
+        let mut match_fields = div().flex().items_center().gap(px(4.0)).flex_wrap();
         for (field, label) in [
             (
                 QuickCommandMatchField::Host,
@@ -3161,7 +3161,7 @@ impl WorkspaceApp {
                             cx,
                         ),
                     )
-                                        .child(
+                    .child(
                         div()
                             .flex()
                             .flex_col()
@@ -3173,22 +3173,22 @@ impl WorkspaceApp {
                                     .child(self.i18n.t("terminal.quick_commands.match_field")),
                             )
                             .child(match_fields)
-                    .child(
-                        self.render_quick_command_text_input(
-                            QuickCommandInput::CommandHostPattern,
-                            draft.host_patterns.clone(),
-                            snapshot.focused_input,
-                            self.i18n
-                                .t("terminal.quick_commands.host_pattern_placeholder"),
-                            cx,
-                                                            ),
+                            .child(
+                                self.render_quick_command_text_input(
+                                    QuickCommandInput::CommandHostPattern,
+                                    draft.host_patterns.clone(),
+                                    snapshot.focused_input,
+                                    self.i18n
+                                        .t("terminal.quick_commands.host_pattern_placeholder"),
+                                    cx,
+                                ),
                             )
                             .child(
                                 div()
                                     .text_size(px(self.theme_tokens.metrics.ui_text_xs))
                                     .text_color(rgb(theme.text_muted))
                                     .child(self.i18n.t("terminal.quick_commands.match_hint")),
-                        ),
+                            ),
                     )
                     .child(
                         div()
