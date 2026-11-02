@@ -236,11 +236,6 @@ Oxide 0.1.2 完善 SSH 提权凭据、命令历史、文件导航和离线端口
 - Nix 开发环境补齐图形运行库搜索路径，以及 `libdrm` 和 Mesa，使通过 `nix develop` 后执行 `cargo run` 的程序能够找到相关运行库；此项针对开发环境，发行包无法启动的反馈仍需单独定位。
 - macOS 构建通过 Xcode 查找已安装的 Metal 工具链，避免仅依赖默认工具路径；本机仍需安装 Metal Toolchain。
 
-#### 👥 贡献者
-
-- @m00nLi：修复 SSH 重连状态与临时节点清理问题。
-- @sincerely-hello-world：修复 Nix 开发环境的图形运行库配置。
-
 #### 📌 使用与升级说明
 
 - 本机命令历史保存默认关闭；开启后完整命令会写入未加密的本地文件，参数中的密码或令牌也可能被记录。仅记录开启后的命令，默认保留 90 天，设为 0 可永久保留。
@@ -304,11 +299,6 @@ Oxide 0.1.2 adds image input, tool-result images, Xiaomi MiMo, and independently
 
 - The Nix development shell now exposes graphics runtime-library paths and includes `libdrm` and Mesa, allowing `cargo run` inside `nix develop` to locate the required libraries. This fixes the development environment; reported packaged-app startup failures still require separate investigation.
 - macOS builds locate the installed Metal toolchain through Xcode instead of relying solely on the default tool path. Metal Toolchain must still be installed locally.
-
-#### 👥 Contributors
-
-- @m00nLi: SSH reconnect-state and temporary-node cleanup fixes.
-- @sincerely-hello-world: Nix development-shell graphics runtime configuration.
 
 #### 📌 Usage and upgrade notes
 

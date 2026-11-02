@@ -18,8 +18,7 @@ use oxide_sftp::{
 use oxide_ssh::{
     AuthMethod, ConnectionConsumer, ConnectionPoolConfig, ProxyHopConfig, SshConfig,
     SshConnectionRegistry, SshTransportClient, SshTransportCommand, UpstreamProxyAuth,
-    UpstreamProxyConfig, UpstreamProxyProtocol, X11ForwardPolicy, X11ForwardingFailure,
-    X11ForwardingStatus, upstream_proxy_from_env,
+    UpstreamProxyConfig, UpstreamProxyProtocol, upstream_proxy_from_env,
 };
 use rand::{RngExt, SeedableRng};
 use tokio::{
