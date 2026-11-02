@@ -8,12 +8,11 @@ pub(super) fn put_terminal_history_entry(
     count_use: bool,
     sequence: usize,
 ) {
-    let normalized = normalize_terminal_autosuggest_command(&command);
-    if normalized.is_empty() || normalized.len() > 2000 {
+    if command.trim().is_empty() {
         return;
     }
     entries
-        .entry(normalized.clone())
+        .entry(command.clone())
         .and_modify(|entry| {
             entry.last_used_at = entry.last_used_at.max(last_used_at);
             entry.sequence = sequence;
@@ -22,7 +21,7 @@ pub(super) fn put_terminal_history_entry(
             }
         })
         .or_insert(TerminalHistoryEntry {
-            command: normalized,
+            command,
             source,
             last_used_at,
             uses: 1,
@@ -78,5 +77,43 @@ pub(super) fn terminal_command_risk_score_penalty(risk: Option<&'static str>) ->
         Some("high") => 900.0,
         Some("medium") => 250.0,
         _ => 0.0,
+    }
+}
+
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+
+    #[test]
+    fn history_candidates_preserve_quoted_spacing_and_multiline_commands() {
+        let mut entries = HashMap::new();
+        for command in [
+            "printf 'a  b'",
+            "printf 'a b'",
+            "printf first\nprintf second",
+        ] {
+            put_terminal_history_entry(
+                &mut entries,
+                command.to_owned(),
+                TerminalHistorySource::Runtime,
+                1,
+                true,
+                0,
+            );
+        }
+        let mut commands = entries
+            .into_values()
+            .map(|entry| entry.command)
+            .collect::<Vec<_>>();
+        commands.sort();
+        assert_eq!(
+            commands,
+            [
+                "printf 'a  b'",
+                "printf 'a b'",
+                "printf first\nprintf second"
+            ]
+        );
     }
 }

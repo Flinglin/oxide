@@ -37,6 +37,9 @@ pub(in crate::workspace) enum ActiveWindowModalOwner {
     SettingsReset {
         phase: oxide_ui::motion::ExitPhase,
     },
+    CommandHistoryClear {
+        phase: oxide_ui::motion::ExitPhase,
+    },
     SettingsDataDirectory {
         phase: oxide_ui::motion::ExitPhase,
     },
@@ -120,6 +123,7 @@ impl ActiveWindowModalOwner {
             Self::KeyboardInteractiveChallenge => 4,
 
             Self::SettingsReset { .. } => 12,
+            Self::CommandHistoryClear { .. } => 49,
             Self::SettingsDataDirectory { .. } => 13,
             Self::RemoteShellIntegration => 14,
             Self::TerminalTriggerQuickCommand => 15,
@@ -160,6 +164,7 @@ impl ActiveWindowModalOwner {
     fn phase(self) -> oxide_ui::motion::ExitPhase {
         match self {
             Self::SettingsReset { phase }
+            | Self::CommandHistoryClear { phase }
             | Self::SettingsDataDirectory { phase }
             | Self::CloudSync { phase }
             | Self::NodeDisconnect { phase }
@@ -314,6 +319,11 @@ impl ActiveWindowModalProjection {
             .then_some(ActiveWindowModalOwner::KeyboardInteractiveChallenge);
 
         let overlay_owner = self.overlay_confirm.map(|snapshot| match snapshot.kind {
+            overlay::WorkspaceOverlayConfirmOwnerKind::CommandHistoryClear => {
+                ActiveWindowModalOwner::CommandHistoryClear {
+                    phase: snapshot.phase,
+                }
+            }
             overlay::WorkspaceOverlayConfirmOwnerKind::SettingsReset => {
                 ActiveWindowModalOwner::SettingsReset {
                     phase: snapshot.phase,
@@ -764,7 +774,8 @@ impl WorkspaceApp {
                 let _ = self.handle_keyboard_interactive_key(event, window, cx);
             }
 
-            ActiveWindowModalOwner::SettingsReset { .. } => {
+            ActiveWindowModalOwner::SettingsReset { .. }
+            | ActiveWindowModalOwner::CommandHistoryClear { .. } => {
                 let _ = self.handle_settings_reset_confirm_key(event, cx);
             }
             ActiveWindowModalOwner::SettingsDataDirectory { .. } => {

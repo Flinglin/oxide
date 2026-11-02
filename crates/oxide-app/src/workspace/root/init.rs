@@ -64,6 +64,22 @@ impl WorkspaceApp {
         //加载终端历史命令
         let local_terminal_command_history =
             SharedTerminalCommandHistory::from_commands(load_local_shell_history_commands());
+        let (terminal_history_store, history_updates) = TerminalHistoryStore::new(
+            settings_store
+                .path()
+                .with_file_name("command-history.sqlite"),
+        )?;
+        terminal_history_store.configure(
+            settings.terminal.autosuggest.save_history,
+            settings.terminal.autosuggest.history_retention_days,
+        );
+        let terminal_history_updates = cx.spawn(async move |workspace, cx| {
+            while history_updates.recv().await.is_ok() {
+                if workspace.update(cx, |_, cx| cx.notify()).is_err() {
+                    break;
+                }
+            }
+        });
 
         //加载会话日志
         let session_log_directory = settings::terminal_session_log_root_directory(
@@ -592,6 +608,9 @@ impl WorkspaceApp {
             terminal_command_sender,
             _terminal_command_sender_observation: terminal_command_sender_observation,
             local_terminal_command_history,
+            terminal_history_store,
+            _terminal_history_updates: terminal_history_updates,
+            terminal_history_all_connections: false,
             ssh_terminal_command_histories: HashMap::new(),
             detached_local_terminals: HashMap::new(),
             detached_local_terminal_order: Vec::new(),
@@ -941,7 +960,7 @@ impl WorkspaceApp {
                         .read(cx)
                         .ssh_terminal_node_id(session_id)
                 })
-                .and_then(|node_id| self.ssh_terminal_command_histories.get(&node_id).cloned())
+                .and_then(|node_id| self.ssh_command_history(&node_id))
                 .unwrap_or_default(),
             _ => SharedTerminalCommandHistory::default(),
         };
