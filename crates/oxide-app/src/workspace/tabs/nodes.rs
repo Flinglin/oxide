@@ -529,7 +529,7 @@ impl WorkspaceApp {
                 if let Some(node) = self.ssh_nodes.get_mut(&node_id) {
                     node.readiness = state.clone();
                 }
-    self.resume_forward_starts(&node_id, &state, cx);
+                self.resume_forward_starts(&node_id, &state, cx);
                 if node_readiness_became_ready(previous.as_ref(), &state) {
                     // Registry readiness, not shell lifetime, restores shared
                     // forwards and completes the connection trace.
@@ -663,7 +663,7 @@ impl WorkspaceApp {
                 if let Some(node) = self.ssh_nodes.get_mut(&node_id) {
                     node.readiness = state.clone();
                 }
- self.resume_forward_starts(&node_id, &state, cx);
+                self.resume_forward_starts(&node_id, &state, cx);
                 if node_readiness_became_ready(previous.as_ref(), &state) {
                     self.restore_forwarding_session_for_node(&node_id, cx);
                     self.workspace_runtime.update(cx, |runtime, cx| {
@@ -1333,7 +1333,7 @@ impl WorkspaceApp {
         restored: u32,
         detail: String,
         job_id: String,
-         created_forwards: Vec<(Arc<oxide_forwarding::ForwardingManager>, String)>,
+        created_forwards: Vec<(Arc<oxide_forwarding::ForwardingManager>, String)>,
         bindings: Vec<(String, String, ConnectionConsumer)>,
         cx: &mut Context<Self>,
     ) -> bool {

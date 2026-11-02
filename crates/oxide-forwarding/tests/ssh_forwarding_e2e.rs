@@ -655,9 +655,6 @@ async fn reconnect_restores_suspended_but_not_manually_stopped_rules() {
         states[&stopped.id],
         oxide_forwarding::ForwardStatus::Stopped
     );
-    assert_eq!(
-        states[&running.id],
-        oxide_forwarding::ForwardStatus::Active
-    );
+    assert_eq!(states[&running.id], oxide_forwarding::ForwardStatus::Active);
     manager.stop_all().await;
 }

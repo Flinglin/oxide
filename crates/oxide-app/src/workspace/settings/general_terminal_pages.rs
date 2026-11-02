@@ -1177,6 +1177,18 @@ impl WorkspaceApp {
                     self.in_band_transfer_runtime_note(),
                 ],
             ),
+            (TerminalSettingsPage::Transfer, 1) => self.settings_card(
+                "settings_view.terminal.xmodem.title",
+                "",
+                vec![self.select_setting_row(
+                    "settings_view.terminal.xmodem.block_size",
+                    "settings_view.terminal.xmodem.block_size_hint",
+                    SettingsSelect::XmodemBlockSize,
+                    xmodem_block_size_label(settings.terminal.xmodem_block_size, &self.i18n),
+                    self.theme_tokens.metrics.settings_select_width,
+                    cx,
+                )],
+            ),
             (TerminalSettingsPage::Logging, 0) => {
                 let default_directory =
                     settings::terminal_session_log_root_directory(self.settings_store.path(), None);

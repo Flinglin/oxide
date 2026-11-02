@@ -132,6 +132,7 @@ pub struct TerminalUiPreferences {
     pub notice_sink: Option<Arc<dyn Fn(TerminalNotice) + Send + Sync + 'static>>,
     pub highlight_rules: Arc<[TerminalHighlightRule]>,
     pub trzsz_policy: Option<TrzszTransferPolicy>,
+    pub xmodem_block_size: oxide_settings::XmodemBlockSize,
 }
 
 #[derive(Clone, Default)]
@@ -259,6 +260,7 @@ impl Default for TerminalUiPreferences {
             notice_sink: None,
             highlight_rules: Arc::from(Vec::<TerminalHighlightRule>::new()),
             trzsz_policy: None,
+            xmodem_block_size: oxide_settings::XmodemBlockSize::default(),
         }
     }
 }

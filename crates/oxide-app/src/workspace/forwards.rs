@@ -244,7 +244,7 @@ pub(super) enum ForwardingWorkerResult {
         restored: u32,
         detail: String,
         job_id: String,
-          created_forwards: Vec<(Arc<ForwardingManager>, String)>,
+        created_forwards: Vec<(Arc<ForwardingManager>, String)>,
         bindings: Vec<(String, String, ConnectionConsumer)>,
     },
 }

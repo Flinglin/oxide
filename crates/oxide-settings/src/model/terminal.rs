@@ -46,7 +46,7 @@ pub struct TerminalAutosuggestSettings {
     #[serde(default = "default_terminal_autosuggest_enabled")]
     pub enabled: bool,
     pub local_shell_history: bool,
-        #[serde(default)]
+    #[serde(default)]
     pub save_history: bool,
     #[serde(default = "default_history_retention_days")]
     pub history_retention_days: u32,
@@ -59,7 +59,7 @@ impl Default for TerminalAutosuggestSettings {
         Self {
             enabled: default_terminal_autosuggest_enabled(),
             local_shell_history: true,
-                        save_history: false,
+            save_history: false,
             history_retention_days: default_history_retention_days(),
             extra: ExtraFields::new(),
         }
@@ -211,6 +211,15 @@ pub struct InBandTransferSettings {
     pub max_total_bytes: i64,
     #[serde(flatten)]
     pub extra: ExtraFields,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub enum XmodemBlockSize {
+    #[default]
+    #[serde(rename = "128")]
+    Bytes128,
+    #[serde(rename = "1024")]
+    Bytes1024,
 }
 
 impl Default for InBandTransferSettings {
@@ -499,6 +508,8 @@ pub struct TerminalSettings {
     #[serde(default)]
     pub default_highlight_rule_set: Option<String>,
     pub in_band_transfer: InBandTransferSettings,
+    #[serde(default)]
+    pub xmodem_block_size: XmodemBlockSize,
     pub graphics: TerminalGraphicsSettings,
     pub unicode: TerminalUnicodeSettings,
     #[serde(flatten)]
@@ -642,6 +653,7 @@ impl Default for TerminalSettings {
             highlight_rule_sets: Vec::new(),
             default_highlight_rule_set: None,
             in_band_transfer: InBandTransferSettings::default(),
+                  xmodem_block_size: XmodemBlockSize::default(),
             graphics: TerminalGraphicsSettings::default(),
             unicode: TerminalUnicodeSettings::default(),
             extra: ExtraFields::new(),
@@ -696,6 +708,7 @@ mod tests {
             "backspaceSequence",
             "deleteSequence",
             "remoteShellIntegrationMode",
+            "xmodemBlockSize",
             "semanticScheme",
         ] {
             value.as_object_mut().unwrap().remove(field);
@@ -729,7 +742,7 @@ mod tests {
         let disabled: TerminalAutosuggestSettings =
             serde_json::from_str(r#"{"enabled":false,"localShellHistory":true}"#).unwrap();
         assert!(!disabled.enabled);
-                assert!(!disabled.save_history);
+        assert!(!disabled.save_history);
         assert_eq!(disabled.history_retention_days, 90);
         assert_eq!(settings.background_scope, BackgroundScope::Content);
         assert_eq!(
@@ -742,6 +755,7 @@ mod tests {
             RemoteShellIntegrationMode::Ask
         );
         assert!(!settings.triggers.explicit_shell_enabled);
+          assert_eq!(settings.xmodem_block_size, XmodemBlockSize::Bytes128);
         assert!(settings.broadcast_groups.is_empty());
         assert!(!settings.session_log.automatic);
         assert!(!settings.session_log.include_control_sequences);

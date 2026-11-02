@@ -62,7 +62,7 @@ pub(in crate::workspace) fn forward_rule_from_reconnect_snapshot(
         },
         _ => return None,
     };
-      restored.id = rule.id.clone();
+    restored.id = rule.id.clone();
     restored.description = rule.description.clone();
     restored.status = ForwardStatus::Starting;
     Some(restored)
@@ -190,7 +190,7 @@ mod tests {
         let restored = forward_rule_from_reconnect_snapshot(&snapshot)
             .expect("dynamic snapshot should restore");
 
-       assert_eq!(restored.id, "old-forward-id");
+        assert_eq!(restored.id, "old-forward-id");
         assert_eq!(restored.status, ForwardStatus::Starting);
         assert_eq!(restored.target_host, "0.0.0.0");
         assert_eq!(restored.target_port, 0);

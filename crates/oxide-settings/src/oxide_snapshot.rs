@@ -74,6 +74,7 @@ const TERMINAL_BEHAVIOR_KEYS: &[&str] = &[
     "commandMarks",
     "highlightRules",
     "inBandTransfer",
+    "xmodemBlockSize",
     "sessionLog",
     "terminalEncoding",
     "backspaceSequence",
@@ -463,7 +464,8 @@ mod tests {
                 "general": { "language": "en" },
                 "terminal": {
                     "fontSize": 18,
-                    "highlightTabOnNewOutput": false
+                      "highlightTabOnNewOutput": false,
+                    "xmodemBlockSize": "1024"
                 },
             }
         });
@@ -479,6 +481,14 @@ mod tests {
         assert_eq!(merged.general.language, Language::En);
         assert_eq!(merged.terminal.font_size, current.terminal.font_size);
         assert!(!merged.terminal.highlight_tab_on_new_output);
+        assert_eq!(
+            merged.terminal.xmodem_block_size,
+            crate::XmodemBlockSize::Bytes1024
+        );
+        let exported =
+            export_oxide_settings_snapshot_json(&merged, Some(&selected), false).unwrap();
+        let exported: Value = serde_json::from_str(&exported).unwrap();
+        assert_eq!(exported["settings"]["terminal"]["xmodemBlockSize"], "1024");
     }
 
     #[test]

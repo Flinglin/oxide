@@ -2203,7 +2203,7 @@ impl WorkspaceApp {
                 cx,
             ));
         }
-        
+
         if self.disclosure_motions.retained(&motion_key, expanded) {
             children.extend(self.render_session_node_lifecycle_items(
                 &node_id,

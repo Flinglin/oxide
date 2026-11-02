@@ -682,7 +682,7 @@ impl WorkspaceApp {
         let _scope = self.enter_forwarding_page(tab_id, cx);
         let theme = self.theme_tokens.ui;
         let (local, remote) = forward_addresses(&rule);
-            let active = matches!(
+        let active = matches!(
             rule.status,
             ForwardStatus::Active | ForwardStatus::Suspended
         );

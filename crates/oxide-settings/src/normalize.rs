@@ -556,7 +556,13 @@ pub fn sanitize_settings_value(raw: Value) -> Result<SanitizedSettings> {
         "ask",
         &mut validation_warnings,
     );
-
+    sanitize_enum(
+        &mut settings,
+        &["terminal", "xmodemBlockSize"],
+        &["128", "1024"],
+        "128",
+        &mut validation_warnings,
+    );
     if let Some(terminal) = object_mut(&mut settings, "terminal")
         && let Some(in_band) = terminal
             .get_mut("inBandTransfer")
@@ -583,6 +589,25 @@ pub fn sanitize_settings_value(raw: Value) -> Result<SanitizedSettings> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn xmodem_block_size_accepts_protocol_sizes_and_resets_invalid_values() {
+        for (input, expected, warns) in [
+            (json!("128"), XmodemBlockSize::Bytes128, false),
+            (json!("1024"), XmodemBlockSize::Bytes1024, false),
+            (json!("256"), XmodemBlockSize::Bytes128, true),
+        ] {
+            let sanitized =
+                sanitize_settings_value(json!({"terminal":{"xmodemBlockSize":input}})).unwrap();
+            assert_eq!(sanitized.settings.terminal.xmodem_block_size, expected);
+            assert_eq!(
+                sanitized
+                    .validation_warnings
+                    .iter()
+                    .any(|warning| warning.contains("terminal.xmodemBlockSize")),
+                warns
+            );
+        }
+    }
 
     #[test]
     fn invalid_terminal_rule_references_are_removed_while_valid_bindings_survive() {

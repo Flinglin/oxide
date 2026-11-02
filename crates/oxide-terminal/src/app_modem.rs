@@ -87,8 +87,7 @@ impl TerminalPane {
             ModemTransferDirection::Upload => cx.prompt_for_paths(PathPromptOptions {
                 files: true,
                 directories: false,
-                multiple: request.protocol
-                    != oxide_modem_transfer::DetectedModemProtocol::Xmodem,
+                multiple: request.protocol != oxide_modem_transfer::DetectedModemProtocol::Xmodem,
                 prompt: Some(SharedString::from(
                     self.preferences
                         .trzsz_labels
@@ -112,6 +111,8 @@ impl TerminalPane {
         let connection_lost = self.modem_audit_connection_lost.clone();
         let cancel_context = self.terminal.lock().audit_context();
         let audit_parent_id = self.modem_audit_operation_id.clone();
+        // Both manual and detected transfers capture the setting before the worker starts.
+        let xmodem_block_size = self.preferences.xmodem_block_size;
         cx.spawn(async move |weak, cx| {
             let selection = match receiver.await {
                 Ok(Ok(Some(paths))) => match request.direction {
@@ -152,6 +153,7 @@ impl TerminalPane {
                         transfer,
                         request,
                         selection,
+                        xmodem_block_size,
                         audit,
                         connection_lost,
                         payload_bytes: Arc::new(std::sync::atomic::AtomicU64::new(0)),

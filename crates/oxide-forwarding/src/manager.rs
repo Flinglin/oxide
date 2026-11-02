@@ -826,7 +826,7 @@ impl ForwardingManager {
         let rules = self.list_stopped_forwards();
         let mut restored = Vec::with_capacity(rules.len());
 
-                for rule in rules
+        for rule in rules
             .into_iter()
             .filter(|rule| rule.status == ForwardStatus::Suspended)
         {
@@ -862,7 +862,7 @@ impl ForwardingManager {
         StdTcpListener::bind((bind_address, bind_port)).is_ok()
     }
 
-   pub fn has_rule(&self, rule_id: &str) -> bool {
+    pub fn has_rule(&self, rule_id: &str) -> bool {
         self.local_forwards.contains_key(rule_id)
             || self.dynamic_forwards.contains_key(rule_id)
             || self.remote_forwards.contains_key(rule_id)

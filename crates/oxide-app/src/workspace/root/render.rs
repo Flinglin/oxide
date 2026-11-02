@@ -76,7 +76,7 @@ impl WorkspaceApp {
                     node_id.clone(),
                     tab_id,
                     has_background,
-                       window,
+                    window,
                     cx,
                 ));
                 modals.push(self.render_forward_delete_confirm(
