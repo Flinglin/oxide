@@ -813,6 +813,11 @@ impl HostToolsEntity {
         let session_id = session.id.clone();
 
         div()
+            .id(host_tools_row_id(
+                "host-tmux-row",
+                connection_id,
+                session.id.clone(),
+            ))
             .w_full()
             .min_w_0()
             .border_b_1()
