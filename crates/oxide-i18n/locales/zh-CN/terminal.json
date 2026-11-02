@@ -17,7 +17,7 @@
       "empty": "没有匹配的命令",
       "error": "命令历史读取或保存失败，最近输入的命令仍可在内存中使用。"
     },
-        "reconnect_hint": "会话已断开 · 按回车重新连接",
+    "reconnect_hint": "会话已断开 · 按回车重新连接",
     "control_bar": {
       "show_controls": "展开操作栏",
       "hide_controls": "收起操作栏"
@@ -573,6 +573,8 @@
       "regenerate": "重试"
     },
     "privilege_helper": {
+      "choose_hint": "按 Enter 选择提权凭据",
+      "choose_title": "选择提权凭据",
       "fill": "填充密码",
       "filling": "填充中...",
       "fill_title": "填充 {{label}}",

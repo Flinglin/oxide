@@ -65,9 +65,9 @@ use super::*;
 use oxide_connections::{
     ConnectionImportApplyRequest, ConnectionImportDuplicateStrategy, ConnectionImportPreview,
     ConnectionImportSource, ImportedConnectionAuthType, LOCAL_SHELL_PRIVILEGE_CONNECTION_ID,
-    ManagedSshKeyInfo, ManagedSshKeyOrigin, ManagedSshKeyUsage, SavePrivilegeCredentialRequest,
-    SecretString, SshConfigHost, apply_connection_import, list_available_ssh_keys,
-    list_ssh_config_hosts, preview_connection_import,
+    ManagedSshKeyInfo, ManagedSshKeyOrigin, ManagedSshKeyUsage, SSH_COMMON_PRIVILEGE_SCOPE_ID,
+    SavePrivilegeCredentialRequest, SecretString, SshConfigHost, apply_connection_import,
+    list_available_ssh_keys, list_ssh_config_hosts, preview_connection_import,
 };
 use oxide_gpui_platform::vibrancy::{NativeVibrancyMode, VibrancySupport, available_modes};
 use oxide_i18n::I18n;
