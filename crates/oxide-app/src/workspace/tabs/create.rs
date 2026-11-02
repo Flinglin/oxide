@@ -565,6 +565,7 @@ impl WorkspaceApp {
         let teriminal_type = TabKind::LocalTerminal(TerminalRelay::None);
 
         let mut preferences = self.prepare_terminal_preferences_for_tab_kind(&teriminal_type, cx);
+        preferences.command_history = SharedTerminalCommandHistory::default();
         preference_overrides.apply_to(&mut preferences);
         let pane_config = config;
         let pane = cx.new(|cx| {
