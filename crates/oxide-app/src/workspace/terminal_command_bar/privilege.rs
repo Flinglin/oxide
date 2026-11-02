@@ -506,7 +506,7 @@ impl WorkspaceApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-                let Some(pane_id) = self.active_pane_id(cx) else {
+        let Some(pane_id) = self.active_pane_id(cx) else {
             return;
         };
         let Some(session_id) = self.active_terminal_session_id(cx) else {
@@ -548,7 +548,7 @@ impl WorkspaceApp {
                     generation,
                     cx,
                 )
-        });
+            });
         log_privilege_prompt_helper(format_args!("fill: write attempted sent={sent}"));
         if !sent {
             self.push_command_palette_toast(

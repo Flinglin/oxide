@@ -170,7 +170,7 @@ mod tests {
         let id = credential(&mut store);
         let binding = store.totp_binding(Some(&id)).unwrap();
         let previous = store.totp_credentials()[0].clone();
-          let owner = connection(&mut store, &id, "Target");
+        let owner = connection(&mut store, &id, "Target");
         let path = store.path.clone();
         store.path = directory.path().to_path_buf();
         assert_eq!(
@@ -187,7 +187,7 @@ mod tests {
         );
         store.path = path;
         assert_eq!(store.totp_credentials(), &[previous]);
-                assert_eq!(
+        assert_eq!(
             store
                 .get(&owner)
                 .unwrap()
@@ -461,7 +461,7 @@ impl ConnectionStore {
         parameters: TotpParameters,
         prompt_pattern: &str,
         enabled: bool,
-            ) -> Result<String, TotpError> {
+    ) -> Result<String, TotpError> {
         self.save_totp_credential_with_connections(
             id,
             name,
@@ -508,7 +508,7 @@ impl ConnectionStore {
             if id.is_some() && previous.is_none() {
                 return Err(TotpError::Unavailable);
             }
-                        if connection_ids.is_some_and(|ids| ids.iter().any(|id| self.get(id).is_none())) {
+            if connection_ids.is_some_and(|ids| ids.iter().any(|id| self.get(id).is_none())) {
                 return Err(TotpError::Unavailable);
             }
             let id = id
@@ -556,7 +556,7 @@ impl ConnectionStore {
                 .totp_credentials
                 .retain(|entry| entry.id != id);
             candidate.data.totp_credentials.push(credential);
-                        if let Some(connection_ids) = connection_ids {
+            if let Some(connection_ids) = connection_ids {
                 for connection in &mut candidate.data.connections {
                     let selected = connection_ids.contains(&connection.id);
                     let current = connection.options.totp_credential_id.as_deref();

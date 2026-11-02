@@ -1387,7 +1387,7 @@ mod tests {
         }
     }
 
-   #[test]
+    #[test]
     fn tracker_marks_manual_input_at_prompt_as_secret_entry() {
         for custom in [false, true] {
             let start = Instant::now();

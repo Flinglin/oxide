@@ -129,7 +129,7 @@ pub struct ConnectionDirectArgs {
     pub tags: Vec<String>,
     #[arg(long, value_enum, help = "Authentication type")]
     pub auth: Option<ConnectionAuthArg>,
-        #[arg(
+    #[arg(
         long,
         value_name = "ID_OR_NAME",
         conflicts_with = "clear_totp_credential",
