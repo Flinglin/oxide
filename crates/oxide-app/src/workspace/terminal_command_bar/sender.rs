@@ -81,8 +81,8 @@ impl WorkspaceApp {
         let documents = self.terminal_command_sender.read(cx).document_snapshots();
         let targets = self.terminal_command_sender_target_entries(cx);
         let sender_is_resizing = self.terminal_command_sender.read(cx).is_resizing();
-
-        div()
+        let has_background = self.window_background_preferences().is_some();
+        let panel = div()
             .relative()
             .flex_none()
             .h(px(panel_height))
@@ -91,7 +91,14 @@ impl WorkspaceApp {
             .flex_col()
             .border_t_1()
             .border_color(self.workspace_chrome_divider())
-            .bg(rgb(theme.bg))
+            .bg(if has_background {
+                rgba(
+                    (theme.bg << 8)
+                        | oxide_ui::surface::theme_glass_card_background_alpha(&self.theme_tokens),
+                )
+            } else {
+                rgb(theme.bg)
+            })
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
                 this.update_terminal_command_sender_resize(event, window, cx);
             }))
@@ -146,7 +153,12 @@ impl WorkspaceApp {
                     .child(active.editor.clone()),
             )
             .child(self.render_terminal_command_sender_controls(&active, &targets, cx))
-            .into_any_element()
+            .into_any_element();
+        if has_background {
+            oxide_ui::surface::tab_surface(&self.theme_tokens, panel)
+        } else {
+            panel
+        }
     }
 
     fn render_compact_terminal_command_sender(
@@ -313,20 +325,6 @@ impl WorkspaceApp {
                             .child(compact_input),
                     ),
             )
-            .child(self.command_history_icon_button(
-                LucideIcon::History,
-                14.0,
-                "terminal.command_bar.group_history",
-                cx.listener(|this, _, window, cx| {
-                    this.terminal_command_sender.update(cx, |sender, cx| {
-                        sender.set_compact_focused(true, cx);
-                        sender.show_compact_history(cx);
-                    });
-                    window.focus(&this.focus_handle, cx);
-                    cx.stop_propagation();
-                }),
-                cx,
-            ))
             .when(quick_commands_enabled, |row| {
                 row.child(
                     div()
@@ -556,7 +554,9 @@ impl WorkspaceApp {
             .gap(px(8.0))
             .border_b_1()
             .border_color(self.workspace_chrome_divider())
-            .bg(rgb(self.theme_tokens.ui.bg))
+            .when(self.window_background_preferences().is_none(), |strip| {
+                strip.bg(rgb(self.theme_tokens.ui.bg))
+            })
             .child(tab_list)
             .child(task_actions)
             .into_any_element()
@@ -727,7 +727,9 @@ impl WorkspaceApp {
             .flex_none()
             .border_t_1()
             .border_color(self.workspace_chrome_divider())
-            .bg(rgb(self.theme_tokens.ui.bg))
+            .when(self.window_background_preferences().is_none(), |controls| {
+                controls.bg(rgb(self.theme_tokens.ui.bg))
+            })
             .when(snapshot.total_units > 0, |panel| {
                 panel.child(
                     div()

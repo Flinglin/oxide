@@ -274,7 +274,7 @@ impl WorkspaceApp {
             if self.left_sidebar_resizing {
                 rgb(theme.accent)
             } else {
-                rgba(theme.border << 8)
+                self.workspace_divider_color(theme.border, 0x40)
             },
             true,
         )
@@ -392,8 +392,8 @@ impl WorkspaceApp {
             .h_full()
             .flex()
             .flex_col()
-            .border_r_1()
-            .border_color(self.workspace_chrome_divider())
+            // The overlaid resize hotzone owns the seam without reserving an
+            // untinted layout border between the sidebar and main content.
             .child(self.render_left_sidebar_header(cx))
             .when(
                 self.effective_sidebar_panel_section() == NavItem::Sessions
@@ -1231,6 +1231,99 @@ mod sidebar_resize_region_tests {
         Context, CursorStyle, IntoElement, Modifiers, MouseButton, ParentElement, Point, Render,
         Styled, TestAppContext, Window, canvas, div, px, size,
     };
+
+    struct SidebarSurfaceView(Entity<WorkspaceApp>);
+
+    impl Render for SidebarSurfaceView {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            self.0.update(cx, |workspace, cx| {
+                div()
+                    .size_full()
+                    .flex()
+                    .child(workspace.render_nav_rail(cx))
+                    .child(workspace.render_left_sidebar(window, cx))
+            })
+        }
+    }
+
+    #[gpui::test]
+    fn sidebar_tints_reach_the_seams_without_exposing_wallpaper(cx: &mut TestAppContext) {
+        let executable = std::env::current_exe().unwrap();
+        let fixture_key = "OXIDETERM_SIDEBAR_SEAM_TEST_DIR";
+        let Some(fixture_dir) = std::env::var_os(fixture_key) else {
+            // Portable storage isolates the real workspace from user settings and plugins.
+            let directory = tempfile::tempdir_in(executable.parent().unwrap()).unwrap();
+            let child = directory.path().join(executable.file_name().unwrap());
+            fs::hard_link(&executable, &child).unwrap();
+            fs::write(directory.path().join("portable"), []).unwrap();
+            let output = std::process::Command::new(child)
+                .arg(cx.test_function_name().unwrap())
+                .arg("--nocapture")
+                .env(fixture_key, directory.path())
+                .env_remove("APPIMAGE")
+                .current_dir(directory.path())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        };
+        let settings_path = default_settings_path();
+        assert!(settings_path.starts_with(PathBuf::from(fixture_dir)));
+        let mut settings = SettingsStore::load_from_path(settings_path).unwrap();
+        settings.settings_mut().ssh_config.auto_load_hosts = false;
+        settings.settings_mut().onboarding_completed = true;
+        settings.save().unwrap();
+        cx.executor().allow_parking();
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            SidebarSurfaceView(cx.new(|cx| {
+                let mut workspace = WorkspaceApp::new(window, cx, None, None).unwrap();
+                workspace.active_background.enabled = true;
+                workspace.active_background.image = Some("seam-fixture.png".into());
+                workspace.active_background.scope = oxide_settings::BackgroundScope::Window;
+                workspace.render_policy.allow_background_images = true;
+                workspace.theme_tokens.ui.bg = 0x102030;
+                workspace.theme_tokens.metrics.sidebar_vibrancy_alpha = 0.5;
+                workspace.left_sidebar_width = 300.0;
+                workspace
+            }))
+        });
+        cx.simulate_resize(size(px(800.0), px(600.0)));
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let activity_width = view.read_with(cx, |view, cx| {
+            view.0.read(cx).theme_tokens.metrics.activity_bar_width
+        });
+        cx.update(|window, _| {
+            let tint: gpui::Hsla = rgba(0x10203080).into();
+            let scale = window.scale_factor();
+            let quads = window.painted_quads();
+            for (left, right) in [(0.0, activity_width), (activity_width, 300.0)] {
+                let body = quads
+                    .iter()
+                    .filter(|quad| {
+                        quad.background.as_solid() == Some(tint)
+                            && (quad.bounds.left().0 / scale - left).abs() < 0.01
+                    })
+                    .max_by(|a, b| {
+                        a.bounds
+                            .size
+                            .height
+                            .partial_cmp(&b.bounds.size.height)
+                            .unwrap()
+                    })
+                    .expect("sidebar body tint");
+                assert_eq!(
+                    body.bounds.right().0 / scale,
+                    right,
+                    "the body must cover the border slot, not expose a bright wallpaper strip"
+                );
+            }
+        });
+    }
 
     struct TestContextSidebarChrome {
         total_width: f32,
