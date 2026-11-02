@@ -3063,6 +3063,8 @@ mod terminal_open_tests {
         settings.settings_mut().ssh_config.auto_load_hosts = false;
         settings.settings_mut().onboarding_completed = true;
         settings.save().unwrap();
+        // The full workspace owns real background workers and filesystem watches.
+        cx.executor().allow_parking();
         let (response_tx, _response_rx) = tokio::sync::oneshot::channel();
         let (view, cx) = cx.add_window_view(move |window, cx| {
             let workspace = cx.new(|cx| WorkspaceApp::new(window, cx, None, None).unwrap());
