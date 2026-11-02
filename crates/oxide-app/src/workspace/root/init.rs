@@ -953,7 +953,18 @@ impl WorkspaceApp {
             ));
         let mut preferences = self.terminal_preferences_for_background_key(key, cx);
         preferences.command_history = match kind {
-            TabKind::LocalTerminal(_) => self.local_terminal_command_history.clone(),
+            TabKind::LocalTerminal(_) => {
+                if session_id.is_some_and(|id| self.serial_terminal_configs.contains_key(&id)) {
+                    self.tab_host
+                        .read(cx)
+                        .panes()
+                        .get(&pane_id)
+                        .map(|pane| pane.read(cx).command_history())
+                        .unwrap_or_default()
+                } else {
+                    self.local_terminal_command_history.clone()
+                }
+            },
             TabKind::SshTerminal => session_id
                 .and_then(|session_id| {
                     self.workspace_runtime

@@ -669,7 +669,9 @@ impl WorkspaceApp {
 
         let teriminal_type = TabKind::LocalTerminal(TerminalRelay::None);
 
-        let mut preferences = self.prepare_terminal_preferences_for_tab_kind(&teriminal_type, cx);
+        let mut preferences = self.prepare_terminal_preferences_for_tab_kind(&teriminal_type, cx);   
+        // Device commands must not share the user's local shell history.
+        preferences.command_history = SharedTerminalCommandHistory::default();
         let mut preference_overrides = terminal_preference_overrides(
             terminal_options,
             &self.settings_store.settings().terminal,
