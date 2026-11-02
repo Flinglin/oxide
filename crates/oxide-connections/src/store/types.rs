@@ -3,6 +3,7 @@ use crate::{SecretString, keychain::ConnectionKeychain};
 pub const CONFIG_VERSION: u32 = 1;
 pub const CONNECTION_TOMBSTONE_RETENTION_DAYS: i64 = 30;
 pub const LOCAL_SHELL_PRIVILEGE_CONNECTION_ID: &str = "local-shell:default";
+pub const SSH_COMMON_PRIVILEGE_SCOPE_ID: &str = "ssh:common";
 pub const GLOBAL_UPSTREAM_PROXY_PASSWORD_KEYCHAIN_ID: &str = "oxide_global_upstream_proxy_password";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -325,7 +326,9 @@ impl SshAlgorithmPreferences {
             for algorithm in algorithms {
                 if algorithm.is_empty()
                     || algorithm.len() > MAX_SSH_ALGORITHM_NAME_BYTES
-                    || algorithm.bytes().any(|byte| byte == b',' || byte.is_ascii_whitespace())
+                    || algorithm
+                        .bytes()
+                        .any(|byte| byte == b',' || byte.is_ascii_whitespace())
                 {
                     bail!("Invalid SSH {category} algorithm name");
                 }
@@ -455,7 +458,6 @@ pub enum SavedUpstreamProxyAuth {
     },
 }
 
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SavedUpstreamProxyConfig {
@@ -477,7 +479,9 @@ pub enum SavedUpstreamProxyPolicy {
     #[default]
     UseGlobal,
     Direct,
-    Custom { proxy: SavedUpstreamProxyConfig },
+    Custom {
+        proxy: SavedUpstreamProxyConfig,
+    },
 }
 
 impl SavedUpstreamProxyPolicy {
@@ -485,7 +489,6 @@ impl SavedUpstreamProxyPolicy {
         matches!(self, Self::UseGlobal)
     }
 }
-
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SavedProxyCommand {
@@ -502,10 +505,7 @@ impl fmt::Debug for SavedProxyCommand {
             .field("keychain_id", &self.keychain_id)
             .field(
                 "plaintext_command",
-                &self
-                    .plaintext_command
-                    .as_ref()
-                    .map(|_| "[redacted secret]"),
+                &self.plaintext_command.as_ref().map(|_| "[redacted secret]"),
             )
             .finish()
     }
@@ -620,7 +620,10 @@ pub struct SavedConnection {
     pub auth: SavedAuth,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub proxy_chain: Vec<SavedProxyHop>,
-    #[serde(default, skip_serializing_if = "SavedUpstreamProxyPolicy::is_use_global")]
+    #[serde(
+        default,
+        skip_serializing_if = "SavedUpstreamProxyPolicy::is_use_global"
+    )]
     pub upstream_proxy: SavedUpstreamProxyPolicy,
     /// Manual ProxyCommand text stays in the protected store; metadata keeps only its reference.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1033,8 +1036,13 @@ pub enum MoshIpFamily {
 pub enum MoshUdpPortSelection {
     #[default]
     Automatic,
-    Fixed { port: u16 },
-    Range { start: u16, end: u16 },
+    Fixed {
+        port: u16,
+    },
+    Range {
+        start: u16,
+        end: u16,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -1179,7 +1187,10 @@ pub struct StandaloneSftpEndpoint {
     pub connect_timeout_seconds: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub proxy_chain: Vec<SavedProxyHop>,
-    #[serde(default, skip_serializing_if = "SavedUpstreamProxyPolicy::is_use_global")]
+    #[serde(
+        default,
+        skip_serializing_if = "SavedUpstreamProxyPolicy::is_use_global"
+    )]
     pub upstream_proxy: SavedUpstreamProxyPolicy,
     /// Manual ProxyCommand text stays in protected storage; metadata keeps only its reference.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1287,7 +1298,10 @@ pub struct StandaloneSftpProfile {
     pub connect_timeout_seconds: u64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub proxy_chain: Vec<SavedProxyHop>,
-    #[serde(default, skip_serializing_if = "SavedUpstreamProxyPolicy::is_use_global")]
+    #[serde(
+        default,
+        skip_serializing_if = "SavedUpstreamProxyPolicy::is_use_global"
+    )]
     pub upstream_proxy: SavedUpstreamProxyPolicy,
     /// Manual ProxyCommand text stays in protected storage; metadata keeps only its reference.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1661,9 +1675,11 @@ impl MoshProfile {
             }
             MoshUdpPortSelection::Fixed { .. } | MoshUdpPortSelection::Range { .. } => {}
         }
-        if self.locale.as_deref().is_some_and(|locale| {
-            locale.trim().is_empty() || locale.contains(['\0', '\r', '\n'])
-        }) {
+        if self
+            .locale
+            .as_deref()
+            .is_some_and(|locale| locale.trim().is_empty() || locale.contains(['\0', '\r', '\n']))
+        {
             bail!("Mosh locale is invalid");
         }
         self.ssh_algorithms.validate()?;
@@ -1895,17 +1911,11 @@ impl fmt::Debug for SavedConnectionRuntimeSecrets {
             )
             .field(
                 "upstream_proxy",
-                &self
-                    .upstream_proxy
-                    .as_ref()
-                    .map(|_| "[redacted secret]"),
+                &self.upstream_proxy.as_ref().map(|_| "[redacted secret]"),
             )
             .field(
                 "proxy_command",
-                &self
-                    .proxy_command
-                    .as_ref()
-                    .map(|_| "[redacted secret]"),
+                &self.proxy_command.as_ref().map(|_| "[redacted secret]"),
             )
             .finish()
     }
@@ -1956,6 +1966,8 @@ pub struct ConnectionStoreData {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub local_privilege_credentials: Vec<SavedPrivilegeCredential>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ssh_common_privilege_credentials: Vec<SavedPrivilegeCredential>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_keychain_cleanup: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pending_privilege_keychain_cleanup: Vec<String>,
@@ -1985,6 +1997,7 @@ impl Default for ConnectionStoreData {
             standalone_sftp_profiles: Vec::new(),
             remote_desktop_profiles: Vec::new(),
             local_privilege_credentials: Vec::new(),
+            ssh_common_privilege_credentials: Vec::new(),
             pending_keychain_cleanup: Vec::new(),
             pending_privilege_keychain_cleanup: Vec::new(),
         }
@@ -2111,11 +2124,15 @@ pub struct SavedConnectionsSyncSnapshot {
 
 impl SavedConnectionsSyncSnapshot {
     pub fn record_count(&self) -> usize {
-        self.records.len() + self.local_terminal_profiles.len() + self.local_terminal_tombstones.len()
+        self.records.len()
+            + self.local_terminal_profiles.len()
+            + self.local_terminal_tombstones.len()
     }
 
     pub fn record_ids(&self) -> impl Iterator<Item = &str> {
-        self.records.iter().map(|r| r.id.as_str())
+        self.records
+            .iter()
+            .map(|r| r.id.as_str())
             .chain(self.local_terminal_profiles.iter().map(|p| p.id.as_str()))
             .chain(self.local_terminal_tombstones.iter().map(|p| p.id.as_str()))
     }
