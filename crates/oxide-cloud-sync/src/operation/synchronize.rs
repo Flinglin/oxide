@@ -963,8 +963,6 @@ fn latest_publications(publications: Vec<PublicationId>) -> Result<Vec<Publicati
     Ok(latest.into_values().collect())
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1113,8 +1111,7 @@ mod tests {
             let mut connections =
                 ConnectionStore::load(directory.join("connections.json")).unwrap();
             let forwards = ForwardingRegistry::new_with_store(
-                oxide_forwarding::SavedForwardStore::load(directory.join("forwards.json"))
-                    .unwrap(),
+                oxide_forwarding::SavedForwardStore::load(directory.join("forwards.json")).unwrap(),
             );
             let mut settings =
                 SettingsStore::load_from_path(directory.join("settings.json")).unwrap();

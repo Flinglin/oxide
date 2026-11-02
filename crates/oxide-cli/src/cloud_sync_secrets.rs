@@ -249,7 +249,7 @@ fn ensure_password_setup(
         .sync_password_ref
         .as_deref()
         .unwrap_or(secret_keys::SYNC_PASSWORD);
-if key == secret_keys::SYNC_PASSWORD
+    if key == secret_keys::SYNC_PASSWORD
         && !state.settings.local_file_mode
         && state.secret_hints.get(active).copied().unwrap_or(false)
     {

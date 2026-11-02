@@ -354,6 +354,14 @@ impl WorkspaceApp {
     }
 
     fn request_host_tool_snapshot_if_needed(&mut self, tool: HostTools, cx: &mut Context<Self>) {
+        if tool == HostTools::Monitor {
+            self.host_tools.update(cx, |host_tools, cx| {
+                if let Some(connection_id) = host_tools.selected_connection_id_owned() {
+                    host_tools.request_profiler_refresh(connection_id, cx);
+                }
+            });
+            return;
+        }
         if matches!(
             tool,
             HostTools::Monitor | HostTools::Gpu | HostTools::Processes | HostTools::Docker
