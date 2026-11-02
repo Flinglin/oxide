@@ -263,48 +263,40 @@ impl WorkspaceApp {
             .child(
                 div()
                     .w_full()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap(px(16.0))
-                    .child(
-                        div()
-                            .min_w(px(0.0))
-                            .flex_1()
-                            .flex()
-                            .flex_col()
-                            .gap(px(4.0))
-                            .child(self.portable_settings_text(
-                                "portable-auto-unlock-title",
-                                "settings_view.general.portable_auto_unlock",
-                                self.i18n.t("settings_view.general.portable_auto_unlock"),
-                                self.theme_tokens.metrics.ui_text_sm,
-                                self.theme_tokens.ui.text,
-                                Some(gpui::FontWeight::MEDIUM),
-                                cx,
-                            ))
-                            .child(
-                                self.portable_settings_text(
-                                    "portable-auto-unlock-hint",
-                                    "settings_view.general.portable_auto_unlock_hint",
-                                    self.i18n
-                                        .t("settings_view.general.portable_auto_unlock_hint"),
-                                    self.theme_tokens.metrics.ui_text_xs,
-                                    self.theme_tokens.ui.text_muted,
-                                    None,
-                                    cx,
-                                ),
-                            ),
-                    )
-                    .child(div().flex_none().child(checkbox_with(
+                    .child(oxide_settings_view::settings_row(
                         &self.theme_tokens,
-                        String::new(),
-                        auto_unlock_enabled,
-                        CheckboxOptions {
-                            disabled: !can_toggle_auto_unlock,
-                            ..CheckboxOptions::default()
-                        },
-                    )))
+                        self.portable_settings_text(
+                            "portable-auto-unlock-title",
+                            "settings_view.general.portable_auto_unlock",
+                            self.i18n.t("settings_view.general.portable_auto_unlock"),
+                            self.theme_tokens.metrics.ui_text_sm,
+                            self.theme_tokens.ui.text,
+                            Some(gpui::FontWeight::MEDIUM),
+                            cx,
+                        ),
+                        Some(
+                            self.portable_settings_text(
+                                "portable-auto-unlock-hint",
+                                "settings_view.general.portable_auto_unlock_hint",
+                                self.i18n
+                                    .t("settings_view.general.portable_auto_unlock_hint"),
+                                self.theme_tokens.metrics.ui_text_xs,
+                                self.theme_tokens.ui.text_muted,
+                                None,
+                                cx,
+                            ),
+                        ),
+                        checkbox_with(
+                            &self.theme_tokens,
+                            String::new(),
+                            auto_unlock_enabled,
+                            CheckboxOptions {
+                                disabled: !can_toggle_auto_unlock,
+                                ..CheckboxOptions::default()
+                            },
+                        )
+                        .into_any_element(),
+                    ))
                     .when(can_toggle_auto_unlock, |row| {
                         // The label and hint provide a discoverable target around the compact control.
                         row.cursor_pointer().on_mouse_down(

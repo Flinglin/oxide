@@ -18,3 +18,6 @@ oxide-settings = { path = "../oxide-settings" }
 oxide-settings-model = { path = "../oxide-settings-model" }
 oxide-theme = { path = "../oxide-theme" }
 regex.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }

@@ -263,7 +263,7 @@ impl WorkspaceApp {
                 SettingsSelect::LocalShellSemanticScheme(index),
                 scheme_label,
                 false,
-                Some(196.0),
+                Some(self.theme_tokens.metrics.settings_select_width),
                 cx,
             ))
             .into_any_element()

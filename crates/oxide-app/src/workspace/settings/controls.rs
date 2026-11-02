@@ -5,8 +5,6 @@ use oxide_terminal_triggers::{
     TerminalTriggerScope,
 };
 
-pub(in crate::workspace) const SETTINGS_ROW_LABEL_MIN_WIDTH: f32 = 180.0; // Keep localized labels readable before controls wrap.
-
 enum ThemeSelectEntry {
     Group(&'static str),
     Theme(String),
@@ -2087,53 +2085,23 @@ impl WorkspaceApp {
         control: AnyElement,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let label = self.i18n.t(label_key);
-        let hint = self.i18n.t(hint_key);
-        div()
-            .w_full()
-            .min_w(px(0.0))
-            .flex()
-            .flex_row()
-            .flex_wrap()
-            .items_center()
-            .justify_between()
-            .gap(px(self.theme_tokens.metrics.settings_row_gap))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(SETTINGS_ROW_LABEL_MIN_WIDTH))
-                    .flex_basis(px(SETTINGS_ROW_LABEL_MIN_WIDTH))
-                    .flex()
-                    .flex_col()
-                    .gap(px(4.0))
-                    .child(
-                        div()
-                            .text_size(px(self.theme_tokens.metrics.ui_text_sm))
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(rgb(self.theme_tokens.ui.text))
-                            .child(self.render_selectable_text_scoped(
-                                "settings-row-label",
-                                label_key,
-                                label,
-                                self.theme_tokens.ui.text,
-                                cx,
-                            )),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(self.theme_tokens.metrics.ui_text_xs))
-                            .text_color(rgb(self.theme_tokens.ui.text_muted))
-                            .child(self.render_selectable_text_scoped(
-                                "settings-row-hint",
-                                hint_key,
-                                hint,
-                                self.theme_tokens.ui.text_muted,
-                                cx,
-                            )),
-                    ),
+        let label = self.render_selectable_text_scoped(
+            "settings-row-label",
+            label_key,
+            self.i18n.t(label_key),
+            self.theme_tokens.ui.text,
+            cx,
+        );
+        let hint = (!hint_key.is_empty()).then(|| {
+            self.render_selectable_text_scoped(
+                "settings-row-hint",
+                hint_key,
+                self.i18n.t(hint_key),
+                self.theme_tokens.ui.text_muted,
+                cx,
             )
-            .child(control)
-            .into_any_element()
+        });
+        settings_row(&self.theme_tokens, label, hint, control)
     }
 }
 
