@@ -93,13 +93,34 @@ pub struct AppliedSync {
 }
 
 impl CloudSyncOperationService {
-    pub fn has_local_replica(
+    /// None means this device has no replica; the caller can use its remote-state hint.
+    pub fn local_sync_password_requires_rotation(
         settings_path: &std::path::Path,
         settings: &CloudSyncSettings,
-    ) -> Result<bool> {
-        Ok(replica_directory(settings_path, settings)?
+        provider: &mut impl CloudSyncSecretProvider,
+        password: &str,
+    ) -> Result<Option<bool>> {
+        if RecoveryJournal::has_pending(settings_path)? {
+            bail!("sync_cleanup_pending");
+        }
+        let mut exists = replica_directory(settings_path, settings)?
             .join("replica.oxide")
-            .try_exists()?)
+            .try_exists()?;
+        if !exists && settings.backend_type == BackendType::GithubGist {
+            let mut bootstrap = settings.clone();
+            bootstrap.git_repository.clear();
+            exists = replica_directory(settings_path, &bootstrap)?
+                .join("replica.oxide")
+                .try_exists()?;
+        }
+        if !exists {
+            return Ok(None);
+        }
+        let store = open_replica(settings_path, settings, provider)?;
+        store
+            .load()?
+            .map(|local| store.sync_password_requires_rotation(&local, password))
+            .transpose()
     }
     pub async fn prepare_sync(
         &self,
@@ -940,4 +961,538 @@ fn latest_publications(publications: Vec<PublicationId>) -> Result<Vec<Publicati
         latest.insert(publication.writer, publication);
     }
     Ok(latest.into_values().collect())
+}
+
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sync_v3::{FieldValue, ResourceKind, SyncField};
+    use oxide_connections::SaveLocalTerminalProfileRequest;
+
+    #[tokio::test]
+    async fn first_sync_failure_and_cancel_allow_password_retry_then_staging_requires_rotation() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            for status in [
+                "403 Forbidden",
+                "404 Not Found",
+                "404 Not Found",
+                "404 Not Found",
+                "404 Not Found",
+            ] {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0; 1024];
+                while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                    let size = stream.read(&mut buffer).await.unwrap();
+                    assert!(size > 0);
+                    request.extend_from_slice(&buffer[..size]);
+                }
+                let header = String::from_utf8_lossy(&request);
+                assert!(header.starts_with("PROPFIND ") || header.starts_with("GET "));
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+        let directory = std::env::temp_dir().join(format!(
+            "oxide-sync-password-retry-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let mut connections = ConnectionStore::load(directory.join("connections.json")).unwrap();
+        let forwards = ForwardingRegistry::new_with_store(
+            oxide_forwarding::SavedForwardStore::load(directory.join("forwards.json")).unwrap(),
+        );
+        let mut settings_store =
+            SettingsStore::load_from_path(directory.join("settings.json")).unwrap();
+        let settings = CloudSyncSettings {
+            backend_type: BackendType::Webdav,
+            auth_mode: crate::AuthMode::None,
+            endpoint,
+            namespace: "password-retry".into(),
+            ..Default::default()
+        };
+        let service = CloudSyncOperationService::new();
+        let mut provider = crate::sync_v3::tests::Secrets::default();
+        for (attempt, password) in ["first-password", "second-password", "third-password"]
+            .into_iter()
+            .enumerate()
+        {
+            provider
+                .store_secret(secret_keys::SYNC_PASSWORD, Some(password))
+                .unwrap();
+            let result = service
+                .prepare_sync(
+                    &mut connections,
+                    &forwards,
+                    &mut settings_store,
+                    &settings,
+                    &mut provider,
+                    Default::default(),
+                    Default::default(),
+                )
+                .await;
+            if attempt == 0 {
+                assert!(result.unwrap_err().to_string().contains("403"));
+            } else {
+                let prepared = result.unwrap();
+                let summary = prepared.summary().unwrap();
+                assert!(summary.first_sync && !summary.has_remote);
+                drop(prepared);
+            }
+            assert_eq!(
+                CloudSyncOperationService::local_sync_password_requires_rotation(
+                    settings_store.path(),
+                    &settings,
+                    &mut provider,
+                    "replacement-password",
+                )
+                .unwrap(),
+                None,
+                "failed or cancelled preparation must not bind the password"
+            );
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(5), server)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let store = open_replica(settings_store.path(), &settings, &mut provider).unwrap();
+        let mut local = LocalReplica::new();
+        store
+            .bind_sync_password(&mut local, "third-password")
+            .unwrap();
+        store
+            .stage_publication(
+                &mut local,
+                &OxideBatchEncryptionContext::new("third-password").unwrap(),
+            )
+            .unwrap();
+        let pending = local.pending.clone().unwrap();
+        drop(store);
+        for (password, expected) in [("third-password", false), ("replacement-password", true)] {
+            assert_eq!(
+                CloudSyncOperationService::local_sync_password_requires_rotation(
+                    settings_store.path(),
+                    &settings,
+                    &mut provider,
+                    password,
+                )
+                .unwrap(),
+                Some(expected)
+            );
+        }
+        let store = open_replica(settings_store.path(), &settings, &mut provider).unwrap();
+        let persisted = store.load().unwrap().unwrap().pending.unwrap();
+        assert_eq!(persisted.path, pending.path);
+        assert_eq!(persisted.bytes, pending.bytes);
+        drop(store);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn first_sync_directions_keep_cloud_settings_and_local_defaults_distinct() {
+        for direction in [
+            SyncDirection::Download,
+            SyncDirection::Merge,
+            SyncDirection::Upload,
+        ] {
+            let directory =
+                std::env::temp_dir().join(format!("oxide-sync-join-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&directory).unwrap();
+            let mut connections =
+                ConnectionStore::load(directory.join("connections.json")).unwrap();
+            let forwards = ForwardingRegistry::new_with_store(
+                oxide_forwarding::SavedForwardStore::load(directory.join("forwards.json"))
+                    .unwrap(),
+            );
+            let mut settings =
+                SettingsStore::load_from_path(directory.join("settings.json")).unwrap();
+            settings.settings_mut().general.language = oxide_settings::Language::FrFr;
+            settings.save().unwrap();
+            let scope = crate::SyncScope {
+                sync_app_settings: true,
+                app_settings_sections: vec!["appearance".into(), "terminalAppearance".into()],
+                ..Default::default()
+            };
+            let view =
+                ConfigurationView::collect(&connections, &forwards, &settings, &scope).unwrap();
+            let mut source = SettingsStore::load_from_path(directory.join("source.json")).unwrap();
+            source.settings_mut().appearance.theme = "github-dark".into();
+            source.settings_mut().terminal.font_size = 20;
+            let remote_view =
+                ConfigurationView::collect(&connections, &forwards, &source, &scope).unwrap();
+            let mut local = LocalReplica::new();
+            let selected = view.selected(std::iter::empty(), &scope, &Default::default());
+            let mut local_replica = SyncReplica::new(local.writer);
+            local_replica
+                .capture_local(&SyncValues::new(), &view.values, &selected)
+                .unwrap();
+            local.snapshot = local_replica.snapshot();
+            local.effective = view.values.clone();
+            let writer = uuid::Uuid::new_v4();
+            let mut remote = SyncReplica::new(writer);
+            remote
+                .capture_local(&SyncValues::new(), &remote_view.values, &selected)
+                .unwrap();
+            let pending = PublishedReplica::encode(
+                writer,
+                1,
+                remote.snapshot(),
+                &OxideBatchEncryptionContext::new("fixture-password").unwrap(),
+            )
+            .unwrap();
+            let id = PublicationId::parse(&pending.path).unwrap();
+            let published = PublishedReplica::decode(
+                &id,
+                &pending.bytes,
+                &mut OxideBatchDecryptionContext::new("fixture-password").unwrap(),
+            )
+            .unwrap();
+            let store = ReplicaStore::open(
+                &directory.join("replica"),
+                &mut crate::sync_v3::tests::Secrets::default(),
+            )
+            .unwrap();
+            let service = CloudSyncOperationService::new();
+            let mut prepared = PreparedSync {
+                _permit: service
+                    .guard
+                    .begin(CloudSyncOperationKind::Upload, false)
+                    .unwrap()
+                    .unwrap(),
+                store,
+                local,
+                remote: vec![published],
+                observed: vec![id],
+                upgrade: None,
+                backend: service.backend,
+                settings: CloudSyncSettings::default(),
+                secrets: CloudSyncSecrets::default(),
+                scope: scope.clone(),
+                filter: Default::default(),
+                recovered: false,
+                resolutions: Vec::new(),
+                preview_values: view.values,
+                direction: SyncDirection::Merge,
+            };
+            assert_eq!(
+                prepared
+                    .summary()
+                    .unwrap()
+                    .conflicts
+                    .iter()
+                    .map(|conflict| (
+                        conflict.field.resource.id.clone(),
+                        conflict.field.group.clone()
+                    ))
+                    .collect::<BTreeSet<_>>(),
+                BTreeSet::from([
+                    (
+                        "appearance".into(),
+                        r#"setting:["appearance","theme"]"#.into()
+                    ),
+                    (
+                        "terminalAppearance".into(),
+                        r#"setting:["terminal","fontSize"]"#.into()
+                    ),
+                ]),
+                "a fresh device's defaults must not silently win"
+            );
+            let before = std::fs::read(directory.join("settings.json")).unwrap();
+            prepared.set_direction(direction);
+            let summary = prepared.summary().unwrap();
+            assert!(summary.first_sync && summary.has_remote);
+            assert_eq!(
+                summary.conflicts.len(),
+                if direction == SyncDirection::Merge {
+                    2
+                } else {
+                    0
+                }
+            );
+            assert_eq!(
+                std::fs::read(directory.join("settings.json")).unwrap(),
+                before,
+                "preview must not modify local configuration"
+            );
+            let applied = prepared
+                .apply(&mut connections, &forwards, &mut settings)
+                .unwrap();
+            let persisted = SettingsStore::load_from_path(directory.join("settings.json")).unwrap();
+            assert_eq!(
+                persisted.settings().general.language,
+                oxide_settings::Language::FrFr
+            );
+            if direction == SyncDirection::Download {
+                assert_eq!(persisted.settings().appearance.theme, "github-dark");
+                assert_eq!(persisted.settings().terminal.font_size, 20);
+                assert!(!applied.local.needs_publication());
+                // A later normal sync starts from the adopted cloud baseline, not fresh defaults.
+                let current =
+                    ConfigurationView::collect(&connections, &forwards, &settings, &scope).unwrap();
+                let mut replica =
+                    SyncReplica::load(applied.local.snapshot.clone(), applied.local.writer)
+                        .unwrap();
+                replica
+                    .capture_local(&applied.local.effective, &current.values, &selected)
+                    .unwrap();
+                assert_eq!(replica.conflicts().unwrap(), Vec::new());
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                // The download contract must hold at the public completion boundary too.
+                let outcome = runtime.block_on(applied.publish()).unwrap();
+                assert!(outcome.downloaded && !outcome.published && !outcome.publication_pending);
+                let mut state = crate::state::CloudSyncPersistedState::default();
+                crate::state_transitions::finish_causal_sync_state(
+                    &mut state,
+                    &outcome,
+                    "2026-10-13T00:00:00Z".into(),
+                );
+                assert!(state.remote_exists && !state.local_dirty);
+            } else {
+                assert_eq!(persisted.settings().appearance.theme, "default");
+                assert_eq!(persisted.settings().terminal.font_size, 14);
+                assert_eq!(
+                    applied.outcome.conflicts.len(),
+                    if direction == SyncDirection::Merge {
+                        2
+                    } else {
+                        0
+                    }
+                );
+                if direction == SyncDirection::Upload {
+                    let replica =
+                        SyncReplica::load(applied.local.snapshot.clone(), applied.local.writer)
+                            .unwrap();
+                    let value = replica.materialize(&SyncValues::new(), &selected).unwrap();
+                    assert_eq!(
+                        value[&SyncField {
+                            resource: SyncResource {
+                                kind: ResourceKind::AppSettings,
+                                id: "appearance".into()
+                            },
+                            group: r#"setting:["appearance","theme"]"#.into()
+                        }]
+                            .decode::<String>()
+                            .unwrap(),
+                        "default"
+                    );
+                }
+                drop(applied);
+            }
+            std::fs::remove_dir_all(directory).unwrap();
+        }
+    }
+
+    #[test]
+    fn created_gist_keeps_pending_history_when_configuration_gains_its_id() {
+        let directory =
+            std::env::temp_dir().join(format!("oxide-gist-bootstrap-{}", uuid::Uuid::new_v4()));
+        let settings_path = directory.join("settings.json");
+        let mut provider = crate::sync_v3::tests::Secrets::default();
+        let mut config = CloudSyncSettings {
+            backend_type: BackendType::GithubGist,
+            namespace: "personal".into(),
+            ..Default::default()
+        };
+        let store = open_replica(&settings_path, &config, &mut provider).unwrap();
+        let mut local = LocalReplica::new();
+        let writer = local.writer;
+        local.created_gist_id = Some("created-gist".into());
+        local.next_sequence = 7;
+        let path = format!("sync-v3/{writer}/6-{:x}.oxide", Sha256::digest([4, 2, 7]));
+        local.pending = Some(crate::sync_v3::PendingPublication {
+            path: path.clone(),
+            bytes: vec![4, 2, 7],
+        });
+        store.save(&local).unwrap();
+        drop(store);
+        config.git_repository = "created-gist".into();
+        let store = open_replica(&settings_path, &config, &mut provider).unwrap();
+        let reopened = store.load().unwrap().unwrap();
+        assert_eq!(reopened.writer, writer);
+        assert_eq!(reopened.next_sequence, 7);
+        let pending = reopened.pending.unwrap();
+        assert_eq!(
+            (pending.path.as_str(), pending.bytes.as_slice()),
+            (path.as_str(), [4, 2, 7].as_slice())
+        );
+        drop(store);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn apply_merges_live_owner_edits_and_preserves_excluded_settings() {
+        let directory =
+            std::env::temp_dir().join(format!("oxide-sync-apply-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let mut connections = ConnectionStore::load(directory.join("connections.json")).unwrap();
+        connections
+            .upsert_local_terminal_profile(SaveLocalTerminalProfileRequest {
+                id: Some("terminal".into()),
+                name: "Original".into(),
+                cwd: Some("/original".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        let forwards = ForwardingRegistry::new_with_store(
+            oxide_forwarding::SavedForwardStore::load(directory.join("forwards.json")).unwrap(),
+        );
+        let mut settings = SettingsStore::load_from_path(directory.join("settings.json")).unwrap();
+        let scope = crate::SyncScope {
+            app_settings_sections: vec!["localTerminal".into()],
+            ..Default::default()
+        };
+        let view = ConfigurationView::collect(&connections, &forwards, &settings, &scope).unwrap();
+        let resource = SyncResource {
+            kind: ResourceKind::LocalTerminal,
+            id: "terminal".into(),
+        };
+        let settings_resource = SyncResource {
+            kind: ResourceKind::AppSettings,
+            id: "localTerminal".into(),
+        };
+        let selected = BTreeSet::from([resource.clone(), settings_resource.clone()]);
+        let mut local = LocalReplica::new();
+        let mut document = SyncReplica::load(local.snapshot.clone(), local.writer).unwrap();
+        document
+            .capture_local(&SyncValues::new(), &view.values, &selected)
+            .unwrap();
+        local.snapshot = document.snapshot();
+        local.effective = view.values.clone();
+        let mut remote = SyncReplica::load(local.snapshot.clone(), uuid::Uuid::new_v4()).unwrap();
+        let mut remote_values = view.values.clone();
+        remote_values.insert(
+            SyncField {
+                resource,
+                group: "name".into(),
+            },
+            FieldValue::encode(&"Remote name").unwrap(),
+        );
+        remote_values.insert(
+            SyncField {
+                resource: settings_resource,
+                group: r#"setting:["localTerminal","customEnvVars","PRIVATE_TOKEN"]"#.into(),
+            },
+            FieldValue::encode(&"remote-sensitive-fixture").unwrap(),
+        );
+        remote
+            .capture_local(&view.values, &remote_values, &selected)
+            .unwrap();
+        let encryption = OxideBatchEncryptionContext::new("fixture-password").unwrap();
+        let pending =
+            PublishedReplica::encode(uuid::Uuid::new_v4(), 1, remote.snapshot(), &encryption)
+                .unwrap();
+        let id = PublicationId::parse(&pending.path).unwrap();
+        let published = PublishedReplica::decode(
+            &id,
+            &pending.bytes,
+            &mut OxideBatchDecryptionContext::new("fixture-password").unwrap(),
+        )
+        .unwrap();
+        let store = ReplicaStore::open(
+            &directory.join("replica"),
+            &mut crate::sync_v3::tests::Secrets::default(),
+        )
+        .unwrap();
+        store.save(&local).unwrap();
+        let service = CloudSyncOperationService::new();
+        let prepared = PreparedSync {
+            _permit: service
+                .guard
+                .begin(CloudSyncOperationKind::Upload, false)
+                .unwrap()
+                .unwrap(),
+            store,
+            local,
+            remote: vec![published],
+            upgrade: None,
+            observed: vec![id],
+            backend: service.backend,
+            settings: CloudSyncSettings::default(),
+            secrets: CloudSyncSecrets::default(),
+            scope: scope.clone(),
+            filter: Default::default(),
+            recovered: false,
+            resolutions: Vec::new(),
+            preview_values: view.values.clone(),
+            direction: SyncDirection::Merge,
+        };
+        assert_eq!(prepared.summary().unwrap().changed_fields, 1);
+        // This edit happens after preparation, while the network phase is away.
+        connections
+            .upsert_local_terminal_profile(SaveLocalTerminalProfileRequest {
+                id: Some("terminal".into()),
+                name: "Original".into(),
+                cwd: Some("/during-download".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        let before_settings = serde_json::to_value(settings.settings()).unwrap();
+        let applied = prepared
+            .apply(&mut connections, &forwards, &mut settings)
+            .unwrap();
+        assert!(applied.outcome.applied);
+        assert!(applied.outcome.conflicts.is_empty());
+        let persisted = ConnectionStore::load(directory.join("connections.json")).unwrap();
+        assert_eq!(persisted.local_terminal_profiles()[0].name, "Remote name");
+        assert_eq!(
+            persisted.local_terminal_profiles()[0].cwd.as_deref(),
+            Some("/during-download")
+        );
+        assert_eq!(
+            serde_json::to_value(settings.settings()).unwrap(),
+            before_settings
+        );
+        let saved = ConfigurationView::collect(&connections, &forwards, &settings, &scope).unwrap();
+        for (field, value) in &applied.local.effective {
+            assert_eq!(
+                saved.values.get(field),
+                Some(value),
+                "applied field changed during persistence: {field:?}"
+            );
+        }
+        assert!(!directory.join("replica/recovery.oxide").exists());
+        connections
+            .upsert_local_terminal_profile(SaveLocalTerminalProfileRequest {
+                id: Some("terminal".into()),
+                name: "Edited during upload".into(),
+                cwd: Some("/during-download".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        let mut state = crate::state::CloudSyncPersistedState::default();
+        crate::state_transitions::finish_causal_sync_state(
+            &mut state,
+            &applied.outcome,
+            "2026-10-01T00:00:00Z".into(),
+        );
+        let after = build_local_snapshot(
+            &connections,
+            &forwards,
+            &settings,
+            state.last_synced_structured_state.as_ref(),
+            None,
+        )
+        .unwrap();
+        assert!(
+            after.dirty.dirty_sections.connections,
+            "editing during publication must remain unsynchronized"
+        );
+        drop(applied);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }
