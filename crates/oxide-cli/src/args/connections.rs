@@ -129,6 +129,15 @@ pub struct ConnectionDirectArgs {
     pub tags: Vec<String>,
     #[arg(long, value_enum, help = "Authentication type")]
     pub auth: Option<ConnectionAuthArg>,
+        #[arg(
+        long,
+        value_name = "ID_OR_NAME",
+        conflicts_with = "clear_totp_credential",
+        help = "Use an existing TOTP credential by id or name"
+    )]
+    pub totp_credential: Option<String>,
+    #[arg(long, help = "Remove the connection's TOTP credential binding")]
+    pub clear_totp_credential: bool,
     #[arg(
         long,
         conflicts_with = "password_env",
