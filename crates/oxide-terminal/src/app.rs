@@ -2125,7 +2125,7 @@ impl TerminalPane {
         };
         cx.notify();
     }
-    
+
     /// Clears the queued-reconnect wait state, leaving a shell that already
     /// started untouched. Returns whether the pane was still waiting.
     pub fn clear_ssh_reconnect_waiting(&mut self, cx: &mut Context<Self>) -> bool {
