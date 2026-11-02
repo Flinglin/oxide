@@ -188,6 +188,7 @@ pub(in crate::workspace) use titlebar::{
 };
 
 use helpers::*;
+pub(in crate::workspace) use region::sidebar_resize_hotzone_chrome;
 pub(in crate::workspace) use state::{clamp_responsive_sidebar_width, right_sidebar_panel_visible};
 
 #[cfg(test)]

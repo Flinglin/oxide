@@ -121,6 +121,7 @@ impl Render for DetachedTabWindow {
             .track_focus(&self.focus_handle)
             .on_mouse_move(cx.listener(|detached, event: &MouseMoveEvent, window, cx| {
                 detached.session.update(cx, |session, cx| {
+                    session.update_file_manager_bookmarks_resize(event, window, cx);
                     session.update_detached_tab_return_drag(detached.tab_id, event, window, cx);
                     if session.split_drag_belongs_to_tab(detached.tab_id) {
                         session.update_split_drag(event, window, cx);
@@ -131,6 +132,10 @@ impl Render for DetachedTabWindow {
                 MouseButton::Left,
                 cx.listener(|detached, event: &MouseUpEvent, window, cx| {
                     detached.session.update(cx, |session, cx| {
+                        session.finish_file_manager_bookmarks_resize(
+                            window.window_handle().window_id(),
+                            cx,
+                        );
                         session.finish_detached_tab_return_drag(detached.tab_id, event, window, cx);
                         if session.split_drag_belongs_to_tab(detached.tab_id) {
                             session.finish_split_drag(cx);
@@ -140,6 +145,14 @@ impl Render for DetachedTabWindow {
             )
             .capture_key_down(cx.listener(|detached, event: &KeyDownEvent, window, cx| {
                 let handled = detached.session.update(cx, |session, cx| {
+                    if event.keystroke.key == "escape"
+                        && session.cancel_file_manager_bookmarks_resize(
+                            window.window_handle().window_id(),
+                            cx,
+                        )
+                    {
+                        return true;
+                    }
                     if event.keystroke.key == "escape" && session.cancel_tab_merge_drag(cx) {
                         return true;
                     }
@@ -303,6 +316,18 @@ impl Render for DetachedTabWindow {
             .child(window_shell::render_resizable_window_content(
                 content, window,
             ))
+            .when(
+                self.ready
+                    && self.session.read(cx).file_manager_bookmarks_resize_active(
+                        window.window_handle().window_id(),
+                        cx,
+                    ),
+                |root| {
+                    root.child(self.session.update(cx, |workspace, cx| {
+                        workspace.render_workspace_pointer_capture_overlay(cx)
+                    }))
+                },
+            )
             .when(
                 self.ready
                     && self
