@@ -1,3 +1,4 @@
+use gpui::Window;
 use gpui::prelude::*;
 
 use super::helpers::{
@@ -21,14 +22,18 @@ impl WorkspaceApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = self.theme_tokens.ui;
-        let (form_visible, forward_type, error, pending, skip_health_check) = {
+        let can_save = self
+            .ssh_nodes
+            .get(&node_id)
+            .is_some_and(|node| node.saved_connection_id.is_some());
+        let save_node_id = node_id.clone();
+        let (form_visible, forward_type, error, pending) = {
             let forwarding_view = self.forwarding.read(cx).view();
             (
                 forwarding_view.new_form_presence.phase() == oxide_ui::motion::ExitPhase::Visible,
                 forwarding_view.forward_type,
                 forwarding_view.error.clone(),
                 forwarding_view.pending,
-                forwarding_view.skip_health_check,
             )
         };
         let form = div()
@@ -85,25 +90,43 @@ impl WorkspaceApp {
             .when_some(error.as_ref(), |form, error| {
                 form.child(self.render_forwards_error(error))
             })
-            .child(div().flex().justify_end().child(self.render_forward_button(
-                if pending {
-                    if skip_health_check {
-                        self.i18n.t("forwards.form.creating")
-                    } else {
-                        self.i18n.t("forwards.form.checking_port")
-                    }
-                } else {
-                    self.i18n.t("forwards.form.create_forward")
-                },
-                None,
-                ForwardButtonVariant::Primary,
-                !pending,
-                has_background,
-                self.forwarding_listener(cx, move |this, _event, _window, cx| {
-                    this.submit_forward_create(tab_id, node_id.clone(), cx);
-                    cx.stop_propagation();
-                }),
-            )))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap(px(8.0))
+                    .justify_end()
+                    .when(can_save, |actions| {
+                        actions.child(self.render_forward_button(
+                            self.i18n.t("ssh.form.save"),
+                            None,
+                            ForwardButtonVariant::Secondary,
+                            !pending,
+                            has_background,
+                            self.forwarding_listener(cx, move |this, _, _, cx| {
+                                this.submit_forward_create(tab_id, save_node_id.clone(), false, cx);
+                                cx.stop_propagation();
+                            }),
+                        ))
+                    })
+                    .child(self.render_forward_button(
+                        if pending {
+                            self.i18n.t("forwards.form.creating")
+                        } else if can_save {
+                            self.i18n.t("forwards.form.save_and_start")
+                        } else {
+                            self.i18n.t("forwards.form.create_forward")
+                        },
+                        None,
+                        ForwardButtonVariant::Primary,
+                        !pending,
+                        has_background,
+                        self.forwarding_listener(cx, move |this, _event, _window, cx| {
+                            this.submit_forward_create(tab_id, node_id.clone(), true, cx);
+                            cx.stop_propagation();
+                        }),
+                    )),
+            )
             .when(!form_visible, |form| {
                 form.child(
                     div()
@@ -132,6 +155,7 @@ impl WorkspaceApp {
         node_id: NodeId,
         tab_id: TabId,
         has_background: bool,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = self.theme_tokens.ui;
@@ -161,95 +185,107 @@ impl WorkspaceApp {
             .child(oxide_ui::motion::form_transition(
                 &self.theme_tokens,
                 "forward-edit-form-enter",
-                div()
-                    .w(px(500.0))
-                    .rounded(px(self.theme_tokens.radii.lg))
-                    .border_1()
-                    .border_color(forwards_theme_border(theme.border, has_background))
-                    .bg(forwards_theme_panel_bg(theme.bg_panel, has_background))
-                    .p(px(24.0))
-                    .flex()
-                    .flex_col()
-                    .gap(px(16.0))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .child(
-                                div()
-                                    .text_size(px(self.theme_tokens.metrics.ui_text_sm))
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                    .text_color(rgb(theme.text))
-                                    .child(self.render_forward_ui_text(
-                                        self.i18n.t("forwards.form.edit_title"),
-                                    )),
-                            )
-                            .child(self.render_forward_icon_button(
-                                LucideIcon::X,
-                                theme.text_muted,
-                                has_background,
-                                |this, _event, _window, cx| {
-                                    this.begin_forward_edit_form_exit(cx);
-                                    cx.stop_propagation();
-                                },
-                                cx,
-                            )),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.0))
-                            .text_size(px(self.theme_tokens.metrics.ui_text_xs))
-                            .text_color(rgb(theme.text_muted))
-                            .child(format!("{}:", self.i18n.t("forwards.form.type")))
-                            .child(forward_type_label(editing.clone(), &self.i18n))
-                            .child("|")
-                            .child("ID:")
-                            .child(
-                                div()
-                                    .font_family(settings_mono_font_family(
-                                        self.settings_store.settings(),
-                                    ))
-                                    .child(format!(
-                                        "{}...",
-                                        editing.id.chars().take(8).collect::<String>()
-                                    )),
-                            ),
-                    )
-                    .child(self.render_forward_address_form(true, has_background, cx))
-                    .when_some(error.as_ref(), |modal, error| {
-                        modal.child(self.render_forwards_error(error))
-                    })
-                    .child(
-                        div()
-                            .flex()
-                            .justify_end()
-                            .gap(px(8.0))
-                            .child(self.render_forward_button(
-                                self.i18n.t("forwards.form.cancel"),
-                                None,
-                                ForwardButtonVariant::Ghost,
-                                true,
-                                has_background,
-                                self.forwarding_listener(cx, |this, _event, _window, cx| {
-                                    this.begin_forward_edit_form_exit(cx);
-                                    cx.stop_propagation();
-                                }),
-                            ))
-                            .child(self.render_forward_button(
-                                self.i18n.t("forwards.form.save_changes"),
-                                None,
-                                ForwardButtonVariant::Primary,
-                                !pending,
-                                has_background,
-                                self.forwarding_listener(cx, move |this, _event, _window, cx| {
-                                    this.submit_forward_edit(tab_id, node_id.clone(), cx);
-                                    cx.stop_propagation();
-                                }),
-                            )),
-                    ),
+                div().child(
+                    div()
+                        .id("forward-edit-scroll")
+                        .w(px(
+                            (f32::from(window.viewport_size().width) - 32.0).clamp(0.0, 560.0)
+                        ))
+                        .max_h(px(
+                            (f32::from(window.viewport_size().height) - 32.0).max(0.0)
+                        ))
+                        .overflow_y_scroll()
+                        .rounded(px(self.theme_tokens.radii.lg))
+                        .border_1()
+                        .border_color(forwards_theme_border(theme.border, has_background))
+                        .bg(forwards_theme_panel_bg(theme.bg_panel, has_background))
+                        .p(px(24.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(16.0))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .child(
+                                    div()
+                                        .text_size(px(self.theme_tokens.metrics.ui_text_sm))
+                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                        .text_color(rgb(theme.text))
+                                        .child(self.render_forward_ui_text(
+                                            self.i18n.t("forwards.form.edit_title"),
+                                        )),
+                                )
+                                .child(self.render_forward_icon_button(
+                                    LucideIcon::X,
+                                    theme.text_muted,
+                                    has_background,
+                                    |this, _event, _window, cx| {
+                                        this.begin_forward_edit_form_exit(cx);
+                                        cx.stop_propagation();
+                                    },
+                                    cx,
+                                )),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.0))
+                                .text_size(px(self.theme_tokens.metrics.ui_text_xs))
+                                .text_color(rgb(theme.text_muted))
+                                .child(format!("{}:", self.i18n.t("forwards.form.type")))
+                                .child(forward_type_label(editing.clone(), &self.i18n))
+                                .child("|")
+                                .child("ID:")
+                                .child(
+                                    div()
+                                        .font_family(settings_mono_font_family(
+                                            self.settings_store.settings(),
+                                        ))
+                                        .child(format!(
+                                            "{}...",
+                                            editing.id.chars().take(8).collect::<String>()
+                                        )),
+                                ),
+                        )
+                        .child(self.render_forward_address_form(true, has_background, cx))
+                        .when_some(error.as_ref(), |modal, error| {
+                            modal.child(self.render_forwards_error(error))
+                        })
+                        .child(
+                            div()
+                                .flex()
+                                .justify_end()
+                                .gap(px(8.0))
+                                .child(self.render_forward_button(
+                                    self.i18n.t("forwards.form.cancel"),
+                                    None,
+                                    ForwardButtonVariant::Ghost,
+                                    true,
+                                    has_background,
+                                    self.forwarding_listener(cx, |this, _event, _window, cx| {
+                                        this.begin_forward_edit_form_exit(cx);
+                                        cx.stop_propagation();
+                                    }),
+                                ))
+                                .child(self.render_forward_button(
+                                    self.i18n.t("forwards.form.save_changes"),
+                                    None,
+                                    ForwardButtonVariant::Primary,
+                                    !pending,
+                                    has_background,
+                                    self.forwarding_listener(
+                                        cx,
+                                        move |this, _event, _window, cx| {
+                                            this.submit_forward_edit(tab_id, node_id.clone(), cx);
+                                            cx.stop_propagation();
+                                        },
+                                    ),
+                                )),
+                        ),
+                ),
                 form_visible,
             ))
             .when(!form_visible, |backdrop| {
@@ -358,6 +394,7 @@ impl WorkspaceApp {
     ) -> AnyElement {
         div()
             .flex()
+            .flex_wrap()
             .gap(px(16.0))
             .child(self.render_forward_type_choice(
                 ForwardType::Local,
@@ -503,7 +540,8 @@ impl WorkspaceApp {
 
         div()
             .flex()
-            .items_center()
+            .flex_wrap()
+            .items_start()
             .gap(px(16.0))
             .p_4()
             .rounded(px(self.theme_tokens.radii.xs))
@@ -528,16 +566,11 @@ impl WorkspaceApp {
                 },
                 cx,
             ))
-            .child(
-                div()
-                    .pt(px(22.0))
-                    .text_size(px(18.0))
-                    .text_color(rgb(theme.text_muted))
-                    .child("→"),
-            )
             .child(if forward_type == ForwardType::Dynamic {
                 div()
                     .flex_1()
+                    .flex_basis(px(240.0))
+                    .min_w_0()
                     .pt(px(22.0))
                     .text_center()
                     .italic()
@@ -577,6 +610,8 @@ impl WorkspaceApp {
     ) -> AnyElement {
         div()
             .flex_1()
+            .flex_basis(px(240.0))
+            .min_w_0()
             .flex()
             .flex_col()
             .gap(px(8.0))
@@ -589,19 +624,27 @@ impl WorkspaceApp {
             .child(
                 div()
                     .flex()
+                    .min_w_0()
                     .gap(px(8.0))
-                    .child(self.render_forward_text_input(
-                        host_input,
-                        self.i18n.t("forwards.form.host_placeholder"),
-                        true,
-                        cx,
-                    ))
-                    .child(div().w(px(96.0)).child(self.render_forward_text_input(
-                        port_input,
-                        self.i18n.t("forwards.form.port_placeholder"),
-                        true,
-                        cx,
-                    ))),
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(self.render_forward_text_input(
+                                host_input,
+                                self.i18n.t("forwards.form.host_placeholder"),
+                                true,
+                                cx,
+                            )),
+                    )
+                    .child(div().w(px(80.0)).flex_shrink_0().child(
+                        self.render_forward_text_input(
+                            port_input,
+                            self.i18n.t("forwards.form.port_placeholder"),
+                            true,
+                            cx,
+                        ),
+                    )),
             )
             .into_any_element()
     }

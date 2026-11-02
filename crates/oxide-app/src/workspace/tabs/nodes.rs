@@ -529,7 +529,7 @@ impl WorkspaceApp {
                 if let Some(node) = self.ssh_nodes.get_mut(&node_id) {
                     node.readiness = state.clone();
                 }
-
+    self.resume_forward_starts(&node_id, &state, cx);
                 if node_readiness_became_ready(previous.as_ref(), &state) {
                     // Registry readiness, not shell lifetime, restores shared
                     // forwards and completes the connection trace.
@@ -663,7 +663,7 @@ impl WorkspaceApp {
                 if let Some(node) = self.ssh_nodes.get_mut(&node_id) {
                     node.readiness = state.clone();
                 }
-
+ self.resume_forward_starts(&node_id, &state, cx);
                 if node_readiness_became_ready(previous.as_ref(), &state) {
                     self.restore_forwarding_session_for_node(&node_id, cx);
                     self.workspace_runtime.update(cx, |runtime, cx| {
@@ -1304,17 +1304,15 @@ impl WorkspaceApp {
             .reconnect_job_is_current(node_id, worker_job_id)
     }
 
-    fn cleanup_stale_reconnect_forward_restores(&self, created_forwards: Vec<(String, String)>) {
+    fn cleanup_stale_reconnect_forward_restores(
+        &self,
+        created_forwards: Vec<(Arc<oxide_forwarding::ForwardingManager>, String)>,
+    ) {
         if created_forwards.is_empty() {
             return;
         }
-        let forwarding_registry = self.forwarding_service.registry().clone();
         self.forwarding_runtime.spawn(async move {
-            for (session_id, rule_id) in created_forwards {
-                if let Some(manager) = forwarding_registry.get(&session_id) {
-                    let _ = manager.delete_forward(&rule_id).await;
-                }
-            }
+            forwards::cleanup_reconnect_created_forwards(&created_forwards).await;
         });
     }
 
@@ -1335,7 +1333,7 @@ impl WorkspaceApp {
         restored: u32,
         detail: String,
         job_id: String,
-        created_forwards: Vec<(String, String)>,
+         created_forwards: Vec<(Arc<oxide_forwarding::ForwardingManager>, String)>,
         bindings: Vec<(String, String, ConnectionConsumer)>,
         cx: &mut Context<Self>,
     ) -> bool {
