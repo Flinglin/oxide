@@ -1936,6 +1936,7 @@
         "editor.undo": "Annuler",
         "editor.redo": "Rétablir",
         "editor.addNextMatch": "Sélectionner la prochaine occurrence",
+        "sftp.revealTerminalDirectory": "Aller au dossier du terminal",
         "editor.find": "Rechercher dans le fichier",
         "sftp.selectAll": "Sélectionner tous les fichiers",
         "sftp.editPath": "Modifier le chemin du dossier",

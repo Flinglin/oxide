@@ -1086,6 +1086,11 @@ impl WorkspaceApp {
         }
 
         if self.sftp_view().read(cx).focused_input().is_some()
+            || (self.sftp_focused_surface == sftp::SftpSurfaceId::Sidebar
+                && self.focus_handle.is_focused(window)
+                && !self.left_sidebar_collapsed
+                && self.effective_sidebar_panel_section() == NavItem::Sessions
+                && self.embedded_sftp_target(cx).is_some())
             || self
                 .active_content_tab(cx)
                 .is_some_and(|tab| tab.kind == TabKind::Sftp)
