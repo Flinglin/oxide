@@ -649,6 +649,7 @@ mod tests {
             availability: oxide_quick_commands::QuickCommandAvailability {
                 protocols: Vec::new(),
                 host_patterns: vec!["private-host-*".to_string()],
+                ..oxide_quick_commands::QuickCommandAvailability::default()
             },
             confirmation: oxide_quick_commands::QuickCommandConfirmationPolicy::Inherit,
             sort_order: 0,
