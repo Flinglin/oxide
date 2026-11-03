@@ -1,4 +1,3 @@
-
 use gpui::{Div, Styled, div, prelude::*, px, rgb, rgba};
 use oxide_theme::ThemeTokens;
 
