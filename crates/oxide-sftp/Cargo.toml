@@ -8,6 +8,7 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+oxide-environment = { path = "../oxide-environment" }
 oxide-audit = { path = "../oxide-audit" }
 async-trait.workspace = true
 base64.workspace = true

@@ -13,6 +13,7 @@ pub struct LocalPtySession {
     title: Option<String>,
     lifecycle: TerminalLifecycle,
     process: ProcessState,
+    launch_shell: crate::ShellInfo,
     _shell_integration: Option<LocalShellIntegration>,
     shell_integration_launch_state: TerminalCwdIntegrationLaunchState,
     #[cfg(windows)]
@@ -241,6 +242,7 @@ impl LocalPtySession {
             title: None,
             lifecycle: TerminalLifecycle::Running,
             process,
+                launch_shell: shell,
             _shell_integration: launch.integration,
             shell_integration_launch_state: launch.integration_state,
             #[cfg(windows)]
@@ -499,6 +501,10 @@ impl LocalPtySession {
         self.process.info.clone()
     }
 
+    pub fn launch_shell(&self) -> &crate::ShellInfo {
+        &self.launch_shell
+    }
+    
     pub fn shell_integration_launch_state(&self) -> TerminalCwdIntegrationLaunchState {
         self.shell_integration_launch_state
     }
