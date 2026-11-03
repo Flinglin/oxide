@@ -2142,7 +2142,7 @@ impl SavedConnectionsSyncSnapshot {
     }
 
     pub fn record_ids(&self) -> impl Iterator<Item = &str> {
-       self.records
+        self.records
             .iter()
             .map(|r| r.id.as_str())
             .chain(self.plugin_profiles.iter().map(|p| p.id.as_str()))
@@ -2259,4 +2259,5 @@ struct StagedImportedConnection {
     touched_keychain_ids: Vec<String>,
     touched_privilege_keychain_ids: Vec<String>,
     stale_old_keychain_ids: Vec<String>,
+    stale_old_privilege_keychain_ids: Vec<String>,
 }
