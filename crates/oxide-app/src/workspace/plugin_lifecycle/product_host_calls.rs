@@ -66,6 +66,12 @@ impl WorkspaceApp {
             let audit_context = effect.audit_context.clone();
             oxide_audit::AuditContext::with_sync_request(audit_context.as_ref(), || {
                 match (effect.namespace.as_str(), effect.method.as_str()) {
+                    ("pluginConnection", "opened") => self.apply_plugin_connection_opened(
+                        &effect.plugin_id,
+                        &effect.args,
+                        window,
+                        cx,
+                    ),
                     ("connections", "openForm") => {
                         if let Ok(host) =
                             oxide_plugin_host_api::workspace::discovered_ssh_host(&effect.args)

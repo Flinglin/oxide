@@ -819,14 +819,14 @@ impl WorkspaceApp {
                 Some(popup)
             }
             (SettingsTab::Terminal, SettingsSelect::XmodemBlockSize) => {
-                let mut popup = select_overlay_popup(&self.tokens, width);
+                let mut popup = select_overlay_popup(&self.theme_tokens, width);
                 for size in [
                     oxide_settings::XmodemBlockSize::Bytes128,
                     oxide_settings::XmodemBlockSize::Bytes1024,
                 ] {
                     popup = popup.child(select_option_action(
                         select_option(
-                            &self.tokens,
+                            &self.theme_tokens,
                             xmodem_block_size_label(size, &self.i18n),
                             size == settings.terminal.xmodem_block_size,
                         ),

@@ -1014,6 +1014,7 @@ impl WorkspaceApp {
             previous_active_tab_id,
             next_active_tab_id,
         } = transition;
+        self.close_plugin_connection_tab(tab.id, cx);
         if tab.kind == TabKind::NotificationCenter {
             self.hide_audit_page();
         }

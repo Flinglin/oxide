@@ -43,7 +43,10 @@ impl fmt::Debug for ConnectionStoreCheckpoint {
         formatter
             .debug_struct("ConnectionStoreCheckpoint")
             .field("store_path", &self.store_path)
-            .field("contents", &"[redacted complete connection store checkpoint]")
+            .field(
+                "contents",
+                &"[redacted complete connection store checkpoint]",
+            )
             .finish()
     }
 }
@@ -160,31 +163,55 @@ impl ConnectionStore {
     }
 
     pub fn export_saved_connections_snapshot(&self) -> Result<SavedConnectionsSyncSnapshot> {
-        audit_configuration_snapshot("saved_connections", || build_saved_connections_sync_snapshot(&self.data), |snapshot| snapshot.records.len())
+        audit_configuration_snapshot(
+            "saved_connections",
+            || build_saved_connections_sync_snapshot(&self.data),
+            |snapshot| snapshot.records.len(),
+        )
     }
 
     pub fn export_serial_profiles_snapshot(&self) -> Result<SerialProfilesSyncSnapshot> {
-        audit_configuration_snapshot("serial_profiles", || build_serial_profiles_sync_snapshot(&self.data), |snapshot| snapshot.records.len())
+        audit_configuration_snapshot(
+            "serial_profiles",
+            || build_serial_profiles_sync_snapshot(&self.data),
+            |snapshot| snapshot.records.len(),
+        )
     }
 
     pub fn export_telnet_profiles_snapshot(&self) -> Result<TelnetProfilesSyncSnapshot> {
-        audit_configuration_snapshot("telnet_profiles", || build_telnet_profiles_sync_snapshot(&self.data), |snapshot| snapshot.records.len())
+        audit_configuration_snapshot(
+            "telnet_profiles",
+            || build_telnet_profiles_sync_snapshot(&self.data),
+            |snapshot| snapshot.records.len(),
+        )
     }
 
     pub fn export_mosh_profiles_snapshot(&self) -> Result<MoshProfilesSyncSnapshot> {
-        audit_configuration_snapshot("mosh_profiles", || build_mosh_profiles_sync_snapshot(&self.data), |snapshot| snapshot.records.len())
+        audit_configuration_snapshot(
+            "mosh_profiles",
+            || build_mosh_profiles_sync_snapshot(&self.data),
+            |snapshot| snapshot.records.len(),
+        )
     }
 
     pub fn export_standalone_sftp_profiles_snapshot(
         &self,
     ) -> Result<StandaloneSftpProfilesSyncSnapshot> {
-        audit_configuration_snapshot("sftp_profiles", || build_standalone_sftp_profiles_sync_snapshot(&self.data), |snapshot| snapshot.records.len())
+        audit_configuration_snapshot(
+            "sftp_profiles",
+            || build_standalone_sftp_profiles_sync_snapshot(&self.data),
+            |snapshot| snapshot.records.len(),
+        )
     }
 
     pub fn export_remote_desktop_profiles_snapshot(
         &self,
     ) -> Result<RemoteDesktopProfilesSyncSnapshot> {
-        audit_configuration_snapshot("remote_desktop_profiles", || build_remote_desktop_profiles_sync_snapshot(&self.data), |snapshot| snapshot.records.len())
+        audit_configuration_snapshot(
+            "remote_desktop_profiles",
+            || build_remote_desktop_profiles_sync_snapshot(&self.data),
+            |snapshot| snapshot.records.len(),
+        )
     }
 
     pub fn local_sync_metadata(&self) -> Result<LocalSyncMetadata> {
@@ -193,9 +220,36 @@ impl ConnectionStore {
             .records
             .iter()
             .map(|record| record.updated_at.clone())
-            .chain(snapshot.local_terminal_profiles.iter().map(|p| p.updated_at.to_rfc3339()))
-            .chain(snapshot.local_terminal_tombstones.iter().map(|p| p.deleted_at.to_rfc3339()))
-            .chain(snapshot.totp_credentials.iter().map(|p| p.updated_at.to_rfc3339()))
+            .chain(
+                snapshot
+                    .local_terminal_profiles
+                    .iter()
+                    .map(|p| p.updated_at.to_rfc3339()),
+            )
+            .chain(
+                snapshot
+                    .local_terminal_tombstones
+                    .iter()
+                    .map(|p| p.deleted_at.to_rfc3339()),
+            )
+            .chain(
+                snapshot
+                    .plugin_profiles
+                    .iter()
+                    .map(|p| p.updated_at.to_rfc3339()),
+            )
+            .chain(
+                snapshot
+                    .plugin_tombstones
+                    .iter()
+                    .map(|p| p.deleted_at.to_rfc3339()),
+            )
+            .chain(
+                snapshot
+                    .totp_credentials
+                    .iter()
+                    .map(|p| p.updated_at.to_rfc3339()),
+            )
             .max()
             .unwrap_or_else(|| snapshot.exported_at.clone());
 
@@ -217,37 +271,32 @@ impl ConnectionStore {
             Some("saved_connections"),
         );
         let audit_result = (|| {
-        let prepared = self.prepare_saved_connections_snapshot(snapshot, strategy)?;
-        let mut cleanup = self.commit_prepared_saved_connections_snapshot(prepared)?;
-        let outcome = cleanup.outcome().clone();
+            let prepared = self.prepare_saved_connections_snapshot(snapshot, strategy)?;
+            let mut cleanup = self.commit_prepared_saved_connections_snapshot(prepared)?;
+            let outcome = cleanup.outcome().clone();
 
-        // Preserve the legacy one-shot API's best-effort cleanup semantics.
-        // Transaction coordinators should use the explicit prepare/rollback/
-        // commit/finalize API so failed cleanup remains available for retry.
-        let _ = self.finalize_saved_connections_sync_cleanup(&mut cleanup);
-        Ok(outcome)
+            // Preserve the legacy one-shot API's best-effort cleanup semantics.
+            // Transaction coordinators should use the explicit prepare/rollback/
+            // commit/finalize API so failed cleanup remains available for retry.
+            let _ = self.finalize_saved_connections_sync_cleanup(&mut cleanup);
+            Ok(outcome)
         })();
         let outcome = match &audit_result {
-                Ok(outcome) => {
-                    audit.summary(&format!(
-                        "saved_connections:applied={},deleted={}",
-                        outcome.result.applied,
-                        outcome.deleted_connection_ids.len(),
-                    ));
-                    if outcome.result.applied == 0 && outcome.deleted_connection_ids.is_empty() {
-                        oxide_audit::AuditOutcome::Unchanged
-                    } else {
-                        oxide_audit::AuditOutcome::Succeeded
-                    }
+            Ok(outcome) => {
+                audit.summary(&format!(
+                    "saved_connections:applied={},deleted={}",
+                    outcome.result.applied,
+                    outcome.deleted_connection_ids.len(),
+                ));
+                if outcome.result.applied == 0 && outcome.deleted_connection_ids.is_empty() {
+                    oxide_audit::AuditOutcome::Unchanged
+                } else {
+                    oxide_audit::AuditOutcome::Succeeded
                 }
-                Err(_) => oxide_audit::AuditOutcome::Failed,
-            };
-        audit.finish(
-            outcome,
-            oxide_audit::AuditEvidence::Protocol,
-            None,
-            None,
-        );
+            }
+            Err(_) => oxide_audit::AuditOutcome::Failed,
+        };
+        audit.finish(outcome, oxide_audit::AuditEvidence::Protocol, None, None);
         audit_result
     }
 
@@ -384,8 +433,35 @@ impl ConnectionStore {
                 self.add_connection(next_connection);
                 result.applied += 1;
             }
-            self.apply_local_terminal_profiles(snapshot.local_terminal_profiles, snapshot.local_terminal_tombstones, strategy, &mut result)?;
-            result.applied += self.merge_totp_credentials(snapshot.totp_credentials, strategy == SavedConnectionsConflictStrategy::Replace)?;
+            self.apply_local_terminal_profiles(
+                snapshot.local_terminal_profiles,
+                snapshot.local_terminal_tombstones,
+                strategy,
+                &mut result,
+            )?;
+            let old_plugin_refs = self
+                .data
+                .plugin_profiles
+                .iter()
+                .flat_map(|p| p.credential_refs.values().flatten().cloned())
+                .collect::<HashSet<_>>();
+            self.apply_plugin_profiles(
+                snapshot.plugin_profiles,
+                snapshot.plugin_tombstones,
+                strategy,
+                &mut result,
+            )?;
+            let next_plugin_refs = self
+                .data
+                .plugin_profiles
+                .iter()
+                .flat_map(|p| p.credential_refs.values().flatten().cloned())
+                .collect::<HashSet<_>>();
+            keychain_ids_to_delete.extend(old_plugin_refs.difference(&next_plugin_refs).cloned());
+            result.applied += self.merge_totp_credentials(
+                snapshot.totp_credentials,
+                strategy == SavedConnectionsConflictStrategy::Replace,
+            )?;
             self.normalize();
             if result.applied > 0 {
                 self.save()?;
@@ -692,7 +768,6 @@ impl ConnectionStore {
         }
         Ok(applied)
     }
-
 }
 
 fn build_saved_connection_from_sync_payload(
@@ -778,13 +853,37 @@ fn build_saved_connections_sync_snapshot(
 
     let mut local_terminal_profiles = data.local_terminal_profiles.clone();
     local_terminal_profiles.sort_by(|a, b| a.id.cmp(&b.id));
-    for profile in &mut local_terminal_profiles { profile.last_used_at = None; }
-    let mut local_terminal_tombstones = active_connection_tombstones(&data.local_terminal_tombstones);
+    for profile in &mut local_terminal_profiles {
+        profile.last_used_at = None;
+    }
+    let mut local_terminal_tombstones =
+        active_connection_tombstones(&data.local_terminal_tombstones);
     local_terminal_tombstones.sort_by(|a, b| a.id.cmp(&b.id));
-    let mut totp_credentials = data.totp_credentials.iter().map(crate::totp::TotpCredential::portable).collect::<Vec<_>>();
+    let mut totp_credentials = data
+        .totp_credentials
+        .iter()
+        .map(crate::totp::TotpCredential::portable)
+        .collect::<Vec<_>>();
     totp_credentials.sort_by(|a, b| a.id.cmp(&b.id));
-    let revision = sha256_hex(&(&records, &local_terminal_profiles, &local_terminal_tombstones, &totp_credentials))?;
+    let mut plugin_profiles = data
+        .plugin_profiles
+        .iter()
+        .map(PluginConnectionProfile::portable)
+        .collect::<Vec<_>>();
+    plugin_profiles.sort_by(|a, b| a.id.cmp(&b.id));
+    let mut plugin_tombstones = active_connection_tombstones(&data.plugin_tombstones);
+    plugin_tombstones.sort_by(|a, b| a.id.cmp(&b.id));
+    let revision = sha256_hex(&(
+        &records,
+        &local_terminal_profiles,
+        &local_terminal_tombstones,
+        &totp_credentials,
+        &plugin_profiles,
+        &plugin_tombstones,
+    ))?;
     Ok(SavedConnectionsSyncSnapshot {
+        plugin_profiles,
+        plugin_tombstones,
         totp_credentials,
         revision,
         exported_at: Utc::now().to_rfc3339(),
@@ -942,7 +1041,9 @@ fn portable_mosh_auth(auth: &SavedAuth) -> SavedAuth {
             plaintext_passphrase: None,
         },
         SavedAuth::Certificate {
-            key_path, cert_path, ..
+            key_path,
+            cert_path,
+            ..
         } => SavedAuth::Certificate {
             key_path: key_path.clone(),
             cert_path: cert_path.clone(),
@@ -973,7 +1074,9 @@ fn conventional_auth_target_matches(left: &SavedAuth, right: &SavedAuth) -> bool
         | (SavedAuth::Agent, SavedAuth::Agent) => true,
         (
             SavedAuth::Key { key_path: left, .. },
-            SavedAuth::Key { key_path: right, .. },
+            SavedAuth::Key {
+                key_path: right, ..
+            },
         ) => left == right,
         (
             SavedAuth::ManagedKey { key_id: left, .. },
@@ -1381,11 +1484,7 @@ fn portable_upstream_proxy(policy: &SavedUpstreamProxyPolicy) -> SavedUpstreamPr
     match policy {
         SavedUpstreamProxyPolicy::Custom { proxy } => {
             let mut proxy = proxy.clone();
-            if let SavedUpstreamProxyAuth::Password {
-                username,
-                ..
-            } = &proxy.auth
-            {
+            if let SavedUpstreamProxyAuth::Password { username, .. } = &proxy.auth {
                 proxy.auth = SavedUpstreamProxyAuth::Password {
                     username: username.clone(),
                     keychain_id: None,
@@ -1525,10 +1624,8 @@ mod mosh_tests {
 
     #[test]
     fn mosh_snapshot_apply_preserves_matching_local_credential() {
-        let path = std::env::temp_dir().join(format!(
-            "oxide-mosh-sync-{}.json",
-            uuid::Uuid::new_v4()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("oxide-mosh-sync-{}.json", uuid::Uuid::new_v4()));
         let mut store = ConnectionStore::load(&path).expect("store must load");
         let mut local = password_profile(Some("local-keychain-entry"));
         local.proxy_chain.push(SavedProxyHop {

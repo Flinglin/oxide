@@ -223,11 +223,10 @@ pub fn terminal_settings_section_count(page: TerminalSettingsPage) -> usize {
         TerminalSettingsPage::Display => 5,
         TerminalSettingsPage::Input => 3,
         // The dedicated keybindings page owns shortcut discovery and editing.
-        TerminalSettingsPage::Local => 4,
+        TerminalSettingsPage::Local => 3,
         TerminalSettingsPage::CommandBar => 3,
         TerminalSettingsPage::Awareness => 3,
         TerminalSettingsPage::Transfer => 2,
-        TerminalSettingsPage::Transfer => 1,
         TerminalSettingsPage::Logging => 1,
         TerminalSettingsPage::Highlight => 1,
     };

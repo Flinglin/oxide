@@ -81,7 +81,10 @@ impl ConnectionStore {
     }
 
     pub fn get_mosh_profile(&self, id: &str) -> Option<&MoshProfile> {
-        self.data.mosh_profiles.iter().find(|profile| profile.id == id)
+        self.data
+            .mosh_profiles
+            .iter()
+            .find(|profile| profile.id == id)
     }
 
     pub fn standalone_sftp_profiles(&self) -> &[StandaloneSftpProfile] {
@@ -142,7 +145,12 @@ impl ConnectionStore {
             Err(_keychain_error) => {
                 let _ = self.managed_keychain.delete(secret_id);
                 let (config_key, created_config_key) = get_or_create_config_encryption_key()?;
-                write_managed_ssh_key_secret_file(self.data_dir()?, secret_id, secret, &config_key)?;
+                write_managed_ssh_key_secret_file(
+                    self.data_dir()?,
+                    secret_id,
+                    secret,
+                    &config_key,
+                )?;
                 Ok(ManagedSshKeySecretWrite { created_config_key })
             }
         }
@@ -669,6 +677,16 @@ impl ConnectionStore {
                 .groups
                 .retain(|group| !group_path_is_within(group, &name));
             let now = Utc::now();
+            for profile in &mut self.data.plugin_profiles {
+                if profile
+                    .group
+                    .as_deref()
+                    .is_some_and(|group| group_path_is_within(group, &name))
+                {
+                    profile.group = None;
+                    profile.updated_at = now;
+                }
+            }
             for conn in &mut self.data.connections {
                 if conn
                     .group
@@ -763,124 +781,132 @@ impl ConnectionStore {
             Some("group"),
         );
         let audit_result = (|| {
-        let old_name = validate_group_name(old_name)?;
-        let new_name = validate_group_name(&new_name)?;
-        if old_name == new_name {
-            return Ok(0);
-        }
-        if group_path_is_within(&new_name, &old_name) {
-            bail!("a group cannot be moved into its own subtree");
-        }
-        if self
-            .data
-            .groups
-            .iter()
-            .any(|group| group_path_is_within(group, &new_name) && !group_path_is_within(group, &old_name))
-        {
-            bail!("the destination group already exists");
-        }
+            let old_name = validate_group_name(old_name)?;
+            let new_name = validate_group_name(&new_name)?;
+            if old_name == new_name {
+                return Ok(0);
+            }
+            if group_path_is_within(&new_name, &old_name) {
+                bail!("a group cannot be moved into its own subtree");
+            }
+            if self.data.groups.iter().any(|group| {
+                group_path_is_within(group, &new_name) && !group_path_is_within(group, &old_name)
+            }) {
+                bail!("the destination group already exists");
+            }
 
-        let now = Utc::now();
-        let mut updated = 0;
-        for group in &mut self.data.groups {
-            if let Some(renamed) = rename_group_path(group, &old_name, &new_name) {
-                *group = renamed;
-                updated += 1;
+            let now = Utc::now();
+            let mut updated = 0;
+            for group in &mut self.data.groups {
+                if let Some(renamed) = rename_group_path(group, &old_name, &new_name) {
+                    *group = renamed;
+                    updated += 1;
+                }
             }
-        }
-        for connection in &mut self.data.connections {
-            if let Some(renamed) = connection
-                .group
-                .as_deref()
-                .and_then(|group| rename_group_path(group, &old_name, &new_name))
-            {
-                connection.group = Some(renamed);
-                connection.updated_at = Some(now);
-                updated += 1;
+            for connection in &mut self.data.connections {
+                if let Some(renamed) = connection
+                    .group
+                    .as_deref()
+                    .and_then(|group| rename_group_path(group, &old_name, &new_name))
+                {
+                    connection.group = Some(renamed);
+                    connection.updated_at = Some(now);
+                    updated += 1;
+                }
             }
-        }
-        for profile in &mut self.data.serial_profiles {
-            if let Some(renamed) = profile
-                .group
-                .as_deref()
-                .and_then(|group| rename_group_path(group, &old_name, &new_name))
-            {
-                profile.group = Some(renamed);
-                profile.updated_at = now;
-                updated += 1;
+            for profile in &mut self.data.serial_profiles {
+                if let Some(renamed) = profile
+                    .group
+                    .as_deref()
+                    .and_then(|group| rename_group_path(group, &old_name, &new_name))
+                {
+                    profile.group = Some(renamed);
+                    profile.updated_at = now;
+                    updated += 1;
+                }
             }
-        }
-        for profile in &mut self.data.local_terminal_profiles {
-            if let Some(renamed) = profile
-                .group
-                .as_deref()
-                .and_then(|group| rename_group_path(group, &old_name, &new_name))
-            {
-                profile.group = Some(renamed);
-                profile.updated_at = now;
-                updated += 1;
+            for profile in &mut self.data.plugin_profiles {
+                if let Some(renamed) = profile
+                    .group
+                    .as_deref()
+                    .and_then(|group| rename_group_path(group, &old_name, &new_name))
+                {
+                    profile.group = Some(renamed);
+                    profile.updated_at = now;
+                    updated += 1;
+                }
             }
-        }
-        for profile in &mut self.data.telnet_profiles {
-            if let Some(renamed) = profile
-                .group
-                .as_deref()
-                .and_then(|group| rename_group_path(group, &old_name, &new_name))
-            {
-                profile.group = Some(renamed);
-                profile.updated_at = now;
-                updated += 1;
+            for profile in &mut self.data.local_terminal_profiles {
+                if let Some(renamed) = profile
+                    .group
+                    .as_deref()
+                    .and_then(|group| rename_group_path(group, &old_name, &new_name))
+                {
+                    profile.group = Some(renamed);
+                    profile.updated_at = now;
+                    updated += 1;
+                }
             }
-        }
-        for profile in &mut self.data.ftp_profiles {
-            if let Some(renamed) = profile
-                .group
-                .as_deref()
-                .and_then(|group| rename_group_path(group, &old_name, &new_name))
-            {
-                profile.group = Some(renamed);
-                profile.updated_at = now;
-                updated += 1;
+            for profile in &mut self.data.telnet_profiles {
+                if let Some(renamed) = profile
+                    .group
+                    .as_deref()
+                    .and_then(|group| rename_group_path(group, &old_name, &new_name))
+                {
+                    profile.group = Some(renamed);
+                    profile.updated_at = now;
+                    updated += 1;
+                }
             }
-        }
-        for profile in &mut self.data.mosh_profiles {
-            if let Some(renamed) = profile
-                .group
-                .as_deref()
-                .and_then(|group| rename_group_path(group, &old_name, &new_name))
-            {
-                profile.group = Some(renamed);
-                profile.updated_at = now;
-                updated += 1;
+            for profile in &mut self.data.ftp_profiles {
+                if let Some(renamed) = profile
+                    .group
+                    .as_deref()
+                    .and_then(|group| rename_group_path(group, &old_name, &new_name))
+                {
+                    profile.group = Some(renamed);
+                    profile.updated_at = now;
+                    updated += 1;
+                }
             }
-        }
-        for profile in &mut self.data.standalone_sftp_profiles {
-            if let Some(renamed) = profile
-                .group
-                .as_deref()
-                .and_then(|group| rename_group_path(group, &old_name, &new_name))
-            {
-                profile.group = Some(renamed);
-                profile.updated_at = now;
-                updated += 1;
+            for profile in &mut self.data.mosh_profiles {
+                if let Some(renamed) = profile
+                    .group
+                    .as_deref()
+                    .and_then(|group| rename_group_path(group, &old_name, &new_name))
+                {
+                    profile.group = Some(renamed);
+                    profile.updated_at = now;
+                    updated += 1;
+                }
             }
-        }
-        for profile in &mut self.data.remote_desktop_profiles {
-            if let Some(renamed) = profile
-                .group
-                .as_deref()
-                .and_then(|group| rename_group_path(group, &old_name, &new_name))
-            {
-                profile.group = Some(renamed);
-                profile.updated_at = now;
-                updated += 1;
+            for profile in &mut self.data.standalone_sftp_profiles {
+                if let Some(renamed) = profile
+                    .group
+                    .as_deref()
+                    .and_then(|group| rename_group_path(group, &old_name, &new_name))
+                {
+                    profile.group = Some(renamed);
+                    profile.updated_at = now;
+                    updated += 1;
+                }
             }
-        }
-        if updated > 0 {
-            self.normalize();
-            self.save()?;
-        }
-        Ok(updated)
+            for profile in &mut self.data.remote_desktop_profiles {
+                if let Some(renamed) = profile
+                    .group
+                    .as_deref()
+                    .and_then(|group| rename_group_path(group, &old_name, &new_name))
+                {
+                    profile.group = Some(renamed);
+                    profile.updated_at = now;
+                    updated += 1;
+                }
+            }
+            if updated > 0 {
+                self.normalize();
+                self.save()?;
+            }
+            Ok(updated)
         })();
         audit.finish(
             match &audit_result {
@@ -896,7 +922,7 @@ impl ConnectionStore {
     }
 
     pub fn move_to_group(&mut self, ids: &[String], group: Option<&str>) -> Result<usize> {
-        self.move_session_assets_to_group(ids, &[], &[], &[], &[], &[], &[], &[], group)
+        self.move_session_assets_to_group(ids, &[], &[], &[], &[], &[], &[], &[], &[], group)
     }
 
     /// Moves all saved Session Manager asset types in one metadata save.
@@ -910,6 +936,7 @@ impl ConnectionStore {
         standalone_sftp_profile_ids: &[String],
         remote_desktop_ids: &[String],
         ftp_profile_ids: &[String],
+        plugin_profile_ids: &[String],
         group: Option<&str>,
     ) -> Result<usize> {
         let original_groups = self.data.groups.clone();
@@ -920,85 +947,95 @@ impl ConnectionStore {
             Some("group_assignment"),
         );
         let audit_result = (|| {
-        let group = normalize_optional_group_name(group)?;
-        let connection_id_set = connection_ids.iter().collect::<HashSet<_>>();
-        let local_terminal_profile_id_set = local_terminal_profile_ids.iter().collect::<HashSet<_>>();
-        let serial_profile_id_set = serial_profile_ids.iter().collect::<HashSet<_>>();
-        let telnet_profile_id_set = telnet_profile_ids.iter().collect::<HashSet<_>>();
-        let mosh_profile_id_set = mosh_profile_ids.iter().collect::<HashSet<_>>();
-        let standalone_sftp_profile_id_set =
-            standalone_sftp_profile_ids.iter().collect::<HashSet<_>>();
-        let remote_desktop_id_set = remote_desktop_ids.iter().collect::<HashSet<_>>();
-        let ftp_profile_id_set = ftp_profile_ids.iter().collect::<HashSet<_>>();
-        let now = Utc::now();
-        let mut updated = 0;
-        for conn in &mut self.data.connections {
-            if connection_id_set.contains(&conn.id) && conn.group != group {
-                conn.group = group.clone();
-                conn.updated_at = Some(now);
-                updated += 1;
+            let group = normalize_optional_group_name(group)?;
+            let connection_id_set = connection_ids.iter().collect::<HashSet<_>>();
+            let local_terminal_profile_id_set =
+                local_terminal_profile_ids.iter().collect::<HashSet<_>>();
+            let serial_profile_id_set = serial_profile_ids.iter().collect::<HashSet<_>>();
+            let telnet_profile_id_set = telnet_profile_ids.iter().collect::<HashSet<_>>();
+            let mosh_profile_id_set = mosh_profile_ids.iter().collect::<HashSet<_>>();
+            let standalone_sftp_profile_id_set =
+                standalone_sftp_profile_ids.iter().collect::<HashSet<_>>();
+            let remote_desktop_id_set = remote_desktop_ids.iter().collect::<HashSet<_>>();
+            let ftp_profile_id_set = ftp_profile_ids.iter().collect::<HashSet<_>>();
+            let now = Utc::now();
+            let mut updated = 0;
+            for profile in &mut self.data.plugin_profiles {
+                if plugin_profile_ids.contains(&profile.id) && profile.group != group {
+                    profile.group = group.clone();
+                    profile.updated_at = now;
+                    updated += 1;
+                }
             }
-        }
-        for profile in &mut self.data.serial_profiles {
-            if serial_profile_id_set.contains(&profile.id) && profile.group != group {
-                profile.group = group.clone();
-                profile.updated_at = now;
-                updated += 1;
+            for conn in &mut self.data.connections {
+                if connection_id_set.contains(&conn.id) && conn.group != group {
+                    conn.group = group.clone();
+                    conn.updated_at = Some(now);
+                    updated += 1;
+                }
             }
-        }
-        for profile in &mut self.data.local_terminal_profiles {
-            if local_terminal_profile_id_set.contains(&profile.id) && profile.group != group {
-                profile.group = group.clone();
-                profile.updated_at = now;
-                updated += 1;
+            for profile in &mut self.data.serial_profiles {
+                if serial_profile_id_set.contains(&profile.id) && profile.group != group {
+                    profile.group = group.clone();
+                    profile.updated_at = now;
+                    updated += 1;
+                }
             }
-        }
-        for profile in &mut self.data.telnet_profiles {
-            if telnet_profile_id_set.contains(&profile.id) && profile.group != group {
-                profile.group = group.clone();
-                profile.updated_at = now;
-                updated += 1;
+            for profile in &mut self.data.local_terminal_profiles {
+                if local_terminal_profile_id_set.contains(&profile.id) && profile.group != group {
+                    profile.group = group.clone();
+                    profile.updated_at = now;
+                    updated += 1;
+                }
             }
-        }
-        for profile in &mut self.data.mosh_profiles {
-            if mosh_profile_id_set.contains(&profile.id) && profile.group != group {
-                profile.group = group.clone();
-                profile.updated_at = now;
-                updated += 1;
+            for profile in &mut self.data.telnet_profiles {
+                if telnet_profile_id_set.contains(&profile.id) && profile.group != group {
+                    profile.group = group.clone();
+                    profile.updated_at = now;
+                    updated += 1;
+                }
             }
-        }
-        for profile in &mut self.data.standalone_sftp_profiles {
-            if standalone_sftp_profile_id_set.contains(&profile.id) && profile.group != group {
-                profile.group = group.clone();
-                profile.updated_at = now;
-                updated += 1;
+            for profile in &mut self.data.mosh_profiles {
+                if mosh_profile_id_set.contains(&profile.id) && profile.group != group {
+                    profile.group = group.clone();
+                    profile.updated_at = now;
+                    updated += 1;
+                }
             }
-        }
-        for profile in &mut self.data.ftp_profiles {
-            if ftp_profile_id_set.contains(&profile.id) && profile.group != group {
-                profile.group = group.clone();
-                profile.updated_at = now;
-                updated += 1;
+            for profile in &mut self.data.standalone_sftp_profiles {
+                if standalone_sftp_profile_id_set.contains(&profile.id) && profile.group != group {
+                    profile.group = group.clone();
+                    profile.updated_at = now;
+                    updated += 1;
+                }
             }
-        }
-        for profile in &mut self.data.remote_desktop_profiles {
-            if remote_desktop_id_set.contains(&profile.id) && profile.group != group {
-                profile.group = group.clone();
-                profile.updated_at = now;
-                updated += 1;
+            for profile in &mut self.data.ftp_profiles {
+                if ftp_profile_id_set.contains(&profile.id) && profile.group != group {
+                    profile.group = group.clone();
+                    profile.updated_at = now;
+                    updated += 1;
+                }
             }
-        }
-        if let Some(group) = group {
-            self.ensure_group(group)?;
-        }
-        if updated > 0 {
-            self.save()?;
-        }
-        Ok(updated)
+            for profile in &mut self.data.remote_desktop_profiles {
+                if remote_desktop_id_set.contains(&profile.id) && profile.group != group {
+                    profile.group = group.clone();
+                    profile.updated_at = now;
+                    updated += 1;
+                }
+            }
+            if let Some(group) = group {
+                self.ensure_group(group)?;
+            }
+            if updated > 0 {
+                self.save()?;
+            }
+            Ok(updated)
         })();
         audit.finish(
             match &audit_result {
-                Ok(0) if self.data.groups == original_groups => oxide_audit::AuditOutcome::Unchanged,
+                Ok(0) if self.data.groups == original_groups => {
+                    oxide_audit::AuditOutcome::Unchanged
+                }
                 Ok(_) => oxide_audit::AuditOutcome::Succeeded,
                 Err(_) => oxide_audit::AuditOutcome::Failed,
             },
@@ -1017,27 +1054,27 @@ impl ConnectionStore {
             None,
         );
         let audit_result = (|| {
-        let Some(mut duplicate) = self.get(id).cloned() else {
-            return Ok(None);
-        };
-        duplicate.id = Uuid::new_v4().to_string();
-        duplicate.name = format!("{} (Copy)", duplicate.name);
-        duplicate.created_at = Utc::now();
-        duplicate.updated_at = Some(Utc::now());
-        duplicate.last_used_at = None;
-        duplicate.auth = self.clone_auth_secret(&duplicate.auth)?;
-        for hop in &mut duplicate.proxy_chain {
-            hop.auth = self.clone_auth_secret(&hop.auth)?;
-        }
-        // Unlike SSH auth secrets, sudo/su helper credentials must not be
-        // duplicated silently because their scope is an explicit per-connection
-        // safety choice.
-        duplicate.privilege_credentials.clear();
-        let duplicate_id = duplicate.id.clone();
-        self.data.connections.push(duplicate);
-        self.normalize();
-        self.save()?;
-        Ok(self.get(&duplicate_id).map(ConnectionInfo::from))
+            let Some(mut duplicate) = self.get(id).cloned() else {
+                return Ok(None);
+            };
+            duplicate.id = Uuid::new_v4().to_string();
+            duplicate.name = format!("{} (Copy)", duplicate.name);
+            duplicate.created_at = Utc::now();
+            duplicate.updated_at = Some(Utc::now());
+            duplicate.last_used_at = None;
+            duplicate.auth = self.clone_auth_secret(&duplicate.auth)?;
+            for hop in &mut duplicate.proxy_chain {
+                hop.auth = self.clone_auth_secret(&hop.auth)?;
+            }
+            // Unlike SSH auth secrets, sudo/su helper credentials must not be
+            // duplicated silently because their scope is an explicit per-connection
+            // safety choice.
+            duplicate.privilege_credentials.clear();
+            let duplicate_id = duplicate.id.clone();
+            self.data.connections.push(duplicate);
+            self.normalize();
+            self.save()?;
+            Ok(self.get(&duplicate_id).map(ConnectionInfo::from))
         })();
         audit.finish(
             match &audit_result {
@@ -1069,10 +1106,16 @@ impl ConnectionStore {
         id: &str,
         rule_set_id: Option<String>,
     ) -> Result<bool> {
-        let previous = self.get(id)
+        let previous = self
+            .get(id)
             .map(|connection| connection.options.terminal.highlight_rule_set.clone())
-            .or_else(|| self.data.telnet_profiles.iter().find(|profile| profile.id == id)
-                .map(|profile| profile.terminal.highlight_rule_set.clone()));
+            .or_else(|| {
+                self.data
+                    .telnet_profiles
+                    .iter()
+                    .find(|profile| profile.id == id)
+                    .map(|profile| profile.terminal.highlight_rule_set.clone())
+            });
         let audit = oxide_audit::AuditOperation::begin(
             oxide_audit::AuditCategory::Configuration,
             "configuration_save",
@@ -1080,47 +1123,53 @@ impl ConnectionStore {
             Some("terminal_highlight_rule_set"),
         );
         let audit_result = (|| {
-        let rule_set_id = rule_set_id.and_then(|id| {
-            let id = id.trim();
-            (!id.is_empty()).then(|| id.to_string())
-        });
+            let rule_set_id = rule_set_id.and_then(|id| {
+                let id = id.trim();
+                (!id.is_empty()).then(|| id.to_string())
+            });
 
-        if let Some(connection) = self
-            .data
-            .connections
-            .iter_mut()
-            .find(|connection| connection.id == id)
-        {
-            if connection.options.terminal.highlight_rule_set == rule_set_id {
+            if let Some(connection) = self
+                .data
+                .connections
+                .iter_mut()
+                .find(|connection| connection.id == id)
+            {
+                if connection.options.terminal.highlight_rule_set == rule_set_id {
+                    return Ok(true);
+                }
+                connection.options.terminal.highlight_rule_set = rule_set_id;
+                connection.updated_at = Some(Utc::now());
+                self.save()?;
                 return Ok(true);
             }
-            connection.options.terminal.highlight_rule_set = rule_set_id;
-            connection.updated_at = Some(Utc::now());
-            self.save()?;
-            return Ok(true);
-        }
 
-        // Telnet profiles own the same terminal presentation options without an SSH node.
-        let Some(profile) = self
-            .data
-            .telnet_profiles
-            .iter_mut()
-            .find(|profile| profile.id == id)
-        else {
-            return Ok(false);
-        };
-        if profile.terminal.highlight_rule_set == rule_set_id {
-            return Ok(true);
-        }
-        profile.terminal.highlight_rule_set = rule_set_id;
-        profile.updated_at = Utc::now();
-        self.save()?;
-        Ok(true)
+            // Telnet profiles own the same terminal presentation options without an SSH node.
+            let Some(profile) = self
+                .data
+                .telnet_profiles
+                .iter_mut()
+                .find(|profile| profile.id == id)
+            else {
+                return Ok(false);
+            };
+            if profile.terminal.highlight_rule_set == rule_set_id {
+                return Ok(true);
+            }
+            profile.terminal.highlight_rule_set = rule_set_id;
+            profile.updated_at = Utc::now();
+            self.save()?;
+            Ok(true)
         })();
-        let current = self.get(id)
+        let current = self
+            .get(id)
             .map(|connection| connection.options.terminal.highlight_rule_set.clone())
-            .or_else(|| self.data.telnet_profiles.iter().find(|profile| profile.id == id)
-                .map(|profile| profile.terminal.highlight_rule_set.clone()));
+            .or_else(|| {
+                self.data
+                    .telnet_profiles
+                    .iter()
+                    .find(|profile| profile.id == id)
+                    .map(|profile| profile.terminal.highlight_rule_set.clone())
+            });
         audit.finish(
             match &audit_result {
                 Ok(true) if previous != current => oxide_audit::AuditOutcome::Succeeded,
@@ -1224,30 +1273,30 @@ impl ConnectionStore {
             Some("serial_line_endings"),
         );
         let audit_result = (|| {
-        let Some(profile) = self
-            .data
-            .serial_profiles
-            .iter_mut()
-            .find(|profile| profile.id == id)
-        else {
-            return Ok(false);
-        };
-        let input_changed = input_line_ending
-            .is_some_and(|line_ending| profile.input_line_ending != line_ending);
-        let output_changed = output_line_ending
-            .is_some_and(|line_ending| profile.output_line_ending != line_ending);
-        if !input_changed && !output_changed {
-            return Ok(false);
-        }
-        if let Some(line_ending) = input_line_ending {
-            profile.input_line_ending = line_ending;
-        }
-        if let Some(line_ending) = output_line_ending {
-            profile.output_line_ending = line_ending;
-        }
-        profile.updated_at = Utc::now();
-        self.save()?;
-        Ok(true)
+            let Some(profile) = self
+                .data
+                .serial_profiles
+                .iter_mut()
+                .find(|profile| profile.id == id)
+            else {
+                return Ok(false);
+            };
+            let input_changed = input_line_ending
+                .is_some_and(|line_ending| profile.input_line_ending != line_ending);
+            let output_changed = output_line_ending
+                .is_some_and(|line_ending| profile.output_line_ending != line_ending);
+            if !input_changed && !output_changed {
+                return Ok(false);
+            }
+            if let Some(line_ending) = input_line_ending {
+                profile.input_line_ending = line_ending;
+            }
+            if let Some(line_ending) = output_line_ending {
+                profile.output_line_ending = line_ending;
+            }
+            profile.updated_at = Utc::now();
+            self.save()?;
+            Ok(true)
         })();
         audit.changed(&audit_result);
         audit_result
@@ -1417,10 +1466,7 @@ impl ConnectionStore {
         Ok(true)
     }
 
-    pub fn upsert_mosh_profile(
-        &mut self,
-        request: SaveMoshProfileRequest,
-    ) -> Result<MoshProfile> {
+    pub fn upsert_mosh_profile(&mut self, request: SaveMoshProfileRequest) -> Result<MoshProfile> {
         self.upsert_mosh_profile_with_runtime_secrets(request)
             .map(|(profile, _secrets)| profile)
     }
@@ -1615,26 +1661,26 @@ impl ConnectionStore {
         );
         audit.summary(&format!("mosh_proxy_hop:index={hop_index}"));
         let audit_result = (|| {
-        let Some(profile) = self.get_mosh_profile(id) else {
-            return Ok(false);
-        };
-        let auth = profile
-            .proxy_chain
-            .get(hop_index)
-            .map(|hop| hop.auth.clone())
-            .ok_or_else(|| anyhow::anyhow!("Mosh proxy hop credential slot not found"))?;
-        let (next_auth, reference) = auth_with_protected_credential(auth)?;
-        self.keychain.store(&reference, secret)?;
-        let profile = self
-            .data
-            .mosh_profiles
-            .iter_mut()
-            .find(|profile| profile.id == id)
-            .expect("Mosh profile checked above");
-        profile.proxy_chain[hop_index].auth = next_auth;
-        profile.updated_at = Utc::now();
-        self.save()?;
-        Ok(true)
+            let Some(profile) = self.get_mosh_profile(id) else {
+                return Ok(false);
+            };
+            let auth = profile
+                .proxy_chain
+                .get(hop_index)
+                .map(|hop| hop.auth.clone())
+                .ok_or_else(|| anyhow::anyhow!("Mosh proxy hop credential slot not found"))?;
+            let (next_auth, reference) = auth_with_protected_credential(auth)?;
+            self.keychain.store(&reference, secret)?;
+            let profile = self
+                .data
+                .mosh_profiles
+                .iter_mut()
+                .find(|profile| profile.id == id)
+                .expect("Mosh profile checked above");
+            profile.proxy_chain[hop_index].auth = next_auth;
+            profile.updated_at = Utc::now();
+            self.save()?;
+            Ok(true)
         })();
         audit.changed(&audit_result);
         audit_result
@@ -1675,11 +1721,7 @@ impl ConnectionStore {
         audit_result
     }
 
-    pub fn forget_mosh_proxy_hop_credential(
-        &mut self,
-        id: &str,
-        hop_index: usize,
-    ) -> Result<bool> {
+    pub fn forget_mosh_proxy_hop_credential(&mut self, id: &str, hop_index: usize) -> Result<bool> {
         let mut audit = oxide_audit::AuditOperation::begin(
             oxide_audit::AuditCategory::Configuration,
             "credential_delete",
@@ -1688,31 +1730,32 @@ impl ConnectionStore {
         );
         audit.summary(&format!("mosh_proxy_hop:index={hop_index}"));
         let audit_result = (|| {
-        let previous_credentials = self.stored_credential_targets(&CredentialOwner::Mosh(id.to_string()));
-        let Some(profile) = self.get_mosh_profile(id) else {
-            return Ok(false);
-        };
-        let auth = profile
-            .proxy_chain
-            .get(hop_index)
-            .map(|hop| &hop.auth)
-            .ok_or_else(|| anyhow::anyhow!("Mosh proxy hop credential slot not found"))?;
-        let (next_auth, reference) = auth_without_protected_credential(auth);
-        let Some(reference) = reference else {
-            return Ok(false);
-        };
-        let profile = self
-            .data
-            .mosh_profiles
-            .iter_mut()
-            .find(|profile| profile.id == id)
-            .expect("Mosh profile checked above");
-        profile.proxy_chain[hop_index].auth = next_auth;
-        profile.updated_at = Utc::now();
-        self.record_cleared_credentials(previous_credentials);
-        self.save()?;
-        self.delete_or_queue_connection_keychain_entry(reference)?;
-        Ok(true)
+            let previous_credentials =
+                self.stored_credential_targets(&CredentialOwner::Mosh(id.to_string()));
+            let Some(profile) = self.get_mosh_profile(id) else {
+                return Ok(false);
+            };
+            let auth = profile
+                .proxy_chain
+                .get(hop_index)
+                .map(|hop| &hop.auth)
+                .ok_or_else(|| anyhow::anyhow!("Mosh proxy hop credential slot not found"))?;
+            let (next_auth, reference) = auth_without_protected_credential(auth);
+            let Some(reference) = reference else {
+                return Ok(false);
+            };
+            let profile = self
+                .data
+                .mosh_profiles
+                .iter_mut()
+                .find(|profile| profile.id == id)
+                .expect("Mosh profile checked above");
+            profile.proxy_chain[hop_index].auth = next_auth;
+            profile.updated_at = Utc::now();
+            self.record_cleared_credentials(previous_credentials);
+            self.save()?;
+            self.delete_or_queue_connection_keychain_entry(reference)?;
+            Ok(true)
         })();
         audit.changed(&audit_result);
         audit_result
@@ -2018,7 +2061,9 @@ impl ConnectionStore {
         &mut self,
         request: SaveRemoteDesktopProfileRequest,
     ) -> Result<RemoteDesktopProfile> {
-        let before = request.id.as_deref()
+        let before = request
+            .id
+            .as_deref()
             .and_then(|id| self.get_remote_desktop_profile(id))
             .map(|profile| (profile.session_options, profile.read_only));
         let mut audit = oxide_audit::AuditOperation::begin(
@@ -2141,10 +2186,26 @@ impl ConnectionStore {
         if let Ok(profile) = &audit_result {
             let mut changes = Vec::new();
             for (field, old, new) in [
-                ("clipboard.text", before.map(|(options, _)| options.clipboard.text), profile.session_options.clipboard.text),
-                ("clipboard.images", before.map(|(options, _)| options.clipboard.images), profile.session_options.clipboard.images),
-                ("clipboard.files", before.map(|(options, _)| options.clipboard.files), profile.session_options.clipboard.files),
-                ("read_only", before.map(|(_, read_only)| read_only), profile.read_only),
+                (
+                    "clipboard.text",
+                    before.map(|(options, _)| options.clipboard.text),
+                    profile.session_options.clipboard.text,
+                ),
+                (
+                    "clipboard.images",
+                    before.map(|(options, _)| options.clipboard.images),
+                    profile.session_options.clipboard.images,
+                ),
+                (
+                    "clipboard.files",
+                    before.map(|(options, _)| options.clipboard.files),
+                    profile.session_options.clipboard.files,
+                ),
+                (
+                    "read_only",
+                    before.map(|(_, read_only)| read_only),
+                    profile.read_only,
+                ),
             ] {
                 if old != Some(new) {
                     changes.push(match old {
@@ -2224,26 +2285,30 @@ impl ConnectionStore {
             Some("remote_desktop_credential"),
         );
         let audit_result = (|| {
-        let existing_ref = self
-            .get_remote_desktop_profile(profile_id)
-            .ok_or_else(|| anyhow::anyhow!("Remote desktop profile not found"))?
-            .credential_ref
-            .clone();
-        audit.summary(if existing_ref.is_some() { "credential:updated" } else { "credential:created" });
-        let reference =
-            existing_ref.unwrap_or_else(|| remote_desktop_credential_ref(profile_id));
-        // Persist the secret before publishing its reference in profile metadata.
-        self.keychain.store(&reference, credential)?;
-        let profile = self
-            .data
-            .remote_desktop_profiles
-            .iter_mut()
-            .find(|profile| profile.id == profile_id)
-            .expect("remote desktop profile checked above");
-        profile.credential_ref = Some(reference.clone());
-        profile.updated_at = Utc::now();
-        self.save()?;
-        Ok(reference)
+            let existing_ref = self
+                .get_remote_desktop_profile(profile_id)
+                .ok_or_else(|| anyhow::anyhow!("Remote desktop profile not found"))?
+                .credential_ref
+                .clone();
+            audit.summary(if existing_ref.is_some() {
+                "credential:updated"
+            } else {
+                "credential:created"
+            });
+            let reference =
+                existing_ref.unwrap_or_else(|| remote_desktop_credential_ref(profile_id));
+            // Persist the secret before publishing its reference in profile metadata.
+            self.keychain.store(&reference, credential)?;
+            let profile = self
+                .data
+                .remote_desktop_profiles
+                .iter_mut()
+                .find(|profile| profile.id == profile_id)
+                .expect("remote desktop profile checked above");
+            profile.credential_ref = Some(reference.clone());
+            profile.updated_at = Utc::now();
+            self.save()?;
+            Ok(reference)
         })();
         audit.result(&audit_result);
         audit_result
@@ -2267,23 +2332,24 @@ impl ConnectionStore {
             Some("remote_desktop_credential"),
         );
         let audit_result = (|| {
-        let previous_credentials = self.stored_credential_targets(&CredentialOwner::RemoteDesktop(profile_id.to_string()));
-        let Some(profile) = self
-            .data
-            .remote_desktop_profiles
-            .iter_mut()
-            .find(|profile| profile.id == profile_id)
-        else {
-            return Ok(false);
-        };
-        let Some(reference) = profile.credential_ref.take() else {
-            return Ok(false);
-        };
-        profile.updated_at = Utc::now();
-        self.record_cleared_credentials(previous_credentials);
-        self.save()?;
-        self.delete_or_queue_connection_keychain_entry(reference)?;
-        Ok(true)
+            let previous_credentials = self
+                .stored_credential_targets(&CredentialOwner::RemoteDesktop(profile_id.to_string()));
+            let Some(profile) = self
+                .data
+                .remote_desktop_profiles
+                .iter_mut()
+                .find(|profile| profile.id == profile_id)
+            else {
+                return Ok(false);
+            };
+            let Some(reference) = profile.credential_ref.take() else {
+                return Ok(false);
+            };
+            profile.updated_at = Utc::now();
+            self.record_cleared_credentials(previous_credentials);
+            self.save()?;
+            self.delete_or_queue_connection_keychain_entry(reference)?;
+            Ok(true)
         })();
         audit.changed(&audit_result);
         audit_result
@@ -2311,28 +2377,28 @@ impl ConnectionStore {
             Some("ssh_connection"),
         );
         let audit_result = (|| {
-        connection.id = Uuid::new_v4().to_string();
-        connection.version = CONFIG_VERSION;
-        connection.created_at = Utc::now();
-        connection.updated_at = Some(Utc::now());
-        connection.auth = self.materialize_auth(connection.auth, None)?;
-        connection.proxy_chain = self.materialize_proxy_chain(connection.proxy_chain)?;
-        connection.upstream_proxy =
-            self.materialize_upstream_proxy_policy(connection.upstream_proxy, None)?;
-        connection.proxy_command = self
-            .materialize_proxy_command_with_runtime_secret(connection.proxy_command, None)?
-            .0;
-        // Third-party imports do not carry privilege helper secrets. The user
-        // must explicitly create them after import.
-        connection.privilege_credentials.clear();
-        if let Some(group) = connection.group.clone() {
-            self.ensure_group(group)?;
-        }
-        let id = connection.id.clone();
-        self.data.connections.push(connection);
-        self.normalize();
-        self.save()?;
-        Ok(self.get(&id).map(ConnectionInfo::from).expect("imported"))
+            connection.id = Uuid::new_v4().to_string();
+            connection.version = CONFIG_VERSION;
+            connection.created_at = Utc::now();
+            connection.updated_at = Some(Utc::now());
+            connection.auth = self.materialize_auth(connection.auth, None)?;
+            connection.proxy_chain = self.materialize_proxy_chain(connection.proxy_chain)?;
+            connection.upstream_proxy =
+                self.materialize_upstream_proxy_policy(connection.upstream_proxy, None)?;
+            connection.proxy_command = self
+                .materialize_proxy_command_with_runtime_secret(connection.proxy_command, None)?
+                .0;
+            // Third-party imports do not carry privilege helper secrets. The user
+            // must explicitly create them after import.
+            connection.privilege_credentials.clear();
+            if let Some(group) = connection.group.clone() {
+                self.ensure_group(group)?;
+            }
+            let id = connection.id.clone();
+            self.data.connections.push(connection);
+            self.normalize();
+            self.save()?;
+            Ok(self.get(&id).map(ConnectionInfo::from).expect("imported"))
         })();
         audit.result(&audit_result);
         audit_result
@@ -2349,78 +2415,78 @@ impl ConnectionStore {
             Some("ssh_connection"),
         );
         let audit_result = (|| {
-        let group = normalize_optional_group_name(connection.group.as_deref())?;
-        let now = Utc::now();
-        if connection.id.trim().is_empty() {
-            connection.id = Uuid::new_v4().to_string();
-        }
-        let id = connection.id.clone();
-        let existing = self.get(&id).cloned();
-        let old_keychain_ids = existing
-            .as_ref()
-            .map(collect_connection_keychain_ids)
-            .unwrap_or_default();
-        let existing_auth = existing.as_ref().map(|conn| conn.auth.clone());
+            let group = normalize_optional_group_name(connection.group.as_deref())?;
+            let now = Utc::now();
+            if connection.id.trim().is_empty() {
+                connection.id = Uuid::new_v4().to_string();
+            }
+            let id = connection.id.clone();
+            let existing = self.get(&id).cloned();
+            let old_keychain_ids = existing
+                .as_ref()
+                .map(collect_connection_keychain_ids)
+                .unwrap_or_default();
+            let existing_auth = existing.as_ref().map(|conn| conn.auth.clone());
 
-        connection.version = CONFIG_VERSION;
-        connection.name = non_empty(connection.name.trim(), "Connection name")?.to_string();
-        connection.group = group.clone();
-        connection.host = non_empty(connection.host.trim(), "Host")?.to_string();
-        connection.port = connection.port.max(1);
-        connection.username = non_empty(connection.username.trim(), "Username")?.to_string();
-        connection.auth = self.materialize_auth(connection.auth, existing_auth.as_ref())?;
-        connection.proxy_chain = self.materialize_proxy_chain(connection.proxy_chain)?;
-        connection.upstream_proxy = self.materialize_upstream_proxy_policy(
-            connection.upstream_proxy,
-            existing.as_ref().map(|conn| &conn.upstream_proxy),
-        )?;
-        connection.proxy_command = self
-            .materialize_proxy_command_with_runtime_secret(
-                connection.proxy_command,
-                existing
-                    .as_ref()
-                    .and_then(|connection| connection.proxy_command.as_ref()),
-            )?
-            .0;
-        if let Some(existing) = existing.as_ref() {
-            connection.created_at = existing.created_at;
-            connection.last_used_at = existing.last_used_at;
-            connection.privilege_credentials = existing.privilege_credentials.clone();
-        } else if connection.created_at.timestamp() <= 0 {
-            connection.created_at = now;
-        }
-        connection.updated_at = Some(now);
+            connection.version = CONFIG_VERSION;
+            connection.name = non_empty(connection.name.trim(), "Connection name")?.to_string();
+            connection.group = group.clone();
+            connection.host = non_empty(connection.host.trim(), "Host")?.to_string();
+            connection.port = connection.port.max(1);
+            connection.username = non_empty(connection.username.trim(), "Username")?.to_string();
+            connection.auth = self.materialize_auth(connection.auth, existing_auth.as_ref())?;
+            connection.proxy_chain = self.materialize_proxy_chain(connection.proxy_chain)?;
+            connection.upstream_proxy = self.materialize_upstream_proxy_policy(
+                connection.upstream_proxy,
+                existing.as_ref().map(|conn| &conn.upstream_proxy),
+            )?;
+            connection.proxy_command = self
+                .materialize_proxy_command_with_runtime_secret(
+                    connection.proxy_command,
+                    existing
+                        .as_ref()
+                        .and_then(|connection| connection.proxy_command.as_ref()),
+                )?
+                .0;
+            if let Some(existing) = existing.as_ref() {
+                connection.created_at = existing.created_at;
+                connection.last_used_at = existing.last_used_at;
+                connection.privilege_credentials = existing.privilege_credentials.clone();
+            } else if connection.created_at.timestamp() <= 0 {
+                connection.created_at = now;
+            }
+            connection.updated_at = Some(now);
 
-        let next_keychain_ids = collect_keychain_ids_for_parts(
-            &connection.auth,
-            &connection.proxy_chain,
-            &connection.upstream_proxy,
-            connection.proxy_command.as_ref(),
-        );
-        if let Some(index) = self
-            .data
-            .connections
-            .iter()
-            .position(|candidate| candidate.id == id)
-        {
-            self.data.connections[index] = connection;
-        } else {
-            self.data.connections.push(connection);
-        }
-        if let Some(group) = group {
-            self.ensure_group(group)?;
-        }
-        self.normalize();
-        self.save()?;
-        for keychain_id in old_keychain_ids
-            .iter()
-            .filter(|keychain_id| !next_keychain_ids.contains(*keychain_id))
-        {
-            let _ = self.keychain.delete(keychain_id);
-        }
-        Ok(ConnectionInfo::from(
-            self.get(&id).expect("connection imported"),
-        ))
+            let next_keychain_ids = collect_keychain_ids_for_parts(
+                &connection.auth,
+                &connection.proxy_chain,
+                &connection.upstream_proxy,
+                connection.proxy_command.as_ref(),
+            );
+            if let Some(index) = self
+                .data
+                .connections
+                .iter()
+                .position(|candidate| candidate.id == id)
+            {
+                self.data.connections[index] = connection;
+            } else {
+                self.data.connections.push(connection);
+            }
+            if let Some(group) = group {
+                self.ensure_group(group)?;
+            }
+            self.normalize();
+            self.save()?;
+            for keychain_id in old_keychain_ids
+                .iter()
+                .filter(|keychain_id| !next_keychain_ids.contains(*keychain_id))
+            {
+                let _ = self.keychain.delete(keychain_id);
+            }
+            Ok(ConnectionInfo::from(
+                self.get(&id).expect("connection imported"),
+            ))
         })();
         audit.result(&audit_result);
         audit_result
@@ -2445,110 +2511,119 @@ impl ConnectionStore {
             Some("connection_bundle"),
         );
         let audit_result = (|| {
-        let mut connections = connections;
-        for connection in &mut connections {
-            if connection.id.trim().is_empty() {
-                // Assign import identities before computing rollback targets so
-                // staged secrets and their snapshots always use the same id.
-                connection.id = Uuid::new_v4().to_string();
+            let mut connections = connections;
+            for connection in &mut connections {
+                if connection.id.trim().is_empty() {
+                    // Assign import identities before computing rollback targets so
+                    // staged secrets and their snapshots always use the same id.
+                    connection.id = Uuid::new_v4().to_string();
+                }
             }
-        }
-        let original_data = self.data.clone();
-        let original_keychain = self.snapshot_keychain_entries(&original_data)?;
-        let imported_privilege_keychain_ids =
-            collect_imported_privilege_keychain_ids(&connections);
-        let existing_privilege_keychain_ids = original_data
-            .connections
-            .iter()
-            .flat_map(collect_privilege_keychain_ids)
-            .chain(
-                original_data
-                    .local_privilege_credentials
-                    .iter()
-                            .chain(&original_data.ssh_common_privilege_credentials)
-                    .filter_map(|credential| credential.keychain_id.clone()),
-            )
-            .collect::<HashSet<_>>();
-        let overwritten_privilege_keychain_ids = imported_privilege_keychain_ids
-            .intersection(&existing_privilege_keychain_ids)
-            .cloned()
-            .collect::<HashSet<_>>();
-        let original_privilege_keychain =
-            self.snapshot_privilege_keychain_entries(&overwritten_privilege_keychain_ids)?;
-        let original_managed_keychain = self.snapshot_managed_keychain_entries(&original_data)?;
-        let mut touched_keychain_ids = HashSet::new();
-        let mut touched_privilege_keychain_ids = HashSet::new();
-        let mut touched_managed_secret_ids = HashSet::new();
-        let mut created_managed_secret_config_key = false;
-        let mut stale_old_keychain_ids = HashSet::new();
-        let mut imported_ids = Vec::new();
+            let original_data = self.data.clone();
+            let original_keychain = self.snapshot_keychain_entries(&original_data)?;
+            let imported_privilege_keychain_ids =
+                collect_imported_privilege_keychain_ids(&connections);
+            let existing_privilege_keychain_ids = original_data
+                .connections
+                .iter()
+                .flat_map(collect_privilege_keychain_ids)
+                .chain(
+                    original_data
+                        .local_privilege_credentials
+                        .iter()
+                        .chain(&original_data.ssh_common_privilege_credentials)
+                        .filter_map(|credential| credential.keychain_id.clone()),
+                )
+                .collect::<HashSet<_>>();
+            let overwritten_privilege_keychain_ids = imported_privilege_keychain_ids
+                .intersection(&existing_privilege_keychain_ids)
+                .cloned()
+                .collect::<HashSet<_>>();
+            let original_privilege_keychain =
+                self.snapshot_privilege_keychain_entries(&overwritten_privilege_keychain_ids)?;
+            let original_managed_keychain =
+                self.snapshot_managed_keychain_entries(&original_data)?;
+            let mut touched_keychain_ids = HashSet::new();
+            let mut touched_privilege_keychain_ids = HashSet::new();
+            let mut touched_managed_secret_ids = HashSet::new();
+            let mut created_managed_secret_config_key = false;
+            let mut stale_old_keychain_ids = HashSet::new();
+            let mut imported_ids = Vec::new();
 
-        let result = (|| {
-            for managed_key in managed_keys {
-                touched_managed_secret_ids.insert(managed_key.key.secret_id.clone());
-                let secret_write =
-                    self.store_managed_ssh_key_secret(&managed_key.key.secret_id, &managed_key.secret)?;
-                created_managed_secret_config_key |= secret_write.created_config_key;
-                self.data
-                    .managed_ssh_keys
-                    .retain(|candidate| candidate.id != managed_key.key.id);
-                self.data.managed_ssh_keys.push(managed_key.key);
-            }
-            for connection in connections {
-                let staged = self.stage_imported_connection(connection)?;
-                touched_keychain_ids.extend(staged.touched_keychain_ids);
-                touched_privilege_keychain_ids.extend(staged.touched_privilege_keychain_ids);
-                stale_old_keychain_ids.extend(staged.stale_old_keychain_ids);
-                imported_ids.push(staged.id);
-            }
-            self.normalize();
-            self.save()?;
-            Ok::<(), anyhow::Error>(())
-        })();
+            let result = (|| {
+                for managed_key in managed_keys {
+                    touched_managed_secret_ids.insert(managed_key.key.secret_id.clone());
+                    let secret_write = self.store_managed_ssh_key_secret(
+                        &managed_key.key.secret_id,
+                        &managed_key.secret,
+                    )?;
+                    created_managed_secret_config_key |= secret_write.created_config_key;
+                    self.data
+                        .managed_ssh_keys
+                        .retain(|candidate| candidate.id != managed_key.key.id);
+                    self.data.managed_ssh_keys.push(managed_key.key);
+                }
+                for connection in connections {
+                    let staged = self.stage_imported_connection(connection)?;
+                    touched_keychain_ids.extend(staged.touched_keychain_ids);
+                    touched_privilege_keychain_ids.extend(staged.touched_privilege_keychain_ids);
+                    stale_old_keychain_ids.extend(staged.stale_old_keychain_ids);
+                    imported_ids.push(staged.id);
+                }
+                self.normalize();
+                self.save()?;
+                Ok::<(), anyhow::Error>(())
+            })();
 
-        if let Err(error) = result {
-            self.data = original_data;
-            let mut rollback_errors = Vec::new();
-            if let Err(rollback_error) = self.save() {
-                rollback_errors.push(format!("connection file restore failed: {rollback_error:#}"));
+            if let Err(error) = result {
+                self.data = original_data;
+                let mut rollback_errors = Vec::new();
+                if let Err(rollback_error) = self.save() {
+                    rollback_errors.push(format!(
+                        "connection file restore failed: {rollback_error:#}"
+                    ));
+                }
+                if let Err(rollback_error) =
+                    self.rollback_keychain_entries(&touched_keychain_ids, &original_keychain)
+                {
+                    rollback_errors.push(format!(
+                        "connection credential restore failed: {rollback_error:#}"
+                    ));
+                }
+                if let Err(rollback_error) = self.rollback_privilege_keychain_entries(
+                    &touched_privilege_keychain_ids,
+                    &original_privilege_keychain,
+                ) {
+                    rollback_errors.push(format!(
+                        "privilege credential restore failed: {rollback_error:#}"
+                    ));
+                }
+                if let Err(rollback_error) = self.rollback_managed_keychain_entries(
+                    &touched_managed_secret_ids,
+                    &original_managed_keychain,
+                ) {
+                    rollback_errors.push(format!("managed key restore failed: {rollback_error:#}"));
+                }
+                if created_managed_secret_config_key {
+                    rollback_created_config_key();
+                }
+                if rollback_errors.is_empty() {
+                    return Err(error);
+                }
+                return Err(anyhow::anyhow!(
+                    "connection import failed: {error:#}; rollback also failed: {}",
+                    rollback_errors.join("; ")
+                ));
             }
-            if let Err(rollback_error) =
-                self.rollback_keychain_entries(&touched_keychain_ids, &original_keychain)
-            {
-                rollback_errors.push(format!("connection credential restore failed: {rollback_error:#}"));
-            }
-            if let Err(rollback_error) = self.rollback_privilege_keychain_entries(
-                &touched_privilege_keychain_ids,
-                &original_privilege_keychain,
-            ) {
-                rollback_errors.push(format!("privilege credential restore failed: {rollback_error:#}"));
-            }
-            if let Err(rollback_error) = self.rollback_managed_keychain_entries(
-                &touched_managed_secret_ids,
-                &original_managed_keychain,
-            ) {
-                rollback_errors.push(format!("managed key restore failed: {rollback_error:#}"));
-            }
-            if created_managed_secret_config_key {
-                rollback_created_config_key();
-            }
-            if rollback_errors.is_empty() {
-                return Err(error);
-            }
-            return Err(anyhow::anyhow!(
-                "connection import failed: {error:#}; rollback also failed: {}",
-                rollback_errors.join("; ")
-            ));
-        }
 
-        for keychain_id in &stale_old_keychain_ids {
-            let _ = self.keychain.delete(keychain_id);
-        }
+            for keychain_id in &stale_old_keychain_ids {
+                let _ = self.keychain.delete(keychain_id);
+            }
 
-        Ok(imported_ids
-            .iter()
-            .filter_map(|id| self.get(id).map(ConnectionInfo::from))
-            .collect())
+            Ok(imported_ids
+                .iter()
+                .filter_map(|id| self.get(id).map(ConnectionInfo::from))
+                .collect())
         })();
         audit.result(&audit_result);
         audit_result
@@ -2720,21 +2795,21 @@ impl ConnectionStore {
             Some("privilege_credential"),
         );
         let audit_result = (|| {
-        let credential = self
-            .privilege_credentials_for_scope(connection_id)?
-            .iter()
-            .find(|credential| credential.id == credential_id)
-            .ok_or_else(|| anyhow::anyhow!("Privilege credential not found"))?;
-        if !credential.enabled {
-            bail!("Privilege credential is disabled");
-        }
-        let keychain_id = credential
-            .keychain_id
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Privilege credential secret is not saved"))?;
-        // This read method is only for the UI-confirmed fill path. Callers must
-        // immediately write to PTY and drop the returned SecretString.
-        self.privilege_keychain.get(keychain_id)
+            let credential = self
+                .privilege_credentials_for_scope(connection_id)?
+                .iter()
+                .find(|credential| credential.id == credential_id)
+                .ok_or_else(|| anyhow::anyhow!("Privilege credential not found"))?;
+            if !credential.enabled {
+                bail!("Privilege credential is disabled");
+            }
+            let keychain_id = credential
+                .keychain_id
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("Privilege credential secret is not saved"))?;
+            // This read method is only for the UI-confirmed fill path. Callers must
+            // immediately write to PTY and drop the returned SecretString.
+            self.privilege_keychain.get(keychain_id)
         })();
         audit.result(&audit_result);
         audit_result
@@ -2750,7 +2825,7 @@ impl ConnectionStore {
             // keychain-only secret boundary as SSH privilege credentials.
             return Ok(&self.data.local_privilege_credentials);
         }
-                if connection_id == SSH_COMMON_PRIVILEGE_SCOPE_ID {
+        if connection_id == SSH_COMMON_PRIVILEGE_SCOPE_ID {
             return Ok(&self.data.ssh_common_privilege_credentials);
         }
         self.get(connection_id)
@@ -2768,7 +2843,7 @@ impl ConnectionStore {
             // keychain service.
             return Ok(&mut self.data.local_privilege_credentials);
         }
-                if connection_id == SSH_COMMON_PRIVILEGE_SCOPE_ID {
+        if connection_id == SSH_COMMON_PRIVILEGE_SCOPE_ID {
             return Ok(&mut self.data.ssh_common_privilege_credentials);
         }
         self.data
@@ -2799,7 +2874,10 @@ impl ConnectionStore {
     }
 
     /// Distinguishes a missing credential from a locked or unavailable secret store.
-    pub fn get_saved_auth_password_optional(&self, auth: &SavedAuth) -> Result<Option<SecretString>> {
+    pub fn get_saved_auth_password_optional(
+        &self,
+        auth: &SavedAuth,
+    ) -> Result<Option<SecretString>> {
         let auth = auth.conventional_fallback();
         if auth.uses_empty_password() {
             return Ok(Some(SecretString::default()));
@@ -3007,7 +3085,10 @@ impl ConnectionStore {
             .context("failed to load ProxyCommand from protected storage")
     }
 
-    pub fn save_global_upstream_proxy_password(&mut self, password: &SecretString) -> Result<String> {
+    pub fn save_global_upstream_proxy_password(
+        &mut self,
+        password: &SecretString,
+    ) -> Result<String> {
         let audit = oxide_audit::AuditOperation::begin(
             oxide_audit::AuditCategory::Configuration,
             "credential_set",
@@ -3015,14 +3096,17 @@ impl ConnectionStore {
             Some("global_proxy_credential"),
         );
         let audit_result = (|| {
-        // Reuse this device's current slot, including one allocated by cloud restore.
-        let reference = self.data.synced_global_proxy_reference.clone()
-            .unwrap_or_else(|| GLOBAL_UPSTREAM_PROXY_PASSWORD_KEYCHAIN_ID.to_string());
-        self.keychain.store(&reference, password)?;
-        self.data.global_proxy_credential_revision = Uuid::new_v4().to_string();
-        self.data.global_proxy_credential_cleared = false;
-        self.save()?;
-        Ok(reference)
+            // Reuse this device's current slot, including one allocated by cloud restore.
+            let reference = self
+                .data
+                .synced_global_proxy_reference
+                .clone()
+                .unwrap_or_else(|| GLOBAL_UPSTREAM_PROXY_PASSWORD_KEYCHAIN_ID.to_string());
+            self.keychain.store(&reference, password)?;
+            self.data.global_proxy_credential_revision = Uuid::new_v4().to_string();
+            self.data.global_proxy_credential_cleared = false;
+            self.save()?;
+            Ok(reference)
         })();
         audit.result(&audit_result);
         audit_result
@@ -3036,13 +3120,14 @@ impl ConnectionStore {
             Some("global_proxy_credential"),
         );
         let audit_result = (|| {
-        self.keychain.delete(GLOBAL_UPSTREAM_PROXY_PASSWORD_KEYCHAIN_ID)?;
-        if let Some(reference) = self.data.synced_global_proxy_reference.take() {
-            self.keychain.delete(&reference)?;
-        }
-        self.data.global_proxy_credential_revision = Uuid::new_v4().to_string();
-        self.data.global_proxy_credential_cleared = true;
-        self.save()
+            self.keychain
+                .delete(GLOBAL_UPSTREAM_PROXY_PASSWORD_KEYCHAIN_ID)?;
+            if let Some(reference) = self.data.synced_global_proxy_reference.take() {
+                self.keychain.delete(&reference)?;
+            }
+            self.data.global_proxy_credential_revision = Uuid::new_v4().to_string();
+            self.data.global_proxy_credential_cleared = true;
+            self.save()
         })();
         audit.result(&audit_result);
         audit_result
@@ -3050,7 +3135,11 @@ impl ConnectionStore {
 
     pub fn get_global_upstream_proxy_password(&self, keychain_id: &str) -> Result<SecretString> {
         if keychain_id != GLOBAL_UPSTREAM_PROXY_PASSWORD_KEYCHAIN_ID
-            && keychain_id.strip_prefix("oxide_global_proxy_").and_then(|id| Uuid::parse_str(id).ok()).is_none() {
+            && keychain_id
+                .strip_prefix("oxide_global_proxy_")
+                .and_then(|id| Uuid::parse_str(id).ok())
+                .is_none()
+        {
             bail!("Invalid global upstream proxy keychain id");
         }
         self.keychain.get(keychain_id)
@@ -3210,7 +3299,8 @@ impl ConnectionStore {
             &private_key,
             &managed_key.fingerprint,
             managed_key.requires_passphrase,
-        )? else {
+        )?
+        else {
             // Secret material leaves the managed backend only at the SSH auth boundary.
             // Callers must decode/use it immediately and must not persist this value.
             return Ok(private_key);
@@ -3482,7 +3572,10 @@ impl ConnectionStore {
         }
     }
 
-    fn materialize_proxy_chain(&self, proxy_chain: Vec<SavedProxyHop>) -> Result<Vec<SavedProxyHop>> {
+    fn materialize_proxy_chain(
+        &self,
+        proxy_chain: Vec<SavedProxyHop>,
+    ) -> Result<Vec<SavedProxyHop>> {
         self.materialize_proxy_chain_with_runtime_secrets(proxy_chain)
             .map(|(proxy_chain, _secrets)| proxy_chain)
     }
@@ -3529,9 +3622,7 @@ impl ConnectionStore {
         existing_policy: Option<&SavedUpstreamProxyPolicy>,
     ) -> Result<(SavedUpstreamProxyPolicy, Option<SecretString>)> {
         match policy {
-            SavedUpstreamProxyPolicy::UseGlobal => {
-                Ok((SavedUpstreamProxyPolicy::UseGlobal, None))
-            }
+            SavedUpstreamProxyPolicy::UseGlobal => Ok((SavedUpstreamProxyPolicy::UseGlobal, None)),
             SavedUpstreamProxyPolicy::Direct => Ok((SavedUpstreamProxyPolicy::Direct, None)),
             SavedUpstreamProxyPolicy::Custom { proxy } => {
                 let (auth, runtime_secret) = self
@@ -3765,8 +3856,8 @@ impl ConnectionStore {
         } else if connection.created_at.timestamp() <= 0 {
             connection.created_at = now;
         }
-        let (privilege_credentials, touched_privilege_keychain_ids) =
-            self.materialize_privilege_credentials(&connection.id, connection.privilege_credentials)?;
+        let (privilege_credentials, touched_privilege_keychain_ids) = self
+            .materialize_privilege_credentials(&connection.id, connection.privilege_credentials)?;
         connection.privilege_credentials = privilege_credentials;
         connection.updated_at = Some(now);
 
@@ -3868,12 +3959,8 @@ impl ConnectionStore {
         let mut errors = Vec::new();
         for keychain_id in touched_keychain_ids {
             let result = match original_keychain.get(keychain_id) {
-                Some(Some(secret)) => {
-                    self.keychain.store(keychain_id, secret)
-                }
-                Some(None) | None => {
-                    self.keychain.delete(keychain_id)
-                }
+                Some(Some(secret)) => self.keychain.store(keychain_id, secret),
+                Some(None) | None => self.keychain.delete(keychain_id),
             };
             if let Err(error) = result {
                 errors.push(error.to_string());
@@ -3890,12 +3977,8 @@ impl ConnectionStore {
         let mut errors = Vec::new();
         for keychain_id in touched_keychain_ids {
             let result = match original_keychain.get(keychain_id) {
-                Some(Some(secret)) => {
-                    self.privilege_keychain.store(keychain_id, secret)
-                }
-                Some(None) | None => {
-                    self.privilege_keychain.delete(keychain_id)
-                }
+                Some(Some(secret)) => self.privilege_keychain.store(keychain_id, secret),
+                Some(None) | None => self.privilege_keychain.delete(keychain_id),
             };
             if let Err(error) = result {
                 errors.push(error.to_string());
@@ -3912,12 +3995,10 @@ impl ConnectionStore {
         let mut errors = Vec::new();
         for secret_id in touched_secret_ids {
             let result = match original_keychain.get(secret_id) {
-                Some(Some(secret)) => {
-                    self.store_managed_ssh_key_secret(secret_id, secret).map(|_| ())
-                }
-                Some(None) | None => {
-                    self.delete_managed_ssh_key_secret(secret_id)
-                }
+                Some(Some(secret)) => self
+                    .store_managed_ssh_key_secret(secret_id, secret)
+                    .map(|_| ()),
+                Some(None) | None => self.delete_managed_ssh_key_secret(secret_id),
             };
             if let Err(error) = result {
                 errors.push(error.to_string());
@@ -4043,13 +4124,16 @@ impl ConnectionStore {
         self.data.connection_tombstones =
             active_connection_tombstones(&self.data.connection_tombstones);
         self.data.ftp_tombstones = active_connection_tombstones(&self.data.ftp_tombstones);
-        self.data.local_terminal_tombstones = active_connection_tombstones(&self.data.local_terminal_tombstones);
-        self.data
-            .recent
-            .retain(|recent_id| self.data.connections.iter().any(|conn| &conn.id == recent_id));
+        self.data.local_terminal_tombstones =
+            active_connection_tombstones(&self.data.local_terminal_tombstones);
+        self.data.recent.retain(|recent_id| {
+            self.data
+                .connections
+                .iter()
+                .any(|conn| &conn.id == recent_id)
+        });
         self.data.recent.dedup();
-        self.data
-            .groups.sort_by_key(|left| left.to_lowercase());
+        self.data.groups.sort_by_key(|left| left.to_lowercase());
         self.data.groups.dedup();
         let implicit_groups = self
             .data
@@ -4067,7 +4151,12 @@ impl ConnectionStore {
             .serial_profiles
             .iter()
             .filter_map(|profile| profile.group.clone())
-            .chain(self.data.ftp_profiles.iter().filter_map(|profile|profile.group.clone()))
+            .chain(
+                self.data
+                    .ftp_profiles
+                    .iter()
+                    .filter_map(|profile| profile.group.clone()),
+            )
             .chain(
                 self.data
                     .telnet_profiles
@@ -4092,7 +4181,18 @@ impl ConnectionStore {
                     .iter()
                     .filter_map(|profile| profile.group.clone()),
             )
-            .chain(self.data.local_terminal_profiles.iter().filter_map(|profile| profile.group.clone()))
+            .chain(
+                self.data
+                    .local_terminal_profiles
+                    .iter()
+                    .filter_map(|profile| profile.group.clone()),
+            )
+            .chain(
+                self.data
+                    .plugin_profiles
+                    .iter()
+                    .filter_map(|profile| profile.group.clone()),
+            )
             .collect::<Vec<_>>();
         for group in implicit_local_groups {
             if !self.data.groups.contains(&group) {
@@ -4109,7 +4209,9 @@ impl ConnectionStore {
         self.data
             .connections
             .sort_by_key(|connection| connection.name.to_lowercase());
-        self.data.local_terminal_profiles.sort_by_key(|profile| profile.name.to_lowercase());
+        self.data
+            .local_terminal_profiles
+            .sort_by_key(|profile| profile.name.to_lowercase());
         self.data
             .serial_profiles
             .sort_by_key(|profile| profile.name.to_lowercase());
@@ -4125,7 +4227,9 @@ impl ConnectionStore {
         self.data
             .standalone_sftp_profiles
             .sort_by_key(|profile| profile.name.to_lowercase());
-        self.data.ftp_profiles.sort_by_key(|profile| profile.name.to_lowercase());
+        self.data
+            .ftp_profiles
+            .sort_by_key(|profile| profile.name.to_lowercase());
     }
 
     fn add_connection(&mut self, connection: SavedConnection) {
@@ -4185,10 +4289,7 @@ mod persistence_safety_tests {
     use super::*;
 
     fn persistence_test_path(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "oxide-persistence-{name}-{}.json",
-            Uuid::new_v4()
-        ))
+        std::env::temp_dir().join(format!("oxide-persistence-{name}-{}.json", Uuid::new_v4()))
     }
 
     #[test]
