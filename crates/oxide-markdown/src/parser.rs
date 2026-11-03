@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Translate `pulldown-cmark` events into [`MarkdownDocument`].
 
 use std::collections::HashMap;

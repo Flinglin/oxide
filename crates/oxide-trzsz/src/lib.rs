@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Native trzsz backend state and local-file IO.
 //!
 //! This crate intentionally mirrors the Tauri command backend shape without

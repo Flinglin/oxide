@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Workspace sampling for read-only native plugin host API snapshots.
 //!
 //! `oxide-plugin-host-api` owns the DTO and dispatcher. The GPUI app only

@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 const MAX_FILE_NAME_TEMPLATE_CHARS: usize = 256;
 const MAX_CONTENT_TEMPLATE_CHARS: usize = 1024;
 const MAX_DIRECTORY_TEMPLATE_CHARS: usize = 512;

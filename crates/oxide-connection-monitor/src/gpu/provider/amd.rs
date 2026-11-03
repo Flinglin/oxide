@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! AMD SMI command protocol and provider-neutral JSON parser.
 
 use serde_json::Value;

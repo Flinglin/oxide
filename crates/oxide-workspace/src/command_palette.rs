@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Query parsing and text matching for workspace command palettes.
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

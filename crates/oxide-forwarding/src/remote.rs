@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use dashmap::DashMap;

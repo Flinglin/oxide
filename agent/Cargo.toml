@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-only"
 
-# Keep the remote agent out of the root OxideTerm workspace. It is built as a
+# Keep the remote agent out of the root Oxide workspace. It is built as a
 # standalone release artifact and then copied into app resources.
 [workspace]
 

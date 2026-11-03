@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 pub type EscapeCode = [u8; 3];
 
 pub fn escape_chars_to_codes(escape_chars: &[Vec<String>]) -> Vec<EscapeCode> {

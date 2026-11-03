@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# install-linux-deps — reusable composite action for OxideTerm CI workflows.
+# install-linux-deps — reusable composite action for Oxide CI workflows.
 #
 # Installs every system library that GPUI, GStreamer, and the native Rust
 # crates need on Linux. Callers append extra packages via:

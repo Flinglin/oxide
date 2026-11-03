@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use crate::{WslGraphicsError, WslgStatus};
 
 pub fn detect_wslg(distro: &str) -> Result<WslgStatus, WslGraphicsError> {

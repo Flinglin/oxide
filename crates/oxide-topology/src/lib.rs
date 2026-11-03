@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Pure connection topology model shared by SSH backends and native UI surfaces.
 //!
 //! Tauri treats the topology view as a SessionTree projection, not as a connection

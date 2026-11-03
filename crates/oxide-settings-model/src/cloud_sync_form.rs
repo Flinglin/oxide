@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Cloud sync settings form draft state.
 //!
 //! The GPUI app owns dialogs and async jobs. This module owns the editable form

@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Connection transport identity and default-field transition rules.
 
 pub const SSH_DEFAULT_PORT_TEXT: &str = "22";

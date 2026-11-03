@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
@@ -64,7 +61,7 @@ pub struct NativePluginPermissions {
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 pub struct NativePluginEngines {
-    #[serde(default, rename = "oxideterm")]
+    #[serde(default, rename = "oxide")]
     pub oxide: Option<String>,
 }
 

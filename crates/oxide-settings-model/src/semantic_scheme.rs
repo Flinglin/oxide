@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Mutations and interchange helpers for custom terminal semantic schemes.
 
 use std::time::{SystemTime, UNIX_EPOCH};

@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Regression coverage for native plugin lifecycle, host calls, and adapters.
 
 use std::{

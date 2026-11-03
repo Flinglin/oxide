@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use super::*;
 
 const CLOUD_SYNC_TAB_BAR_WIDTH: f32 = 396.0; // Three equal header tabs leave room for translated labels.

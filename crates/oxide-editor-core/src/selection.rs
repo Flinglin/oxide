@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use crate::{BufferOffset, TextRange};
 
 /// Anchor/head selection. A caret is represented by `anchor == head`.

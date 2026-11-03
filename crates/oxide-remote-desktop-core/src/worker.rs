@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use std::{io::BufReader, sync::mpsc, thread, time::Duration};
 
 use crate::{

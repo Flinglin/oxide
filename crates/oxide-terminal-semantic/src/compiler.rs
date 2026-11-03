@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Structured compiler diagnostics selected only from the originating command mark.
 
 use std::ops::Range;

@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 #[cfg(target_os = "windows")]
 use std::time::Duration;
 #[cfg(target_os = "windows")]

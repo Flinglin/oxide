@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use std::time::Duration;
 
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};

@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Block-level layout estimates for virtualized markdown rendering.
 //!
 //! GPUI's variable-size virtual list needs a stable height before it decides

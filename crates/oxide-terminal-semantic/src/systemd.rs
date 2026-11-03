@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! systemd state and journal fields selected from systemctl and journalctl command scopes.
 
 use crate::{SemanticClass, SemanticLineRole, command::ParsedCommand, scheme::Candidate};

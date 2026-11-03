@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Syntax data layer for oxide's native editor.
 //!
 //! This crate owns tree-sitter parsers and returns byte-range metadata. It does

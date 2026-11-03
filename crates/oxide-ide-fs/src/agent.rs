@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Node-first IDE agent proxy.
 //!
 //! This ports Tauri's `agentService`/`node_agent_*` boundary into the native

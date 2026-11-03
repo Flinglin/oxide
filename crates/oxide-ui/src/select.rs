@@ -106,6 +106,7 @@ pub enum SelectAnchorId {
     SettingsXmodemBlockSize,
     SettingsTerminalTriggerMatchMode,
     SettingsTerminalTriggerAction,
+    SettingsTerminalTriggerClickAction,
     SettingsTerminalTriggerProcessMode,
     SettingsTerminalTriggerQuickCommand,
     SettingsTerminalTriggerTiming,
@@ -222,6 +223,7 @@ impl SelectAnchorId {
                 | Self::SettingsXmodemBlockSize
                 | Self::SettingsTerminalTriggerMatchMode
                 | Self::SettingsTerminalTriggerAction
+                | Self::SettingsTerminalTriggerClickAction
                 | Self::SettingsTerminalTriggerProcessMode
                 | Self::SettingsTerminalTriggerQuickCommand
                 | Self::SettingsTerminalTriggerTiming

@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use std::io;
 
 use oxide_backend_classification::{BackendErrorClass, classify_io_error_kind};

@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Cloud Sync panel view state that is independent from WorkspaceApp.
 
 use oxide_cloud_sync::{

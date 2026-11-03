@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use super::*;
 
 const MAX_TAB_HISTORY: usize = 50;

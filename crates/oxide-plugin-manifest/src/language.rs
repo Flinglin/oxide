@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use serde::{Deserialize, Serialize};
 
 /// File associations are shared by installed manifests and the market catalog.

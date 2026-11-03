@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use serde::{Deserialize, Serialize};
 
 use crate::{X11AuthCommand, X11AuthorityFile, X11Display, X11ForwardingError, X11Result};

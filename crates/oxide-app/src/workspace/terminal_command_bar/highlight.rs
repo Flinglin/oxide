@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use super::*;
 use crate::workspace::root::init::{terminal_highlight_rules, terminal_preference_overrides};
 use gpui::Div;

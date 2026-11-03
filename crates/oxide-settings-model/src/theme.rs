@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Custom theme editor model and serialization helpers.
 //!
 //! Theme parsing and editor color conversion are settings-domain behavior, not

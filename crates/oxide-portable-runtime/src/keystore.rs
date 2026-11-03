@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Encrypted secret storage for portable mode.
 
 use std::{collections::BTreeMap, fmt, fs, path::Path, sync::LazyLock};

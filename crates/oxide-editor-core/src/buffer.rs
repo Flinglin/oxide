@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use std::{cell::RefCell, cmp::Ordering, sync::Arc};
 
 use unicode_segmentation::UnicodeSegmentation;

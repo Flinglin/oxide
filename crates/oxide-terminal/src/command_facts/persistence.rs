@@ -79,7 +79,7 @@ impl TerminalHistoryStore {
         });
         let worker_state = state.clone();
         let worker = std::thread::Builder::new()
-            .name("oxideterm-command-history".into())
+            .name("oxide-command-history".into())
             .spawn(move || run_worker(path, worker_state, rx))?;
         Ok((
             Self {

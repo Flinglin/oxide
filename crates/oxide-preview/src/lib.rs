@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Native preview core shared by SFTP and the local file manager.
 //!
 //! The crate owns preview classification, asset lifetime, and backend-facing

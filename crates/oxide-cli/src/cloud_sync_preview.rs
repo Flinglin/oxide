@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use std::{collections::BTreeSet, fs, io::ErrorKind, path::Path};
 
 use oxide_cloud_sync::{

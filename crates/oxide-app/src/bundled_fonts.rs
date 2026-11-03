@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Bundled terminal font registration for the native GPUI app.
 //!
 //! MapleMono faces are embedded as independent Zstd frames and decompressed

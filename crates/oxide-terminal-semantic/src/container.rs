@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Container table states limited to listing and inspection commands, excluding arbitrary logs.
 
 use crate::{SemanticClass, SemanticLineRole, command::ParsedCommand, scheme::Candidate};

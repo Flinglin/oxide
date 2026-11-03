@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! GPUI adapters for pure settings model types.
 //!
 //! The page model enums live in `oxide-settings-model`; this module keeps
@@ -85,6 +82,7 @@ impl SettingsSelectAnchorExt for SettingsSelect {
             Self::XmodemBlockSize => SelectAnchorId::SettingsXmodemBlockSize,
             Self::TerminalTriggerMatchMode => SelectAnchorId::SettingsTerminalTriggerMatchMode,
             Self::TerminalTriggerAction => SelectAnchorId::SettingsTerminalTriggerAction,
+            Self::TerminalTriggerClickAction => SelectAnchorId::SettingsTerminalTriggerClickAction,
             Self::TerminalTriggerProcessMode => SelectAnchorId::SettingsTerminalTriggerProcessMode,
             Self::TerminalTriggerQuickCommand => {
                 SelectAnchorId::SettingsTerminalTriggerQuickCommand

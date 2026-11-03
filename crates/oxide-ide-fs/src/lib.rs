@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! File-system adapters for the native IDE owner.
 //!
 //! `oxide-ide-core` intentionally stays transport-free. This crate is the

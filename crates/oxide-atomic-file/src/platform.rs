@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 #[cfg(not(windows))]
 use std::fs;
 use std::{io, path::Path};

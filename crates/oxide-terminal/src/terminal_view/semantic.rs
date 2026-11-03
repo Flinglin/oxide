@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use std::ops::Range;
 
 use oxide_terminal_core::{TerminalAttrs, TerminalCommandMark, TerminalSnapshot};
@@ -435,6 +432,8 @@ mod tests {
             start_line: 0,
             command_line: 0,
             command_line_clipped: false,
+            output_start: None,
+            output_end: None,
             end_line: Some(1),
             is_closed: true,
             closed_by: Some(TerminalCommandMarkClosedBy::ShellIntegration),

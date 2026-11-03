@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use serde::{Deserialize, Serialize};
 
 pub const QUICK_COMMANDS_SCHEMA_VERSION: u32 = 2;

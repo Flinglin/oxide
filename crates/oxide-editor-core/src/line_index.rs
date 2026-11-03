@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use crate::TextEdit;
 
 pub(crate) fn compute_line_starts(text: &str) -> Vec<usize> {

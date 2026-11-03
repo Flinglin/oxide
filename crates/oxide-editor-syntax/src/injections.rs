@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use crate::{HighlightSpan, PluginGrammar, SyntaxEdit, SyntaxError, SyntaxSession, SyntaxWork};
 use oxide_editor_core::{BufferOffset, TextRange};
 use std::{cell::Cell, ops::ControlFlow, sync::Arc};

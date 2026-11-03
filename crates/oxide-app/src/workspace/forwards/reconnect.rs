@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use oxide_forwarding::{ForwardRule, ForwardStatus, ForwardType, ForwardingManager};
 use oxide_ssh::{ConnectionConsumer, NodeRouter, PhaseResult, ReconnectForwardRule};
 use std::sync::Arc;

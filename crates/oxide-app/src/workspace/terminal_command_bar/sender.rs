@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 // Hallmark · pre-emit critique: P4 H5 E4 S5 R5 V4
 // Hallmark · macrostructure: Workbench · genre: modern-minimal · tone: technical and restrained
 

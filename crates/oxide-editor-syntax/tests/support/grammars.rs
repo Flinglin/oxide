@@ -1,5 +1,4 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
+
 
 // Included only by test modules. Keep actual plugin packages alive for every
 // parser using them, without adding fixture loading to the production API.

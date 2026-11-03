@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Presentational builders for the GPUI Cloud Sync panel.
 //!
 //! The app crate still owns event callbacks, text selection identity, IME, and

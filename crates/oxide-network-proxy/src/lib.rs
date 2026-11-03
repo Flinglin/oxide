@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! HTTP client proxy policy and shared TCP dialing through SOCKS5 or HTTP CONNECT.
 
 mod credentials;

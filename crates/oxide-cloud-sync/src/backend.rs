@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Unified cloud backend interface, provider dispatch, and shared HTTP execution.
 
 use std::{collections::BTreeSet, fmt, future::Future, pin::Pin, sync::Arc, time::Duration};

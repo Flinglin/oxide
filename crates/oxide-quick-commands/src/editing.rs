@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Pure quick-command editing and filtering behavior shared by UI adapters.
 
 use crate::{

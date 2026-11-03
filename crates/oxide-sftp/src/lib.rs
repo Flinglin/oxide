@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Real SFTP protocol/session layer for native oxide.
 //!
 //! The SSH crate owns node connections; this crate owns SFTP protocol state and

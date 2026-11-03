@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use oxide_terminal::{TerminalNotice, TerminalNoticeVariant};
 
 pub(in crate::workspace) use oxide_plugin_host_api::app::{

@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Native updater compatibility layer.
 //!
 //! oxide's Tauri build reads release manifests through

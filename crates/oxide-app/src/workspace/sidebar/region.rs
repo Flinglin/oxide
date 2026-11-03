@@ -1220,7 +1220,7 @@ mod sidebar_resize_region_tests {
     #[gpui::test]
     fn sidebar_tints_reach_the_seams_without_exposing_wallpaper(cx: &mut TestAppContext) {
         let executable = std::env::current_exe().unwrap();
-        let fixture_key = "OXIDETERM_SIDEBAR_SEAM_TEST_DIR";
+        let fixture_key = "OXIDE_SIDEBAR_SEAM_TEST_DIR";
         let Some(fixture_dir) = std::env::var_os(fixture_key) else {
             // Portable storage isolates the real workspace from user settings and plugins.
             let directory = tempfile::tempdir_in(executable.parent().unwrap()).unwrap();

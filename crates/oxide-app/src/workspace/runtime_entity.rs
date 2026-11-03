@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use super::new_connection::SshConnectionWorkerResult;
 use super::*;
 use crate::util::sanitize;
@@ -2960,9 +2957,10 @@ fn should_install_remote_shell_integration(
     mode: RemoteShellIntegrationMode,
     state: oxide_terminal_core::RemoteShellIntegrationState,
 ) -> bool {
-    force_install
-        || (mode == RemoteShellIntegrationMode::Enabled
-            && state != oxide_terminal_core::RemoteShellIntegrationState::Installed)
+    state != oxide_terminal_core::RemoteShellIntegrationState::NewerVersion
+        && (force_install
+            || (mode == RemoteShellIntegrationMode::Enabled
+                && state != oxide_terminal_core::RemoteShellIntegrationState::Installed))
 }
 
 fn reconnect_error_is_non_retryable(error: &str) -> bool {

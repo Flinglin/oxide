@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Native plugin registry crate.
 //!
 //! This crate owns native plugin discovery, package installation, contribution

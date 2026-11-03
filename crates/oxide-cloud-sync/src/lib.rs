@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Compatibility model for Oxide Cloud Sync.
 //!
 //! The native app exposes Cloud Sync as a built-in tab, but the remote

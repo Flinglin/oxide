@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use gpui::{App, Context, Window};
 use oxide_plugin_host_api::workspace::{WorkspaceDestination, WorkspacePage};
 use oxide_terminal_recording::TerminalRecordingState;

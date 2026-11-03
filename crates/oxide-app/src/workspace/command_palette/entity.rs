@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use std::{collections::HashSet, ops::Range, sync::Arc};
 
 use gpui::{Context, Task, UniformListScrollHandle};

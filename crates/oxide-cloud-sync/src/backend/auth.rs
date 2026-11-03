@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! OAuth and device authorization flows for cloud providers.
 
 use rand::Rng;

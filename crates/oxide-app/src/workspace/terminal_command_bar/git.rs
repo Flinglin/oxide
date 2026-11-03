@@ -1,5 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
 // Hallmark · component: source-control workbench · genre: modern-minimal
 // Hallmark · pre-emit critique: P5 H5 E5 S5 R5 V4
 

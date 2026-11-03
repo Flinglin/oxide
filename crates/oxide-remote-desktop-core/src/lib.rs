@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Protocol-neutral remote desktop domain primitives.
 //!
 //! This crate deliberately avoids GPUI, SSH handles, and concrete RDP/VNC

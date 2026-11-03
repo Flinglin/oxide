@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Cloud Sync display formatting and error classification.
 
 use chrono::{DateTime, Local};

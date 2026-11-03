@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Plugin settings input model helpers.
 
 pub fn plugin_setting_input_value(value: &serde_json::Value) -> String {

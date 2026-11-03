@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use super::*;
 
 pub(super) fn onedrive_sync_path(config: &CloudSyncSettings, path: &str) -> String {

@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use oxide_editor_syntax::{LanguageId, PluginGrammar, PluginGrammarSource, SyntaxSession};
 use oxide_plugin_manifest::NativePluginManifest;
 use sha2::{Digest, Sha256};

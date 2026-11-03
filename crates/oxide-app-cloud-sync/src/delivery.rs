@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Cloud Sync operation delivery adapters.
 //!
 //! The GPUI app owns scheduling and rendering, while this module owns the

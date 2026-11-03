@@ -1,12 +1,13 @@
 use oxide_ssh::{RemoteEnvInfo, SftpError, SftpSession};
+use zeroize::Zeroizing;
 
 use crate::{EMACS_FREE_TYPE_INTEGRATION_SOURCE, VIM_FREE_TYPE_INTEGRATION_SOURCE};
 
-pub const REMOTE_SHELL_INTEGRATION_VERSION: u32 = 4;
+pub const REMOTE_SHELL_INTEGRATION_VERSION: u32 = 5;
 pub const REMOTE_SHELL_INTEGRATION_RELATIVE_DIR: &str = ".oxide/shell-integration";
 
-const MANAGED_BLOCK_START: &str = ">>> oxide remote shell integration >>>";
-const MANAGED_BLOCK_END: &str = "<<< oxide remote shell integration <<<";
+const MANAGED_BLOCK_START: &str = ">>> Oxide remote shell integration >>>";
+const MANAGED_BLOCK_END: &str = "<<< Oxide remote shell integration <<<";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RemoteShellKind {
@@ -45,6 +46,7 @@ pub enum RemoteShellIntegrationState {
     FilesOnly,
     Installed,
     NeedsUpdate,
+    NewerVersion,
 }
 
 // Errors carry only categories: remote paths, configuration content, and
@@ -58,6 +60,7 @@ pub enum RemoteShellIntegrationError {
     InvalidText,
     WriteFailed,
     RemoveFailed,
+    NewerVersion,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -66,7 +69,7 @@ pub struct RemoteShellIntegrationStatus {
     pub state: RemoteShellIntegrationState,
     pub integration_directory: String,
     pub integration_file: String,
-    pub startup_file: String,
+    pub startup_files: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -78,53 +81,98 @@ struct RemoteShellIntegrationLayout {
     startup_file: String,
 }
 
+struct RemoteShellStartupFile {
+    path: String,
+    content: Option<Zeroizing<String>>,
+}
+
 /// Inspects the integration without changing any remote files.
 pub async fn inspect_remote_shell_integration(
     sftp: &SftpSession,
     remote_env: Option<&RemoteEnvInfo>,
 ) -> Result<RemoteShellIntegrationStatus, RemoteShellIntegrationError> {
     let layout = integration_layout(sftp.home(), remote_env)?;
-    let startup_content = read_optional_text(sftp, &layout.startup_file).await?;
-    let expected_reference = startup_reference(layout.shell);
-    let reference_matches = startup_content.as_deref().is_some_and(|content| {
-        complete_managed_blocks(content)
-            .iter()
-            .any(|span| content[span.start..span.end].trim_end() == expected_reference)
+    let startup_files = read_startup_files(sftp, &layout, false).await?;
+    let mut newer_version = startup_files.iter().any(|file| {
+        file.content.as_ref().is_some_and(|content| {
+            complete_managed_blocks(content)
+                .iter()
+                .any(|span| has_newer_integration_version(&content[span.start..span.end]))
+        })
     });
-    let has_reference = startup_content
-        .as_deref()
-        .is_some_and(|content| !complete_managed_blocks(content).is_empty());
+    let expected_reference = startup_reference(layout.shell);
+    let reference_matches = startup_files.iter().all(|file| {
+        file.content.as_ref().is_some_and(|content| {
+            complete_managed_blocks(content)
+                .iter()
+                .any(|span| content[span.start..span.end].trim_end() == expected_reference)
+        })
+    });
+    let has_reference = startup_files.iter().any(|file| {
+        file.content
+            .as_ref()
+            .is_some_and(|content| !complete_managed_blocks(content).is_empty())
+    });
     let mut has_package_file = false;
     let mut package_matches = true;
     // The status covers the complete owned package, including editor adapters,
     // so a partial or legacy installation can be repaired deterministically.
     for (name, expected_content) in integration_files() {
         let path = join_remote(&layout.integration_directory, name);
-        let content = read_optional_text(sftp, &path).await?;
+        let content = match read_optional_text(sftp, &path).await {
+            // Owned package files may be repaired even when their bytes are
+            // invalid UTF-8. The user's startup file still requires valid text.
+            Err(RemoteShellIntegrationError::InvalidText) => {
+                has_package_file = true;
+                package_matches = false;
+                continue;
+            }
+            result => result?,
+        };
+        newer_version |= content
+            .as_deref()
+            .is_some_and(has_newer_integration_version);
         has_package_file |= content.is_some();
         package_matches &= content
             .as_deref()
             .is_some_and(|content| content == expected_content);
     }
-    let state = match (
-        has_reference,
-        reference_matches,
-        has_package_file,
-        package_matches,
-    ) {
-        (true, true, true, true) => RemoteShellIntegrationState::Installed,
-        (true, _, _, _) => RemoteShellIntegrationState::NeedsUpdate,
-        (false, _, true, _) => RemoteShellIntegrationState::FilesOnly,
-        (false, _, false, _) => RemoteShellIntegrationState::NotInstalled,
+    let state = if newer_version {
+        RemoteShellIntegrationState::NewerVersion
+    } else {
+        match (
+            has_reference,
+            reference_matches,
+            has_package_file,
+            package_matches,
+        ) {
+            (true, true, true, true) => RemoteShellIntegrationState::Installed,
+            (true, _, _, _) => RemoteShellIntegrationState::NeedsUpdate,
+            (false, _, true, _) => RemoteShellIntegrationState::FilesOnly,
+            (false, _, false, _) => RemoteShellIntegrationState::NotInstalled,
+        }
     };
-    Ok(status_from_layout(layout, state))
+    Ok(status_from_layout(
+        layout,
+        state,
+        startup_files.into_iter().map(|file| file.path).collect(),
+    ))
 }
 
-/// Writes inspectable shell files and adds one clearly marked startup reference.
+/// Writes inspectable shell files and clearly marked startup references.
 pub async fn install_remote_shell_integration(
     sftp: &SftpSession,
     remote_env: Option<&RemoteEnvInfo>,
 ) -> Result<RemoteShellIntegrationStatus, RemoteShellIntegrationError> {
+    // Recheck at the write boundary, including explicit repair requests from
+    // an older client. Never replace an integration this client cannot manage.
+    if inspect_remote_shell_integration(sftp, remote_env)
+        .await?
+        .state
+        == RemoteShellIntegrationState::NewerVersion
+    {
+        return Err(RemoteShellIntegrationError::NewerVersion);
+    }
     let layout = integration_layout(sftp.home(), remote_env)?;
     ensure_remote_directory(sftp, &join_remote(&layout.home, ".oxide")).await?;
     ensure_remote_directory(sftp, &layout.integration_directory).await?;
@@ -136,34 +184,42 @@ pub async fn install_remote_shell_integration(
             .map_err(|_| RemoteShellIntegrationError::WriteFailed)?;
     }
 
-    if let Some(parent) = remote_parent(&layout.startup_file) {
-        ensure_remote_directory(sftp, &parent).await?;
+    let startup_files = read_startup_files(sftp, &layout, false).await?;
+    for file in &startup_files {
+        if let Some(parent) = remote_parent(&file.path) {
+            ensure_remote_directory(sftp, &parent).await?;
+        }
+        let updated = Zeroizing::new(install_managed_block(
+            file.content.as_ref().map_or("", |content| content.as_str()),
+            &startup_reference(layout.shell),
+        ));
+        sftp.replace_config_content(&file.path, updated.as_bytes())
+            .await
+            .map_err(|_| RemoteShellIntegrationError::WriteFailed)?;
     }
-    let current = read_optional_text(sftp, &layout.startup_file)
-        .await?
-        .unwrap_or_default();
-    let updated = install_managed_block(&current, &startup_reference(layout.shell));
-    sftp.replace_config_content(&layout.startup_file, updated.as_bytes())
-        .await
-        .map_err(|_| RemoteShellIntegrationError::WriteFailed)?;
 
     Ok(status_from_layout(
         layout,
         RemoteShellIntegrationState::Installed,
+        startup_files.into_iter().map(|file| file.path).collect(),
     ))
 }
 
-/// Removes only oxide's marked startup block and optionally its owned files.
+/// Removes only Oxide's marked startup block and optionally its owned files.
 pub async fn remove_remote_shell_integration(
     sftp: &SftpSession,
     remote_env: Option<&RemoteEnvInfo>,
     delete_owned_files: bool,
 ) -> Result<RemoteShellIntegrationStatus, RemoteShellIntegrationError> {
     let layout = integration_layout(sftp.home(), remote_env)?;
-    if let Some(current) = read_optional_text(sftp, &layout.startup_file).await? {
-        let updated = remove_managed_block(&current);
-        if updated != current {
-            sftp.replace_config_content(&layout.startup_file, updated.as_bytes())
+    let startup_files = read_startup_files(sftp, &layout, true).await?;
+    for file in &startup_files {
+        if let Some(current) = &file.content {
+            let updated = Zeroizing::new(remove_managed_block(current));
+            if updated.as_str() == current.as_str() {
+                continue;
+            }
+            sftp.replace_config_content(&file.path, updated.as_bytes())
                 .await
                 .map_err(|_| RemoteShellIntegrationError::WriteFailed)?;
         }
@@ -183,7 +239,11 @@ pub async fn remove_remote_shell_integration(
     } else {
         RemoteShellIntegrationState::FilesOnly
     };
-    Ok(status_from_layout(layout, state))
+    Ok(status_from_layout(
+        layout,
+        state,
+        startup_files.into_iter().map(|file| file.path).collect(),
+    ))
 }
 
 fn integration_layout(
@@ -222,19 +282,34 @@ fn integration_layout(
 fn status_from_layout(
     layout: RemoteShellIntegrationLayout,
     state: RemoteShellIntegrationState,
+    startup_files: Vec<String>,
 ) -> RemoteShellIntegrationStatus {
     RemoteShellIntegrationStatus {
         shell: layout.shell,
         state,
         integration_directory: layout.integration_directory,
         integration_file: layout.integration_file,
-        startup_file: layout.startup_file,
+        startup_files,
     }
+}
+
+fn has_newer_integration_version(content: &str) -> bool {
+    content.lines().any(|line| {
+        let line = line.trim();
+        let version = line
+            .strip_prefix("# oxide-shell-integration-version: ")
+            .or_else(|| line.strip_prefix("# Oxide remote shell integration v"))
+            .or_else(|| line.strip_prefix("Version: "));
+        version
+            .and_then(|version| version.trim_end_matches('.').trim().parse::<u32>().ok())
+            .is_some_and(|version| version > REMOTE_SHELL_INTEGRATION_VERSION)
+    })
 }
 
 fn detect_remote_shell(shell: Option<&str>) -> Option<RemoteShellKind> {
     let shell = shell?.trim().to_ascii_lowercase().replace('\\', "/");
     let executable = shell.rsplit('/').next().unwrap_or(&shell);
+    let executable = executable.trim_end_matches(".exe");
     if executable.starts_with("powershell") || executable.starts_with("pwsh") {
         Some(RemoteShellKind::PowerShell)
     } else if executable == "bash" || executable.starts_with("bash ") {
@@ -250,6 +325,34 @@ fn detect_remote_shell(shell: Option<&str>) -> Option<RemoteShellKind> {
     }
 }
 
+async fn read_startup_files(
+    sftp: &SftpSession,
+    layout: &RemoteShellIntegrationLayout,
+    removing: bool,
+) -> Result<Vec<RemoteShellStartupFile>, RemoteShellIntegrationError> {
+    let mut files = vec![RemoteShellStartupFile {
+        path: layout.startup_file.clone(),
+        content: read_optional_text(sftp, &layout.startup_file)
+            .await?
+            .map(Zeroizing::new),
+    }];
+    if layout.shell == RemoteShellKind::Bash {
+        // sshd starts a login shell. Bash reads the first existing login file,
+        // not .bashrc, unless the user's profile happens to source it.
+        for name in [".bash_profile", ".bash_login", ".profile"] {
+            let path = join_remote(&layout.home, name);
+            let content = read_optional_text(sftp, &path).await?.map(Zeroizing::new);
+            if content.is_some() || (!removing && name == ".profile") {
+                files.push(RemoteShellStartupFile { path, content });
+                if !removing {
+                    break;
+                }
+            }
+        }
+    }
+    Ok(files)
+}
+
 fn startup_file_path(shell: RemoteShellKind, remote_env: &RemoteEnvInfo, home: &str) -> String {
     match shell {
         RemoteShellKind::Bash => join_remote(home, ".bashrc"),
@@ -261,9 +364,18 @@ fn startup_file_path(shell: RemoteShellKind, remote_env: &RemoteEnvInfo, home: &
             |config_home| join_remote(config_home, "fish/config.fish"),
         ),
         RemoteShellKind::Nushell if remote_env.os_type.eq_ignore_ascii_case("macos") => {
-            join_remote(home, "Library/Application Support/nushell/config.nu")
+            remote_env.xdg_config_home.as_deref().map_or_else(
+                || join_remote(home, "Library/Application Support/nushell/config.nu"),
+                |config_home| join_remote(config_home, "nushell/config.nu"),
+            )
         }
-        RemoteShellKind::Nushell => join_remote(home, ".config/nushell/config.nu"),
+        RemoteShellKind::Nushell if remote_env.os_type.to_ascii_lowercase().contains("windows") => {
+            join_remote(home, "AppData/Roaming/nushell/config.nu")
+        }
+        RemoteShellKind::Nushell => remote_env.xdg_config_home.as_deref().map_or_else(
+            || join_remote(home, ".config/nushell/config.nu"),
+            |config_home| join_remote(config_home, "nushell/config.nu"),
+        ),
         RemoteShellKind::PowerShell
             if remote_env.os_type.to_ascii_lowercase().contains("windows") =>
         {
@@ -448,39 +560,42 @@ fn remote_parent(path: &str) -> Option<String> {
     (!parent.is_empty() && !parent.ends_with(':')).then(|| parent.to_string())
 }
 
-const REMOTE_INTEGRATION_README: &str = r#"oxide Remote Shell Integration
+const REMOTE_INTEGRATION_README: &str = r#"Oxide Remote Shell Integration
 =====================================
 
-Version: 4
+Version: 5
 Directory protocol: OSC 7
+Command boundary protocol: OSC 133
 Private editor protocol: OSC 7719 v3
 
-These readable shell hooks report only the current working directory and host
-name through standard OSC 7. They do not run commands, read command text, or
-contain credentials. An application running in the shell can emit the same
-control sequence, so this metadata is a terminal integration signal rather
-than an authentication boundary.
+These readable shell hooks report the working directory, host, command boundaries,
+and exit status. Fish 4 and Nushell use their native command markers. Other
+supported shells use prompt and execution hooks without saving command text or
+credentials. Applications can emit the same control sequences; these signals
+are not an authentication boundary.
 
-The active shell startup file contains a clearly marked oxide reference.
-Use oxide Settings > Terminal > Awareness & Integration to inspect, repair,
+The active shell startup file contains a clearly marked Oxide reference.
+Use Oxide Settings > Terminal > Awareness & Integration to inspect, repair,
 or remove the reference and these files.
 
 The same directory contains optional Free Type Mode adapters for Vim, Neovim,
-and Emacs. Their paths are exported only when the SSH server accepts oxide's
+and Emacs. Their paths are exported only when the SSH server accepts Oxide's
 per-channel capability marker. The adapters suppress private OSC inside tmux,
 GNU screen, and Zellij because one shared pane cannot isolate output by attached
 terminal client. Load the matching adapter explicitly from your editor
 configuration to enable full-screen editor integration.
 "#;
 
-const BASH_INTEGRATION: &str = r#"# oxide remote shell integration v4.
+const BASH_INTEGRATION: &str = concat!(
+    r#"# Oxide remote shell integration v5.
 # Reports cwd and host through standard OSC 7 and gates private editor adapters.
-if [ -n "${LC_oxide_SESSION:-}" ] || [ "${oxide_PRIVATE_OSC:-}" = 1 ]; then
-  export oxide_PRIVATE_OSC=1
-  export oxide_VIM_INTEGRATION="$HOME/.oxide/shell-integration/oxide-free-type.vim"
-  export oxide_EMACS_INTEGRATION="$HOME/.oxide/shell-integration/oxide-free-type.el"
+if [ -n "${LC_OXIDE_SESSION:-}" ] || [ "${OXIDE_PRIVATE_OSC:-}" = 1 ]; then
+  export OXIDE_PRIVATE_OSC=1
+  export OXIDE_VIM_INTEGRATION="$HOME/.oxide/shell-integration/oxide-free-type.vim"
+  export OXIDE_EMACS_INTEGRATION="$HOME/.oxide/shell-integration/oxide-free-type.el"
 fi
-unset LC_oxide_SESSION
+unset LC_OXIDE_SESSION
+if [[ ${__oxide_cwd_hooks:-0} != 1 ]]; then
 __oxide_pct() {
   printf '%s' "$1" | od -An -tx1 -v | tr -d ' \n' | sed 's/../%&/g'
 }
@@ -520,33 +635,39 @@ else
   esac
 fi
 unset __oxide_hook_name
-"#;
+__oxide_cwd_hooks=1
+fi
+"#,
+    include_str!("shell_integration/bash.sh")
+);
 
 const ZSH_INTEGRATION: &str = concat!(
-    "# oxide remote shell integration v4.\n",
+    "# Oxide remote shell integration v5.\n",
     "# Reports cwd and host through standard OSC 7 and gates private editor adapters.\n",
-    "if [ -n \"${LC_oxide_SESSION:-}\" ] || [ \"${oxide_PRIVATE_OSC:-}\" = 1 ]; then\n  export oxide_PRIVATE_OSC=1\n  export oxide_VIM_INTEGRATION=\"$HOME/.oxide/shell-integration/oxide-free-type.vim\"\n  export oxide_EMACS_INTEGRATION=\"$HOME/.oxide/shell-integration/oxide-free-type.el\"\nfi\n",
-    "unset LC_oxide_SESSION\n",
+    "if [ -n \"${LC_OXIDE_SESSION:-}\" ] || [ \"${OXIDE_PRIVATE_OSC:-}\" = 1 ]; then\n  export OXIDE_PRIVATE_OSC=1\n  export OXIDE_VIM_INTEGRATION=\"$HOME/.oxide/shell-integration/oxide-free-type.vim\"\n  export OXIDE_EMACS_INTEGRATION=\"$HOME/.oxide/shell-integration/oxide-free-type.el\"\nfi\n",
+    "unset LC_OXIDE_SESSION\n",
     "__oxide_pct() {\n  printf '%s' \"$1\" | od -An -tx1 -v | tr -d ' \\n' | sed 's/../%&/g'\n}\n",
     "__oxide_pct_path() {\n  __oxide_pct \"$1\" | sed 's|%2f|/|g'\n}\n",
     "__oxide_emit_remote_metadata() {\n  __oxide_cwd=$(pwd -P 2>/dev/null || pwd 2>/dev/null) || return\n  __oxide_host=${HOSTNAME:-$(hostname 2>/dev/null || printf '')}\n  __oxide_host=$(printf '%s' \"$__oxide_host\" | tr -cd 'A-Za-z0-9._-')\n  [ -n \"$__oxide_host\" ] || __oxide_host=localhost\n  printf '\\033]7;file://%s%s\\007' \"$__oxide_host\" \"$(__oxide_pct_path \"$__oxide_cwd\")\"\n}\n",
-    "autoload -Uz add-zsh-hook\nadd-zsh-hook -d precmd __oxide_emit_remote_metadata 2>/dev/null\nadd-zsh-hook precmd __oxide_emit_remote_metadata\n"
+    "autoload -Uz add-zsh-hook\nadd-zsh-hook -d precmd __oxide_emit_remote_metadata 2>/dev/null\nadd-zsh-hook precmd __oxide_emit_remote_metadata\n",
+    include_str!("shell_integration/zsh.zsh"),
 );
 
-const FISH_INTEGRATION: &str = r#"# oxide remote shell integration v4.
+const FISH_INTEGRATION: &str = concat!(
+    r#"# Oxide remote shell integration v5.
 # Reports cwd and host through standard OSC 7 and gates private editor adapters.
 set -l __oxide_private_session 0
-if set -q LC_oxide_SESSION; and test -n "$LC_oxide_SESSION"
+if set -q LC_OXIDE_SESSION; and test -n "$LC_OXIDE_SESSION"
     set __oxide_private_session 1
-else if set -q oxide_PRIVATE_OSC; and test "$oxide_PRIVATE_OSC" = 1
+else if set -q OXIDE_PRIVATE_OSC; and test "$OXIDE_PRIVATE_OSC" = 1
     set __oxide_private_session 1
 end
 if test "$__oxide_private_session" = 1
-    set -gx oxide_PRIVATE_OSC 1
-    set -gx oxide_VIM_INTEGRATION "$HOME/.oxide/shell-integration/oxide-free-type.vim"
-    set -gx oxide_EMACS_INTEGRATION "$HOME/.oxide/shell-integration/oxide-free-type.el"
+    set -gx OXIDE_PRIVATE_OSC 1
+    set -gx OXIDE_VIM_INTEGRATION "$HOME/.oxide/shell-integration/oxide-free-type.vim"
+    set -gx OXIDE_EMACS_INTEGRATION "$HOME/.oxide/shell-integration/oxide-free-type.el"
 end
-set -e LC_oxide_SESSION
+set -e LC_OXIDE_SESSION
 set -e __oxide_private_session
 function __oxide_pct
     command printf '%s' "$argv[1]" | command od -An -tx1 -v | command tr -d ' \n' | command sed 's/../%&/g'
@@ -562,52 +683,38 @@ function __oxide_emit_remote_metadata --on-event fish_prompt
     test -n "$__oxide_host"; or set __oxide_host localhost
     command printf '\033]7;file://%s%s\007' "$__oxide_host" (__oxide_pct_path "$__oxide_cwd")
 end
-"#;
+"#,
+    include_str!("shell_integration/fish.fish")
+);
 
-const NUSHELL_INTEGRATION: &str = r#"# oxide remote shell integration v4.
+const NUSHELL_INTEGRATION: &str = concat!(
+    r#"# Oxide remote shell integration v5.
 # Reports cwd and host through standard OSC 7 and gates private editor adapters.
-let __oxide_private_session = (($env.LC_oxide_SESSION? | default '') != '') or (($env.oxide_PRIVATE_OSC? | default '') == '1')
+let __oxide_private_session = (($env.LC_OXIDE_SESSION? | default '') != '') or (($env.OXIDE_PRIVATE_OSC? | default '') == '1')
 if $__oxide_private_session {
-    $env.oxide_PRIVATE_OSC = '1'
-    $env.oxide_VIM_INTEGRATION = ($nu.home-path | path join '.oxide' 'shell-integration' 'oxide-free-type.vim')
-    $env.oxide_EMACS_INTEGRATION = ($nu.home-path | path join '.oxide' 'shell-integration' 'oxide-free-type.el')
+    $env.OXIDE_PRIVATE_OSC = '1'
+    $env.OXIDE_VIM_INTEGRATION = ($nu.home-path | path join '.oxide' 'shell-integration' 'oxide-free-type.vim')
+    $env.OXIDE_EMACS_INTEGRATION = ($nu.home-path | path join '.oxide' 'shell-integration' 'oxide-free-type.el')
 }
-hide-env --ignore-errors LC_oxide_SESSION
-def __oxide_pct [value: string] {
-    $value | url encode --all
-}
-def __oxide_pct_path [value: string] {
-    let __oxide_path = ($value | str replace --all '\' '/')
-    let __oxide_uri_path = if ($__oxide_path | str contains --regex '^[A-Za-z]:/') {
-        '/' + $__oxide_path
-    } else {
-        $__oxide_path
-    }
-    __oxide_pct $__oxide_uri_path | str replace --all '%2F' '/'
-}
-def __oxide_emit_remote_metadata [] {
-    let __oxide_host = ($env.HOSTNAME? | default ($env.COMPUTERNAME? | default 'localhost') | default --empty 'localhost')
-    print --no-newline $"\u{1b}]7;file://(__oxide_pct $__oxide_host)(__oxide_pct_path (pwd | into string))\u{07}"
-}
-if (($env.oxide_SHELL_INTEGRATION_VERSION? | default 0) != 4) {
-    $env.oxide_SHELL_INTEGRATION_VERSION = 4
-    $env.config = ($env.config | upsert hooks.pre_prompt (($env.config.hooks.pre_prompt? | default []) | append {|| __oxide_emit_remote_metadata }))
-}
-"#;
+hide-env --ignore-errors LC_OXIDE_SESSION
+"#,
+    include_str!("shell_integration/nushell.nu")
+);
 
-const POWERSHELL_INTEGRATION: &str = r#"# oxide remote shell integration v4.
+const POWERSHELL_INTEGRATION: &str = concat!(
+    r#"# Oxide remote shell integration v5.
 # Reports cwd and host through standard OSC 7 and gates private editor adapters.
-if ($env:LC_oxide_SESSION -or $env:oxide_PRIVATE_OSC -eq '1') {
-    $env:oxide_PRIVATE_OSC = '1'
-    $env:oxide_VIM_INTEGRATION = Join-Path $HOME '.oxide/shell-integration/oxide-free-type.vim'
-    $env:oxide_EMACS_INTEGRATION = Join-Path $HOME '.oxide/shell-integration/oxide-free-type.el'
+if ($env:LC_OXIDE_SESSION -or $env:OXIDE_PRIVATE_OSC -eq '1') {
+    $env:OXIDE_PRIVATE_OSC = '1'
+    $env:OXIDE_VIM_INTEGRATION = Join-Path $HOME '.oxide/shell-integration/oxide-free-type.vim'
+    $env:OXIDE_EMACS_INTEGRATION = Join-Path $HOME '.oxide/shell-integration/oxide-free-type.el'
 }
-Remove-Item Env:LC_oxide_SESSION -ErrorAction SilentlyContinue
+Remove-Item Env:LC_OXIDE_SESSION -ErrorAction SilentlyContinue
 if (-not $global:__oxide_shell_integration_v4) {
     $global:__oxide_shell_integration_v4 = $true
     $legacyPrompt = Get-Variable -Name __oxide_original_prompt -Scope Script -ErrorAction SilentlyContinue
     # Reuse the pre-v3 prompt when a repaired profile is reloaded in place;
-    # chaining the v3 oxide wrapper would recurse through the same variable.
+    # chaining the v3 Oxide wrapper would recurse through the same variable.
     $script:__oxide_v4_original_prompt = if ($global:__oxide_shell_integration_v3 -and $legacyPrompt) { $legacyPrompt.Value } elseif (Test-Path Function:\prompt) { (Get-Command prompt).ScriptBlock } else { $null }
     Remove-Variable legacyPrompt -ErrorAction SilentlyContinue
     function global:__oxide_pct {
@@ -629,11 +736,17 @@ if (-not $global:__oxide_shell_integration_v4) {
         [Console]::Out.Write("$([char]27)]7;file://$hostName$(__oxide_pct_path $uriPath)$([char]7)")
     }
     function global:prompt {
+        $lastSucceeded = $?
         __oxide_emit_remote_metadata
-        if ($script:__oxide_v4_original_prompt) { & $script:__oxide_v4_original_prompt } else { "PS $($executionContext.SessionState.Path.CurrentLocation)$('>' * ($nestedPromptLevel + 1)) " }
+        if ($script:__oxide_v4_original_prompt) {
+            if (-not $lastSucceeded) { Write-Error 'Command failed.' -ErrorAction Ignore }
+            $script:__oxide_v4_original_prompt.Invoke()
+        } else { "PS $($executionContext.SessionState.Path.CurrentLocation)$('>' * ($nestedPromptLevel + 1)) " }
     }
 }
-"#;
+"#,
+    include_str!("shell_integration/powershell.ps1")
+);
 
 #[cfg(test)]
 mod tests {
@@ -733,7 +846,7 @@ mod tests {
             ),
         ] {
             let block = startup_reference(shell);
-            assert!(block.contains("oxide-shell-integration-version: 4"));
+            assert!(block.contains("oxide-shell-integration-version: 5"));
             let expected = format!("{prefix}{block}\n{suffix}");
             let installed = install_managed_block(&original, &block);
             assert_eq!(installed, expected, "{original:?}");
@@ -794,7 +907,9 @@ function global:prompt {{
     if ($script:legacyCalls -gt 2) {{ throw 'recursive prompt wrapper' }}
     & $script:__oxide_original_prompt
 }}
+. {{
 {POWERSHELL_INTEGRATION}
+}}
 prompt
 "#
         );
@@ -833,7 +948,7 @@ prompt
     #[test]
     fn bash_source_exposes_private_adapters_only_for_marked_sessions() {
         let unmarked_script = format!(
-            "unset LC_oxide_SESSION oxide_PRIVATE_OSC oxide_VIM_INTEGRATION oxide_EMACS_INTEGRATION\n{BASH_INTEGRATION}\nprintf '%s|%s|%s' \"${{oxide_PRIVATE_OSC-}}\" \"${{oxide_VIM_INTEGRATION-}}\" \"${{LC_oxide_SESSION-}}\""
+            "unset LC_OXIDE_SESSION OXIDE_PRIVATE_OSC OXIDE_VIM_INTEGRATION OXIDE_EMACS_INTEGRATION\n. /dev/stdin <<'OXIDE_INTEGRATION'\n{BASH_INTEGRATION}\nOXIDE_INTEGRATION\nprintf '%s|%s|%s' \"${{OXIDE_PRIVATE_OSC-}}\" \"${{OXIDE_VIM_INTEGRATION-}}\" \"${{LC_OXIDE_SESSION-}}\""
         );
         let unmarked = std::process::Command::new("bash")
             .args(["--noprofile", "--norc", "-c", &unmarked_script])
@@ -843,7 +958,7 @@ prompt
         assert_eq!(String::from_utf8_lossy(&unmarked.stdout), "||");
 
         let marked_script = format!(
-            "HOME=/home/alice\nLC_oxide_SESSION=1\n{BASH_INTEGRATION}\nprintf '%s|%s|%s' \"${{oxide_PRIVATE_OSC-}}\" \"${{oxide_VIM_INTEGRATION-}}\" \"${{LC_oxide_SESSION-}}\""
+            "HOME=/home/alice\nLC_OXIDE_SESSION=1\n. /dev/stdin <<'OXIDE_INTEGRATION'\n{BASH_INTEGRATION}\nOXIDE_INTEGRATION\nprintf '%s|%s|%s' \"${{OXIDE_PRIVATE_OSC-}}\" \"${{OXIDE_VIM_INTEGRATION-}}\" \"${{LC_OXIDE_SESSION-}}\""
         );
         let marked = std::process::Command::new("bash")
             .args(["--noprofile", "--norc", "-c", &marked_script])
@@ -860,7 +975,7 @@ prompt
     #[test]
     fn bash_source_emits_standard_osc7_with_encoded_path() {
         let script = format!(
-            "HOSTNAME='build host'\n{BASH_INTEGRATION}\ncd /tmp\n__oxide_emit_remote_metadata"
+            "HOSTNAME='build host'\n. /dev/stdin <<'OXIDE_INTEGRATION'\n{BASH_INTEGRATION}\nOXIDE_INTEGRATION\ncd /tmp\n__oxide_emit_remote_metadata"
         );
         let output = std::process::Command::new("bash")
             .args(["--noprofile", "--norc", "-c", &script])
@@ -878,7 +993,7 @@ prompt
     #[test]
     fn bash_source_keeps_existing_prompt_commands_when_executed() {
         let scalar_script = format!(
-            "PROMPT_COMMAND='existing-command'\n{BASH_INTEGRATION}\nprintf '%s' \"$PROMPT_COMMAND\""
+            "PROMPT_COMMAND='existing-command'\n. /dev/stdin <<'OXIDE_INTEGRATION'\n{BASH_INTEGRATION}\nOXIDE_INTEGRATION\nprintf '%s' \"$PROMPT_COMMAND\""
         );
         let scalar = std::process::Command::new("bash")
             .args(["--noprofile", "--norc", "-c", &scalar_script])
@@ -891,7 +1006,7 @@ prompt
         );
 
         let array_script = format!(
-            "PROMPT_COMMAND=(first-command second-command)\n{BASH_INTEGRATION}\nprintf '%s\\n' \"${{PROMPT_COMMAND[@]}}\""
+            "PROMPT_COMMAND=(first-command second-command)\n. /dev/stdin <<'OXIDE_INTEGRATION'\n{BASH_INTEGRATION}\nOXIDE_INTEGRATION\nprintf '%s\\n' \"${{PROMPT_COMMAND[@]}}\""
         );
         let array = std::process::Command::new("bash")
             .args(["--noprofile", "--norc", "-c", &array_script])

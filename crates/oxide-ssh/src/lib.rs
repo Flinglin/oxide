@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! SSH domain model for native oxide.
 //!
 //! This crate mirrors the Tauri SSH architecture at the model boundary:

@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use crate::{
     SemanticClass, SemanticLineRole, SemanticScheme, classify_line,
     classify_line_with_compiled_scheme, classify_line_with_scheme, compiled_builtin_scheme,

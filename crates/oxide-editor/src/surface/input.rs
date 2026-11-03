@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use std::ops::Range;
 
 use gpui::{Bounds, Context, EntityInputHandler, Pixels, UTF16Selection, Window};

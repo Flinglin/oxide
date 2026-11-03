@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Settings page navigation and virtual-section model rules.
 //!
 //! The GPUI app supplies runtime counts for data-backed pages, while this

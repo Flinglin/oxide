@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Runtime adapters for saved connection records.
 //!
 //! This crate owns non-UI conversion from persisted connection/settings state

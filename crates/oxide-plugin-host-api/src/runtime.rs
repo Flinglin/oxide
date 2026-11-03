@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 // Phase 3 lands the shared native protocol before the process/WASM runners are
 // connected. Keeping these types compiled and tested now prevents each runtime
 // from inventing a separate message schema in later phases.

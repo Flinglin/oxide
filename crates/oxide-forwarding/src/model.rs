@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_FORWARD_HOST: &str = "localhost";

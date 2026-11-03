@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use std::{io, net::Ipv6Addr, time::Duration};
 
 use oxide_ssh::SshConnectionHandle;

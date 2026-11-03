@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! GPUI owner surface for oxide's native IDE path.
 //!
 //! This crate is the first real UI owner for `oxide-ide-core`: it owns the

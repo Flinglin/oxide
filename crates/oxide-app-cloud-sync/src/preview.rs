@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Cloud Sync preview DTOs and summaries.
 
 use std::collections::{BTreeMap, BTreeSet};

@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Cloud Sync configuration form visibility model.
 //!
 //! The GPUI app supplies localized labels and callbacks. This module owns which

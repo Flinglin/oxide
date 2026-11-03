@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use crate::{X11ForwardingError, X11Result};
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};

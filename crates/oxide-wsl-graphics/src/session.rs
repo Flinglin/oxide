@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Session registry for WSL graphics.
 //!
 //! Tauri owns WSL graphics sessions in backend state, not in the React view.

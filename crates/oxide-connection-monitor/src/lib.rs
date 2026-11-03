@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Backend model for the Tauri-compatible connection monitor.
 //!
 //! This crate owns the UI-consumed monitor shapes and profiler state contract.

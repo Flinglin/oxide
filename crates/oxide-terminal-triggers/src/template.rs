@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use zeroize::Zeroizing;
 
 use crate::{
@@ -12,6 +9,9 @@ const MAX_EXPANDED_ACTION_BYTES: usize = 64 * 1024;
 
 /// An expanded action whose output-derived fields are zeroized on drop.
 pub enum ExpandedTriggerAction {
+    OpenUrl {
+        url: Zeroizing<String>,
+    },
     SendText {
         text: Zeroizing<String>,
         append_enter: bool,
@@ -44,6 +44,12 @@ impl TerminalTriggerAction {
         matched: &TriggerMatched,
     ) -> Result<ExpandedTriggerAction, TerminalTriggerError> {
         match self {
+            Self::OpenUrl { url } => Ok(ExpandedTriggerAction::OpenUrl {
+                url: expand_template(url, matched)?,
+            }),
+            Self::CustomLink { .. } | Self::CustomMenu { .. } | Self::ShowTooltip { .. } => {
+                Err(TerminalTriggerError::InvalidTemplate)
+            }
             Self::SendText { text, append_enter } => Ok(ExpandedTriggerAction::SendText {
                 text: expand_template(text, matched)?,
                 append_enter: *append_enter,

@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Pure settings page identity types.
 //!
 //! These enums describe settings navigation, editable fields, selects, and
@@ -100,6 +97,7 @@ pub enum SettingsSelect {
     XmodemBlockSize,
     TerminalTriggerMatchMode,
     TerminalTriggerAction,
+    TerminalTriggerClickAction,
     TerminalTriggerProcessMode,
     TerminalTriggerQuickCommand,
     TerminalTriggerTiming,
@@ -227,6 +225,8 @@ pub enum SettingsInput {
     TerminalTriggerDescription,
     TerminalTriggerPattern,
     TerminalTriggerActionValue,
+    TerminalTriggerMenuLabel,
+    TerminalTriggerTooltipText,
     TerminalTriggerExecutable,
     TerminalTriggerArguments,
     TerminalTriggerWorkingDirectory,
@@ -510,6 +510,7 @@ impl SettingsInput {
             Self::TerminalCommandBarFocusHandoff
                 | Self::TerminalCommandSpecsJson
                 | Self::TerminalTriggerArguments
+                | Self::TerminalTriggerTooltipText
                 | Self::LocalPrivilegePromptPatterns
                 | Self::ManagedKeyPastePrivateKey
         )
@@ -590,6 +591,8 @@ impl SettingsInput {
             Self::TerminalTriggerDescription => 33_101,
             Self::TerminalTriggerPattern => 33_102,
             Self::TerminalTriggerActionValue => 33_103,
+            Self::TerminalTriggerMenuLabel => 33_110,
+            Self::TerminalTriggerTooltipText => 33_111,
             Self::TerminalTriggerExecutable => 33_104,
             Self::TerminalTriggerArguments => 33_105,
             Self::TerminalTriggerWorkingDirectory => 33_106,

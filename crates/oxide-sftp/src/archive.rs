@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use thiserror::Error;
 
 pub use oxide_environment::archive::{ArchiveKind, archive_kind};

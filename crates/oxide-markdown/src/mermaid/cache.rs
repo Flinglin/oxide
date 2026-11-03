@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Bounded process cache shared by inline diagrams and the zoom viewer.
 
 use super::MermaidRenderRequest;

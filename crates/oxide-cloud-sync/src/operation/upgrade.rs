@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use super::*;
 use crate::sync_v3::{ConfigurationView, ReplicaSnapshot, ResourceKind, SyncReplica, SyncValues};
 use oxide_connections::oxide_file::{

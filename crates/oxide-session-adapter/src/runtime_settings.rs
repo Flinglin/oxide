@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Conversion from persisted settings into runtime-owned configuration types.
 
 use std::time::Duration;

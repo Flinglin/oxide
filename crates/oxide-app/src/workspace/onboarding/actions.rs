@@ -303,7 +303,7 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let executable = std::env::current_exe().unwrap();
-        let fixture_key = "OXIDETERM_ONBOARDING_SAVE_TEST_DIR";
+        let fixture_key = "OXIDE_ONBOARDING_SAVE_TEST_DIR";
         let Some(fixture_dir) = std::env::var_os(fixture_key) else {
             // Workspace storage is process-wide; keep the real workspace in a portable child.
             let directory = tempfile::tempdir_in(executable.parent().unwrap()).unwrap();

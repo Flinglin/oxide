@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct CloudSyncProgress {
     pub stage: CloudSyncProgressStage,

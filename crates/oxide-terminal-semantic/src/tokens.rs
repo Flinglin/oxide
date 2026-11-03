@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use std::ops::Range;
 
 pub(crate) fn ranges(text: &str) -> impl Iterator<Item = Range<usize>> + '_ {

@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use encoding_rs::{Encoding, UTF_8, UTF_16BE, UTF_16LE};
 use oxide_ide_core::{
     IdeFileData, IdeFileError, IdeFileErrorKind, LineEnding, MAX_EDITABLE_FILE_SIZE,

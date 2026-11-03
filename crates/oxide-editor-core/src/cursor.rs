@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use crate::{BufferOffset, Selection, TextBuffer};
 
 /// Cursor state with an optional visual column for future vertical movement.

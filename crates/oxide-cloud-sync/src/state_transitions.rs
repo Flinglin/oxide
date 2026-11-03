@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Shared Cloud Sync persisted-state transitions.
 //!
 //! These functions keep backend operation results independent from GPUI or CLI

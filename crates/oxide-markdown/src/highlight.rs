@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Syntax highlighting for fenced code blocks using `syntect`.
 //!
 //! Converts highlighted tokens into GPUI `TextRun` sequences that slot

@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Git status and diff semantics kept out of unrelated terminal output.
 
 use std::ops::Range;

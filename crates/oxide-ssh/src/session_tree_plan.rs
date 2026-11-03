@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use crate::{HostKeyStatus, NodeId, NodeTreeExpansion};
 
 /// Identifies the network endpoint used by one root-to-target connection step.

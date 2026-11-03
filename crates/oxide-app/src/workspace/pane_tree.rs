@@ -220,7 +220,7 @@ impl WorkspaceApp {
             }
             // TabHost consumes this signal before ordinary pane delivery.
             TerminalPaneEvent::OutputActivity => {}
-            TerminalPaneEvent::TimestampHoverChanged => {
+            TerminalPaneEvent::HoverTooltipChanged => {
                 let id = format!("terminal-timestamp-{}", pane_id.0);
                 let tooltip = self
                     .tab_host
@@ -229,7 +229,7 @@ impl WorkspaceApp {
                     .get(&pane_id)
                     .and_then(|pane| {
                         pane.read(cx)
-                            .timestamp_hover_tooltip()
+                            .hover_tooltip()
                             .map(|(label, position)| (label.to_string(), position))
                     });
                 // Discard pending text before replacing the target; IDs isolate split panes.
@@ -241,6 +241,19 @@ impl WorkspaceApp {
                         f32::from(position.x) + 12.0,
                         f32::from(position.y) + 16.0,
                         cx,
+                    );
+                }
+            }
+            TerminalPaneEvent::TriggerInteractionRequested => {
+                let Some(pane) = self.tab_host.read(cx).panes().get(&pane_id).cloned() else {
+                    return;
+                };
+                let owner = pane.downgrade();
+                if let Some((matched, item)) =
+                    pane.update(cx, |pane, _| pane.take_trigger_interaction())
+                {
+                    self.handle_terminal_trigger_interaction(
+                        pane_id, session_id, owner, matched, item, cx,
                     );
                 }
             }
@@ -1446,7 +1459,7 @@ mod tests {
         for (failure, description) in [
             (
                 X11ForwardingFailure::LocalDisplayUnavailable,
-                "No valid local display address was found. Start a local X server and configure DISPLAY before starting OxideTerm.",
+                "No valid local display address was found. Start a local X server and configure DISPLAY before starting Oxide.",
             ),
             (
                 X11ForwardingFailure::ServerRejected,

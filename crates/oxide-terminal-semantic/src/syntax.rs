@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use oxide_editor_syntax::{LanguageId, SyntaxScope, SyntaxSession};
 
 use crate::{SemanticClass, SemanticLineRole, SemanticShellDialect, scheme::Candidate};

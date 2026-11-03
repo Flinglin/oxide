@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! GPU and NPU monitoring domain contract.
 //!
 //! Provider modules own vendor commands and parsing, while the sampler owns the

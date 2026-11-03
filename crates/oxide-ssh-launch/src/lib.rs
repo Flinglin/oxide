@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Connection launch requests shared by the native CLI and GPUI app.
 //!
 //! This crate intentionally stays small: it owns only the safe, explicit

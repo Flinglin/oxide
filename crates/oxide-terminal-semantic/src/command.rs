@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Allocation-free command head parsing shared by output-specific classifiers.
 
 use std::str::SplitWhitespace;

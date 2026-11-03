@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Lean Wasmtime runtime for oxide native Wasm plugins.
 //!
 //! This crate intentionally owns only the Wasm execution boundary: entry path

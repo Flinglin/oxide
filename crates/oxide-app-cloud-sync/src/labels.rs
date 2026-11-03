@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! I18n key adapters for Cloud Sync UI copy.
 
 use oxide_cloud_sync::{

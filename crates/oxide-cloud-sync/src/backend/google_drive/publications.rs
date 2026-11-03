@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use super::*;
 
 pub(super) fn google_drive_scoped_object_name(config: &CloudSyncSettings, path: &str) -> String {

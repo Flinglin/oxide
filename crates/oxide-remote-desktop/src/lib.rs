@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! GPUI presentation boundary for remote desktop sessions.
 //!
 //! The app crate owns window routing and helper process lifetimes. This crate

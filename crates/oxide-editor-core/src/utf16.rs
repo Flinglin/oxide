@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! UTF-16 text transformations used by platform input adapters and editors.
 
 use std::ops::Range;

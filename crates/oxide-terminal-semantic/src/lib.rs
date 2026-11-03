@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Deterministic semantic classification for plain terminal text.
 //!
 //! This crate returns byte ranges and semantic roles. It deliberately owns no

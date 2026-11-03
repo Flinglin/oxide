@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use crate::{LanguageId, SyntaxError, session::LanguageQueries};
 use sha2::{Digest, Sha256};
 use std::{

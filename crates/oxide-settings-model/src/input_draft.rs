@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Settings input draft conversion for persisted settings.
 //!
 //! GPUI owns focus, caret, and IME state. This module owns the settings-domain

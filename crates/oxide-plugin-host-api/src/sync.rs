@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Sync host API DTO parsing and plugin-facing response shaping.
 //!
 //! Workspace mutation stays in `oxide-app`; this module owns the pure

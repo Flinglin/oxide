@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use clap::{Args, Subcommand, ValueEnum};
 
 use super::{JsonArgs, WriteArgs};

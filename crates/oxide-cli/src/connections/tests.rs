@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use oxide_connections::{AuthType, SavedUpstreamProxyPolicy};
 
 use super::*;
@@ -66,7 +63,7 @@ fn connection_specs_resolve_and_persist_totp_bindings() {
     }
     use clap::Parser;
     let cli = crate::args::Cli::parse_from([
-        "oxideterm",
+        "oxide",
         "connections",
         "edit",
         &owner,

@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use gpui::{App, Bounds, Pixels, WindowBounds, point, px, size};
 use oxide_settings::{WindowGeometry, WindowUiState};
 use oxide_theme::UiMetrics;

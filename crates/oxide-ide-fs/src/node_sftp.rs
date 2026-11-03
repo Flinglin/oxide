@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use crate::text::{check_size, decode_file, encode_file};
 use oxide_ide_core::{MAX_EDITABLE_FILE_SIZE, TextFileFormat};
 use std::{future::Future, pin::Pin, sync::Arc};

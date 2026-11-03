@@ -1,5 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
 #[cfg(unix)]
 use oxide_mosh::MoshSessionKey;
 #[cfg(unix)]

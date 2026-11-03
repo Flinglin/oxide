@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use oxide_connections::{
     ConnectionStore, ConnectionX11ForwardingMode, ConnectionX11ForwardingOptions, SSH_CONFIG_TAG,
     SSH_PROXY_COMMAND_TAG, SavedAuth, SavedConnection, SavedConnectionRuntimeSecrets,

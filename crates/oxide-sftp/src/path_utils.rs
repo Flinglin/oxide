@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use std::{borrow::Cow, collections::HashSet, path::PathBuf};
 
 use crate::SftpError;

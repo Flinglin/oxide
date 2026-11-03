@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 /// User-facing labels copied from Tauri `src/locales/*/ide.json`.
 ///
 /// The GPUI app can replace these with its i18n loader. English defaults keep

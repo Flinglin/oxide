@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use serde_json::Value;
 
 pub(crate) fn value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {

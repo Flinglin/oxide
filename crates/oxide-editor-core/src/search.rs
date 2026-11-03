@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use crate::{BufferOffset, EditTransaction, TextEdit, TextRange};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

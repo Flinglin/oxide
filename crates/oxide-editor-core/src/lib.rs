@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! UI-independent editor core for oxide.
 //!
 //! This crate owns text, cursor, selection, undo/redo, search, and other

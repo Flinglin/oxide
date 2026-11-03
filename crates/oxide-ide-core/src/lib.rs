@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Core IDE state for oxide's native editor surface.
 //!
 //! This crate owns project, tab, dirty-buffer, close-confirmation, and

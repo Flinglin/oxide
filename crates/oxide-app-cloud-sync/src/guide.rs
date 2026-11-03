@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Quick-start guide copy model for Cloud Sync backends.
 
 use oxide_cloud_sync::BackendType;

@@ -1,5 +1,4 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
+
 
 /// Couples shared text-input renderers to GPUI's platform text-input contract.
 /// The renderer intentionally owns no editing state, so IDE fields register

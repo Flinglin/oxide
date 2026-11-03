@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Structured file metadata selected from ls, stat, and getfacl command scopes.
 
 use crate::{

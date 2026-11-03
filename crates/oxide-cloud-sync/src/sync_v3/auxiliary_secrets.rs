@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use super::{ConfigurationView, ResourceKind, SyncValues};
 use crate::{SyncScope, operation::StructuredUploadItemFilter};
 use anyhow::{Result, bail};

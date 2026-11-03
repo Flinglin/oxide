@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use gpui::{
     Font, FontFallbacks, FontFeatures, FontStyle, FontWeight, SharedString, TextRun, Window, px,
     rgb,

@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Cloud Sync persisted-state transitions after backend operations finish.
 
 use oxide_cloud_sync::{

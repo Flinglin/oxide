@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Registry tests covering package install, validation, and runtime contributions.
 
 use super::*;
@@ -114,7 +111,7 @@ fn background_pack_install_update_and_uninstall_preserve_gallery_ownership() {
                 "plugin.json",
                 serde_json::json!({
                     "id": id, "name": "Backgrounds", "version": version,
-                    "engines": {"oxideterm": ">=2.2.2"},
+                    "engines": {"oxide": ">=2.2.2"},
                     "contributes": {"backgrounds": ["assets/dawn.mp4", "assets/night.mp4"]}
                 })
                 .to_string(),
@@ -222,7 +219,7 @@ fn background_pack_install_update_and_uninstall_preserve_gallery_ownership() {
 fn background_pack_validation_rejects_unsafe_paths_and_executable_contributions() {
     let valid = serde_json::json!({
         "id": "com.example.backgrounds", "name": "Backgrounds", "version": "1.0.0",
-        "engines": {"oxideterm": ">=2.2.2"},
+        "engines": {"oxide": ">=2.2.2"},
         "contributes": {"backgrounds": ["assets/dawn.mp4"]}
     });
     for (field, value) in [

@@ -1809,7 +1809,7 @@ mod tests {
     #[gpui::test]
     fn favorites_drag_and_resize_preserve_navigation_and_save_on_release(cx: &mut TestAppContext) {
         let executable = std::env::current_exe().unwrap();
-        let fixture_key = "OXIDETERM_FAVORITES_TEST_DIR";
+        let fixture_key = "OXIDE_FAVORITES_TEST_DIR";
         let Some(fixture_dir) = std::env::var_os(fixture_key) else {
             // Workspace storage is process-wide; keep real settings and credentials isolated.
             let directory = tempfile::tempdir_in(executable.parent().unwrap()).unwrap();

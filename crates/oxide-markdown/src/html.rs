@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Convert browser-compatible HTML5 fragments into oxide-owned markdown nodes.
 //!
 //! Parsing and rendering are intentionally separate security boundaries. `scraper`

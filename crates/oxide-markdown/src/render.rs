@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Render a [`MarkdownDocument`] into a GPUI element tree.
 //!
 //! This module converts oxide-owned markdown model nodes into composed

@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Encrypted, causal configuration replicas. Domain stores retain ownership of
 //! effective local values; receiving a conflict never silently selects a winner.
 

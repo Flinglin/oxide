@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Cross-runner result markers selected only for known test commands.
 
 use crate::{SemanticClass, SemanticLineRole, command::ParsedCommand, scheme::Candidate};
