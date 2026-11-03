@@ -220,11 +220,7 @@ mod tests {
             AuditContext, AuditPolicy, AuditService, AuditSource, AuditStore, RecordingState,
             StoredRecordingFrameKind,
         };
-        use std::sync::{
-            Arc, Mutex,
-            atomic::AtomicBool,
-            mpsc,
-        };
+        use std::sync::{Arc, Mutex, atomic::AtomicBool, mpsc};
         use std::time::{Duration, Instant};
 
         let corpus = (0..600_000)
@@ -846,7 +842,10 @@ mod tests {
             graphics.handle_event(TerminalGraphicsEvent::Place(placement.clone()));
             graphics.handle_event(event);
 
-            assert_eq!(graphics.images[&TerminalImageId(7)].rgba.as_ref(), &[255; 4]);
+            assert_eq!(
+                graphics.images[&TerminalImageId(7)].rgba.as_ref(),
+                &[255; 4]
+            );
             assert_eq!(graphics.placements, expected_placements);
         }
     }
@@ -966,7 +965,6 @@ mod tests {
         assert!(image.data.is_some());
     }
 
-    
     #[test]
     fn kitty_synchronized_redraw_commits_pixels_at_the_frame_cursor() {
         let size = TerminalSize {
@@ -1029,7 +1027,7 @@ mod tests {
             }
         }
     }
-    
+
     #[test]
     fn split_synchronized_redraw_keeps_cursor_and_cells_until_frame_end() {
         let size = TerminalSize {
@@ -1438,9 +1436,112 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(!visible_text.contains("633;"));
-           assert!(!visible_text.contains("echo\\x20hi"));
+        assert!(!visible_text.contains("echo\\x20hi"));
+    }
+ #[test]
+    fn shell_integration_keeps_native_boundaries_when_injected_hooks_also_emit() {
+        for protocol in ["133", "633"] {
+            let size = TerminalSize {
+                cols: 80,
+                rows: 8,
+                cell_width: 8,
+                cell_height: 17,
+            };
+            let mut term = Term::new(Config::default(), &size, VoidListener);
+            let mut parser = Processor::<StdSyncHandler>::new();
+            let mut integration = crate::shell_integration::TerminalShellIntegration::default();
+            let bytes = format!(
+                "\x1b]133;A;aid=oxideterm\x07\
+                 \x1b]{protocol};A\x07$ \x1b]{protocol};B\x07\
+                 \x1b]133;B;aid=oxideterm\x07echo hi\r\n\
+                 \x1b]133;C;aid=oxideterm\x07\
+                 \x1b]{protocol};C\x07hi\r\n\
+                 \x1b]133;D;9;aid=oxideterm\x07\
+                 \x1b]{protocol};D;0\x07"
+            );
+            for byte in bytes.as_bytes().chunks(1) {
+                integration.advance(&mut parser, &mut term, byte, |_| {});
+            }
+            let marks = integration.command_marks();
+            assert_eq!(marks.len(), 1, "{protocol}");
+            assert_eq!(marks[0].command.as_deref(), Some("echo hi"), "{protocol}");
+            assert_eq!(marks[0].exit_code, Some(0), "{protocol}");
+            assert_eq!(
+                marks[0].output_start,
+                Some(crate::TerminalCommandPosition { line: 1, column: 0 }),
+                "{protocol}"
+            );
+            assert_eq!(
+                marks[0].output_end,
+                Some(crate::TerminalCommandPosition { line: 2, column: 0 }),
+                "{protocol}"
+            );
+        }
     }
 
+    #[test]
+    fn shell_integration_secondary_prompt_and_redraw_preserve_output_boundaries() {
+        let size = TerminalSize {
+            cols: 80,
+            rows: 8,
+            cell_width: 8,
+            cell_height: 17,
+        };
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+        let mut parser = Processor::<StdSyncHandler>::new();
+        let mut integration = crate::shell_integration::TerminalShellIntegration::default();
+        integration.advance(
+            &mut parser,
+            &mut term,
+            b"\x1b]133;A\x07$ \x1b]133;B\x07echo \\\r\n\
+              \x1b]133;A;k=s\x07> \x1b]133;B\x07hi\r\n\
+              \x1b]133;C;cmdline_url=echo%20hi\x07hi\r\n\
+              \x1b7\x1b[1;1H\x1b]133;A\x07$ \x1b]133;B\x07\x1b8\
+              \x1b]133;C\x07\x1b]133;D;0\x07\x1b]133;D;9\x07",
+            |_| {},
+        );
+        let marks = integration.command_marks();
+        assert_eq!(marks.len(), 1);
+        assert_eq!(marks[0].command.as_deref(), Some("echo hi"));
+        assert_eq!(marks[0].command_line, 0);
+        assert_eq!(marks[0].exit_code, Some(0));
+        assert_eq!(
+            marks[0].output_start,
+            Some(crate::TerminalCommandPosition { line: 2, column: 0 })
+        );
+        assert_eq!(
+            marks[0].output_end,
+            Some(crate::TerminalCommandPosition { line: 3, column: 0 })
+        );
+        assert_eq!(
+            marks[0].output_confidence,
+            crate::TerminalCommandMarkConfidence::High
+        );
+        // A theme replaced the prompt function while executing. The next line
+        // editor entry can recover B, but cannot invent the missing D.
+        integration.advance(
+            &mut parser,
+            &mut term,
+            b"\x1b]133;A;aid=oxideterm\x07$ \x1b]133;B;aid=oxideterm\x07theme\r\n\
+              \x1b]133;C;aid=oxideterm\x07NEW> \x1b]133;B;aid=oxideterm\x07echo ok\r\n\
+              \x1b]133;C;aid=oxideterm\x07ok\r\n\x1b]133;D;0;aid=oxideterm\x07",
+            |_| {},
+        );
+        let marks = integration.command_marks();
+        assert_eq!(marks.len(), 3);
+        assert_eq!(marks[1].command.as_deref(), Some("theme"));
+        assert_eq!(marks[1].exit_code, None);
+        assert_eq!(
+            marks[1].output_confidence,
+            crate::TerminalCommandMarkConfidence::Unknown
+        );
+        assert_eq!(marks[2].command.as_deref(), Some("echo ok"));
+        assert_eq!(marks[2].exit_code, Some(0));
+        assert_eq!(
+            marks[2].output_confidence,
+            crate::TerminalCommandMarkConfidence::High
+        );
+    }
     #[test]
     fn shell_command_ranges_follow_history_eviction_including_chunked_output() {
         for chunk_size in [1, 4096] {
@@ -1644,28 +1745,78 @@ mod tests {
             cell_height: 17,
         };
         let cases = [
-            ("OSC 7 URI", "\x1b]7;file://build-host/home/dev/Oxide%20Term\x07", "/home/dev/Oxide Term", Some("build-host")),
-            ("private metadata version", "\x1b]7719;v=1;cwd=%2fwrong;host=%62%61%64\x07\x1b]7719;v=2;cwd=%2fhome%2fdev%2fAstrBot;host=%62%75%69%6c%64\x07", "/home/dev/AstrBot", Some("build")),
-            ("private Windows path", "\x1b]7719;v=2;cwd=C%3a%5cUsers%5calice;host=desktop\x07", "C:\\Users\\alice", Some("desktop")),
-            ("OSC 7 raw path", "\x1b]7;/tmp/Oxide%20Term\x07", "/tmp/Oxide Term", None),
-            ("OSC 633 property", "\x1b]633;P;Cwd=/work/Oxide%20Term\x07", "/work/Oxide Term", None),
-            ("OSC 1337 directory", "\x1b]1337;CurrentDir=/srv/Oxide%20Term\x07", "/srv/Oxide Term", None),
+            (
+                "OSC 7 URI",
+                "\x1b]7;file://build-host/home/dev/Oxide%20Term\x07",
+                "/home/dev/Oxide Term",
+                Some("build-host"),
+            ),
+            (
+                "private metadata version",
+                "\x1b]7719;v=1;cwd=%2fwrong;host=%62%61%64\x07\x1b]7719;v=2;cwd=%2fhome%2fdev%2fAstrBot;host=%62%75%69%6c%64\x07",
+                "/home/dev/AstrBot",
+                Some("build"),
+            ),
+            (
+                "private Windows path",
+                "\x1b]7719;v=2;cwd=C%3a%5cUsers%5calice;host=desktop\x07",
+                "C:\\Users\\alice",
+                Some("desktop"),
+            ),
+            (
+                "OSC 7 raw path",
+                "\x1b]7;/tmp/Oxide%20Term\x07",
+                "/tmp/Oxide Term",
+                None,
+            ),
+            (
+                "OSC 633 property",
+                "\x1b]633;P;Cwd=/work/Oxide%20Term\x07",
+                "/work/Oxide Term",
+                None,
+            ),
+            (
+                "OSC 1337 directory",
+                "\x1b]1337;CurrentDir=/srv/Oxide%20Term\x07",
+                "/srv/Oxide Term",
+                None,
+            ),
         ];
         for (scenario, payload, expected_cwd, expected_host) in cases {
             let mut term = Term::new(Config::default(), &size, VoidListener);
             let mut parser = Processor::<StdSyncHandler>::new();
             let mut integration = crate::shell_integration::TerminalShellIntegration::default();
             let mut events = Vec::new();
-            integration.advance(&mut parser, &mut term, format!("{payload}$ ").as_bytes(), |event| events.push(event));
+            integration.advance(
+                &mut parser,
+                &mut term,
+                format!("{payload}$ ").as_bytes(),
+                |event| events.push(event),
+            );
 
-            let cwd_events = events.iter().filter_map(|event| match event {
-                TerminalEvent::CwdChanged { cwd, host } => Some((cwd.as_str(), host.as_deref())),
-                _ => None,
-            }).collect::<Vec<_>>();
+            let cwd_events = events
+                .iter()
+                .filter_map(|event| match event {
+                    TerminalEvent::CwdChanged { cwd, host } => {
+                        Some((cwd.as_str(), host.as_deref()))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
             assert_eq!(cwd_events, [(expected_cwd, expected_host)], "{scenario}");
             assert!(integration.command_marks().is_empty(), "{scenario}");
-            let snapshot = snapshot_from_term(&term, size, &TerminalGraphicsState::default(), &TerminalPalette::default());
-            let visible_text = snapshot.lines.iter().map(|row| row.text()).collect::<Vec<_>>().join("\n");
+            let snapshot = snapshot_from_term(
+                &term,
+                size,
+                &TerminalGraphicsState::default(),
+                &TerminalPalette::default(),
+            );
+            let visible_text = snapshot
+                .lines
+                .iter()
+                .map(|row| row.text())
+                .collect::<Vec<_>>()
+                .join("\n");
             assert_eq!(visible_text.trim(), "$", "{scenario}");
         }
     }
@@ -1813,9 +1964,12 @@ mod tests {
             events.push(event)
         });
         assert!(integration.command_marks().is_empty());
-       integration.advance(&mut parser, &mut term, b"\x07\x1b]633;C\x07/home\r\n", |event| {
-            events.push(event)
-        });
+        integration.advance(
+            &mut parser,
+            &mut term,
+            b"\x07\x1b]633;C\x07/home\r\n",
+            |event| events.push(event),
+        );
 
         let marks = integration.command_marks();
         assert_eq!(marks.len(), 1);
