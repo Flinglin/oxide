@@ -24,6 +24,8 @@ impl IdeSurface {
             root_path: None,
             git_branch: None,
             tree_width: IDE_TREE_DEFAULT_WIDTH,
+            tree_resize: None,
+            tree_resize_activation: None,
             generation: 0,
             editors: HashMap::new(),
             loading_paths: HashSet::new(),
@@ -94,6 +96,7 @@ impl IdeSurface {
             return;
         }
         let was_visible = self.mount.is_visible();
+        self.finish_tree_resize(cx);
         self.mount = mount;
         if mount.is_visible() {
             if !was_visible {
@@ -240,14 +243,18 @@ impl IdeSurface {
 
         let fs = self.fs.clone();
         let backend_runtime = self.backend_runtime.clone();
-        let audit_request = self.pending_reconnect_restore_node_id.is_none().then(|| {
-            oxide_audit::AuditContext::current_request().or_else(|| {
-                oxide_audit::AuditContext::current().map(|mut context| {
-                    context.source = oxide_audit::AuditSource::User;
-                    context
+        let audit_request = self
+            .pending_reconnect_restore_node_id
+            .is_none()
+            .then(|| {
+                oxide_audit::AuditContext::current_request().or_else(|| {
+                    oxide_audit::AuditContext::current().map(|mut context| {
+                        context.source = oxide_audit::AuditSource::User;
+                        context
+                    })
                 })
             })
-        }).flatten();
+            .flatten();
         cx.spawn(async move |weak, cx| {
             let result = await_ide_backend(backend_runtime.spawn(async move {
                 let task = open_project_with_root_listing(fs, node_id, root_path);

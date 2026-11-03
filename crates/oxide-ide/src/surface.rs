@@ -39,6 +39,7 @@ use oxide_ui::{
         dialog_title, modal_body, popover_backdrop,
     },
     select::{SelectAnchorId, select_anchor_probe},
+    separator::{SIDEBAR_RESIZE_HOTZONE_WIDTH, sidebar_resize_hotzone_chrome},
     tauri_ui_font_family,
     text_input::{
         TextInputAnchor, TextInputAnchorId, TextInputView, text_input as text_input_control,
@@ -472,6 +473,8 @@ pub struct IdeSurface {
     root_path: Option<String>,
     git_branch: Option<String>,
     tree_width: f32,
+    tree_resize: Option<(Pixels, f32)>,
+    tree_resize_activation: Option<gpui::Subscription>,
     generation: u64,
     editors: HashMap<EditorTabId, Entity<TextEditorView>>,
     loading_paths: HashSet<String>,
