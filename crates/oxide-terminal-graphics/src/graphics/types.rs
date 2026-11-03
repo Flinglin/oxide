@@ -44,11 +44,10 @@ impl KittyFileTransmissionControl {
     }
 
     pub fn authorize_for_session(&self) -> std::io::Result<PathBuf> {
-        let mut state = self
-            .inner
-            .state
-            .lock()
-            .map_err(|_| std::io::Error::other("Kitty file transmission state is unavailable"))?;
+        let mut state =
+            self.inner.state.lock().map_err(|_| {
+                std::io::Error::other("Kitty file transmission state is unavailable")
+            })?;
         match &*state {
             KittyFileTransmissionState::Trusted(sandbox) => {
                 return Ok(sandbox.directory.path().to_path_buf());
@@ -67,8 +66,7 @@ impl KittyFileTransmissionControl {
         // The random directory name is the session capability. It is never
         // persisted or logged, and TempDir removes the owned root on drop.
         let session_token = Zeroizing::new(Uuid::new_v4().simple().to_string());
-        let directory_prefix =
-            Zeroizing::new(format!("oxide-kitty-{}-", session_token.as_str()));
+        let directory_prefix = Zeroizing::new(format!("oxide-kitty-{}-", session_token.as_str()));
         let directory = tempfile::Builder::new()
             .prefix(directory_prefix.as_str())
             .tempdir()?;
@@ -223,15 +221,13 @@ pub struct TerminalImageFrame {
     pub gapless: bool,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-#[derive(Default)]
+#[derive(Clone, Debug, Eq, PartialEq, Default)]
 pub struct TerminalImageAnimationState {
     pub running: bool,
     pub loading: bool,
     pub current_frame: usize,
     pub loop_limit: Option<u32>,
 }
-
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TerminalImagePlacement {
@@ -258,6 +254,8 @@ pub enum TerminalGraphicsEvent {
     ImageUpdated(TerminalImageData),
     Place(TerminalImagePlacement),
     Delete { id: Option<TerminalImageId> },
+    DeletePlacements { id: Option<TerminalImageId> },
+    Batch(Vec<TerminalGraphicsEvent>),
     Respond(Vec<u8>),
     Error(String),
 }
@@ -319,6 +317,7 @@ pub enum GraphicsError {
 enum ParserState {
     Ground,
     Esc,
+    SyncStart(Vec<u8>),
     Osc(Vec<u8>),
     OscEsc(Vec<u8>),
     Dcs(Vec<u8>),
@@ -333,6 +332,8 @@ pub struct GraphicsIngress {
     next_image_id: u64,
     kitty_chunks: HashMap<u64, KittyChunkAssembly>,
     kitty_images: HashMap<TerminalImageId, TerminalImageData>,
+    sync_buffer: Option<Zeroizing<Vec<u8>>>,
+    sync_deadline: Option<std::time::Instant>,
 }
 
 struct KittyChunkAssembly {

@@ -725,27 +725,28 @@ impl FileManagerState {
     fn refresh(&mut self, file_manager_state_cx: &mut Context<Self>) {
         self.loading = true;
         let path = self.path.clone();
-        file_manager_state_cx.spawn(async move |this, app_cx| {
-            let files = app_cx
-                .background_spawn(async move { list_local_files(&path) })
-                .await;
-            let _ = this.update(app_cx, |file_manager_state, file_manager_state_cx| {
-                match files {
-                    Ok(files) => {
-                        file_manager_state.replace_files(files);
-                        file_manager_state.error = None;
-                        file_manager_state.prune_selection();
+        file_manager_state_cx
+            .spawn(async move |this, app_cx| {
+                let files = app_cx
+                    .background_spawn(async move { list_local_files(&path) })
+                    .await;
+                let _ = this.update(app_cx, |file_manager_state, file_manager_state_cx| {
+                    match files {
+                        Ok(files) => {
+                            file_manager_state.replace_files(files);
+                            file_manager_state.error = None;
+                            file_manager_state.prune_selection();
+                        }
+                        Err(error) => {
+                            file_manager_state.clear_files();
+                            file_manager_state.error = Some(error.to_string());
+                        }
                     }
-                    Err(error) => {
-                        file_manager_state.clear_files();
-                        file_manager_state.error = Some(error.to_string());
-                    }
-                }
-                file_manager_state.loading = false;
-                file_manager_state_cx.notify();
-            });
-        })
-        .detach();
+                    file_manager_state.loading = false;
+                    file_manager_state_cx.notify();
+                });
+            })
+            .detach();
         file_manager_state_cx.notify();
     }
 
