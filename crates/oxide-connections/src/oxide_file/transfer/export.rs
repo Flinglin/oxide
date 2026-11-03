@@ -15,6 +15,14 @@ pub fn preflight_export(
 
     for id in connection_ids {
         let Some(conn) = store.get(id) else {
+            if let Some(profile) = store
+                .plugin_profiles()
+                .iter()
+                .find(|profile| &profile.id == id)
+            {
+                result.connections_with_passwords +=
+                    usize::from(profile.credential_refs.values().any(Option::is_some));
+            }
             continue;
         };
         collect_managed_key_id(&conn.auth, &mut managed_key_ids);
@@ -163,8 +171,18 @@ fn export_connections_to_oxide_inner(
         );
 
     let mut encrypted_connections = Vec::new();
+    let mut plugin_profiles = Vec::new();
     let mut managed_key_ids = HashSet::new();
     for id in connection_ids {
+        if let Some(profile) = store
+            .plugin_profiles()
+            .iter()
+            .find(|profile| &profile.id == id)
+        {
+            profile.validate()?;
+            plugin_profiles.push(profile.portable());
+            continue;
+        }
         let conn = store
             .get(id)
             .ok_or_else(|| OxideFileError::InvalidFormat(format!("Connection {id} not found")))?;
@@ -193,16 +211,34 @@ fn export_connections_to_oxide_inner(
         connection_ids: connection_ids.iter().cloned().collect(),
         ..Default::default()
     };
-    let selected_totp = store.totp_credentials().iter()
+    let selected_totp = store
+        .totp_credentials()
+        .iter()
         .filter(|p| store.totp_selected(&p.id, &credential_selection))
         .collect::<Vec<_>>();
     let totp_credentials = selected_totp.iter().map(|p| p.portable()).collect();
     let mut portable_secrets = options.portable_secrets.clone();
     if options.include_passwords {
+        let selected_plugins = crate::CredentialSyncSelection {
+            plugin_connection_ids: plugin_profiles.iter().map(|p| p.id.clone()).collect(),
+            ..Default::default()
+        };
+        for secret in store.export_profile_credentials(&selected_plugins, None)? {
+            if !portable_secrets
+                .iter()
+                .any(|existing| existing.id == secret.id && existing.kind == secret.kind)
+            {
+                portable_secrets.push(secret);
+            }
+        }
         for credential in selected_totp {
             let already_exported = portable_secrets.iter().any(|secret| {
-                crate::is_profile_credential(secret) && serde_json::from_str::<crate::CredentialTarget>(&secret.id)
-                    .is_ok_and(|target| target.owner == crate::CredentialOwner::Totp(credential.id.clone()))
+                crate::is_profile_credential(secret)
+                    && serde_json::from_str::<crate::CredentialTarget>(&secret.id).is_ok_and(
+                        |target| {
+                            target.owner == crate::CredentialOwner::Totp(credential.id.clone())
+                        },
+                    )
             });
             if !already_exported && let Some(secret) = store.export_totp_secret(credential)? {
                 portable_secrets.push(secret);
@@ -216,14 +252,13 @@ fn export_connections_to_oxide_inner(
         count_serial_profiles_for_export(options.serial_profiles_json.as_deref());
     let telnet_profiles_count =
         count_telnet_profiles_for_export(options.telnet_profiles_json.as_deref());
-    let mosh_profiles_count =
-        count_mosh_profiles_for_export(options.mosh_profiles_json.as_deref());
-    let standalone_sftp_profiles_count = count_standalone_sftp_profiles_for_export(
-        standalone_sftp_profiles_json.as_deref(),
-    );
+    let mosh_profiles_count = count_mosh_profiles_for_export(options.mosh_profiles_json.as_deref());
+    let standalone_sftp_profiles_count =
+        count_standalone_sftp_profiles_for_export(standalone_sftp_profiles_json.as_deref());
     let remote_desktop_profiles_count =
         count_remote_desktop_profiles_for_export(options.remote_desktop_profiles_json.as_deref());
     let has_extra_payload = options.app_settings_json.is_some()
+       || !plugin_profiles.is_empty()
         || options.quick_commands_json.is_some()
         || options.serial_profiles_json.is_some()
         || options.telnet_profiles_json.is_some()
@@ -233,6 +268,7 @@ fn export_connections_to_oxide_inner(
         || !options.plugin_settings.is_empty()
         || !portable_secrets.is_empty();
     let mut payload = EncryptedPayload {
+          plugin_profiles,
         totp_credentials,
         version: if has_extra_payload { 2 } else { 1 },
         connections: encrypted_connections,
@@ -254,11 +290,17 @@ fn export_connections_to_oxide_inner(
         exported_at: Utc::now(),
         exported_by: format!("oxide v{}", env!("CARGO_PKG_VERSION")),
         description: options.description,
-        num_connections: payload.connections.len(),
+       num_connections: payload.connections.len() + payload.plugin_profiles.len(),
         connection_names: payload
             .connections
             .iter()
             .map(|conn| conn.name.clone())
+                        .chain(
+                payload
+                    .plugin_profiles
+                    .iter()
+                    .map(|profile| profile.name.clone()),
+            )
             .collect(),
         has_app_settings: payload.app_settings_json.as_ref().map(|_| true),
         has_quick_commands: payload.quick_commands_json.as_ref().map(|_| true),
@@ -410,9 +452,14 @@ fn export_privilege_credentials(
         return Ok(Vec::new());
     }
 
-    let owners = [conn.id.clone(), crate::SSH_COMMON_PRIVILEGE_SCOPE_ID.to_string()]
-        .into_iter().collect();
-    store.export_privilege_sync_records(&owners)?
+    let owners = [
+        conn.id.clone(),
+        crate::SSH_COMMON_PRIVILEGE_SCOPE_ID.to_string(),
+    ]
+    .into_iter()
+    .collect();
+    store
+        .export_privilege_sync_records(&owners)?
         .into_iter()
         .map(|record| {
             let credential = record.metadata;
@@ -602,9 +649,9 @@ fn export_auth(
                 },
                 // The encoded private key is secret material and remains inside
                 // the encrypted .oxide payload with Zeroizing ownership.
-                embedded_key: Some(Zeroizing::new(BASE64.encode(
-                    private_key.expose_secret().as_bytes(),
-                ))),
+                embedded_key: Some(Zeroizing::new(
+                    BASE64.encode(private_key.expose_secret().as_bytes()),
+                )),
                 managed_key: Some(EncryptedManagedKeyMetadata {
                     certificate: metadata.certificate,
                     key_id: metadata.id,
@@ -706,9 +753,7 @@ fn count_standalone_sftp_profiles_for_export(snapshot_json: Option<&str>) -> Opt
     Some(snapshot.record_count())
 }
 
-fn portable_standalone_sftp_profiles_json(
-    snapshot_json: &str,
-) -> Result<String, OxideFileError> {
+fn portable_standalone_sftp_profiles_json(snapshot_json: &str) -> Result<String, OxideFileError> {
     let mut snapshot = serde_json::from_str::<StandaloneSftpProfilesSyncSnapshot>(snapshot_json)
         .map_err(|error| {
             OxideFileError::InvalidFormat(format!(

@@ -94,6 +94,7 @@ fn apply_oxide_import_with_options_inner(
         })?
     };
     let EncryptedPayload {
+        mut plugin_profiles,
         totp_credentials,
         connections,
         app_settings_json,
@@ -104,9 +105,16 @@ fn apply_oxide_import_with_options_inner(
         standalone_sftp_profiles_json,
         remote_desktop_profiles_json,
         plugin_settings,
-        portable_secrets,
+        mut portable_secrets,
         ..
     } = payload;
+    plugin_profiles.retain(|profile| {
+        options
+            .selected_names
+            .as_ref()
+            .is_none_or(|names| names.contains(&profile.name))
+    });
+    let plugin_plans = plan_plugin_import(store, &plugin_profiles, options.conflict_strategy)?;
 
     // Parse and validate every selected profile resource before preparing or
     // committing connections. This keeps a bad late archive section from
@@ -422,9 +430,8 @@ fn apply_oxide_import_with_options_inner(
             };
             // Archive-local relation ids are remapped to the imported saved
             // connection and are cleared when their dependency was omitted.
-            profile.ssh_gateway_connection_id = imported_connection_ids
-                .get(source_connection_id)
-                .cloned();
+            profile.ssh_gateway_connection_id =
+                imported_connection_ids.get(source_connection_id).cloned();
         }
     }
 
@@ -438,23 +445,53 @@ fn apply_oxide_import_with_options_inner(
     // owner state before the first write. Secret-bearing connection upserts run
     // last, leaving no fallible archive stage after credentials are committed.
     let checkpoint = store.create_checkpoint()?;
-    let credential_selection = crate::CredentialSyncSelection {
+    let mut credential_selection = crate::CredentialSyncSelection {
         totp_ids: connections_to_save
             .iter()
             .flat_map(|p| {
                 p.options.totp_credential_id.iter().cloned().chain(
-                    p.proxy_chain.iter().filter_map(|h| h.totp_credential_id.clone()),
+                    p.proxy_chain
+                        .iter()
+                        .filter_map(|h| h.totp_credential_id.clone()),
                 )
             })
             .collect(),
         connection_ids: connections_to_save.iter().map(|p| p.id.clone()).collect(),
         ..Default::default()
     };
-    let mut prepared_totp = None;
+    let mut prepared_credentials = None;
     let apply_result = (|| {
         current_step += 1;
         report_progress("saving_config", current_step);
-
+        let plugin_ids =
+            stage_plugin_connections(store, plugin_profiles, plugin_plans, &mut result)?;
+        credential_selection.plugin_connection_ids = plugin_ids.values().cloned().collect();
+        if options.import_portable_secrets && !plugin_ids.is_empty() {
+            for secret in portable_secrets
+                .iter_mut()
+                .filter(|secret| crate::is_profile_credential(secret))
+            {
+                let mut target: crate::CredentialTarget = serde_json::from_str(&secret.id)
+                    .map_err(|_| {
+                        OxideFileError::InvalidFormat("Invalid portable credential target".into())
+                    })?;
+                if let crate::CredentialOwner::PluginConnection(id) = &mut target.owner {
+                    if let Some(imported) = plugin_ids.get(id) {
+                        *id = imported.clone();
+                        let remapped = serde_json::to_string(&target)?;
+                        // Deferred credential consumers must use the imported profile identity too.
+                        if let Some(deferred) = result
+                            .portable_secrets
+                            .iter_mut()
+                            .find(|entry| entry.id == secret.id && entry.kind == secret.kind)
+                        {
+                            deferred.id = remapped.clone();
+                        }
+                        secret.id = remapped;
+                    }
+                }
+            }
+        }
         if let Some(serial_profiles_snapshot) = serial_profiles_snapshot {
             let serial_profiles_count = serial_profiles_snapshot.records.len();
             if options.import_serial_profiles {
@@ -513,8 +550,8 @@ fn apply_oxide_import_with_options_inner(
                             "Failed to import standalone SFTP profiles from .oxide payload: {error}"
                         ))
                     })?;
-                result.skipped_standalone_sftp_profiles = profile_count
-                    .saturating_sub(result.imported_standalone_sftp_profiles);
+                result.skipped_standalone_sftp_profiles =
+                    profile_count.saturating_sub(result.imported_standalone_sftp_profiles);
             } else {
                 result.skipped_standalone_sftp_profiles = profile_count;
             }
@@ -551,16 +588,34 @@ fn apply_oxide_import_with_options_inner(
                 .iter()
                 .filter(|secret| {
                     crate::is_profile_credential(secret)
-                        && serde_json::from_str::<crate::CredentialTarget>(&secret.id)
-                            .is_ok_and(|target| matches!(target.owner, crate::CredentialOwner::Totp(_)))
+                        && serde_json::from_str::<crate::CredentialTarget>(&secret.id).is_ok_and(
+                            |target| {
+                                matches!(
+                                    target.owner,
+                                    crate::CredentialOwner::Totp(_)
+                                        | crate::CredentialOwner::PluginConnection(_)
+                                )
+                            },
+                        )
                 })
                 .cloned()
                 .collect::<Vec<_>>();
-            prepared_totp = Some(store.prepare_profile_credentials(
-                &secrets, &credential_selection, &mut None,
+            prepared_credentials = Some(store.prepare_profile_credentials(
+                &secrets,
+                &credential_selection,
+                &mut None,
             )?);
             result.portable_secrets.retain(|secret| {
-                !secrets.iter().any(|handled| handled.id == secret.id && handled.kind == secret.kind)
+                !crate::is_profile_credential(secret)
+                    || !serde_json::from_str::<crate::CredentialTarget>(&secret.id).is_ok_and(
+                        |target| {
+                            matches!(
+                                target.owner,
+                                crate::CredentialOwner::Totp(_)
+                                    | crate::CredentialOwner::PluginConnection(_)
+                            )
+                        },
+                    )
             });
         }
         store.upsert_imported_connections_and_managed_keys_transaction(
@@ -571,8 +626,10 @@ fn apply_oxide_import_with_options_inner(
     })();
 
     if let Err(import_error) = apply_result {
-        let secret_rollback = prepared_totp.take()
-            .map(|prepared| store.rollback_profile_credentials(prepared)).transpose();
+        let secret_rollback = prepared_credentials
+            .take()
+            .map(|prepared| store.rollback_profile_credentials(prepared))
+            .transpose();
         // Restore metadata even if protected-slot cleanup fails.
         return match store.restore_checkpoint(&checkpoint) {
             Ok(()) => {
@@ -585,7 +642,7 @@ fn apply_oxide_import_with_options_inner(
         };
     }
 
-    if let Some(mut prepared) = prepared_totp {
+    if let Some(mut prepared) = prepared_credentials {
         result.restored_profile_credentials += prepared.summary.restored;
         result.cleared_profile_credentials += prepared.summary.cleared;
         result.skipped_profile_credentials += prepared.summary.skipped;
@@ -597,8 +654,13 @@ fn apply_oxide_import_with_options_inner(
         for secret in &portable_secrets {
             if !options.defer_totp_secrets
                 && crate::is_profile_credential(secret)
-                && serde_json::from_str::<crate::CredentialTarget>(&secret.id)
-                    .is_ok_and(|target| matches!(target.owner, crate::CredentialOwner::Totp(_)))
+                && serde_json::from_str::<crate::CredentialTarget>(&secret.id).is_ok_and(|target| {
+                    matches!(
+                        target.owner,
+                        crate::CredentialOwner::Totp(_)
+                            | crate::CredentialOwner::PluginConnection(_)
+                    )
+                })
             {
                 continue;
             }
@@ -932,10 +994,28 @@ fn import_auth(
     imported_managed_keys: &mut Vec<ImportedManagedSshKey>,
     import_options: &OxideImportOptions,
 ) -> Result<SavedAuth, OxideFileError> {
-    if import_options.restore_managed_keys && matches!(&auth,EncryptedAuth::Certificate {embedded_key:Some(_),embedded_cert:Some(_),..}) {
-        prepare_sync_auth(&mut auth,&mut Vec::new(),&mut HashMap::new())?;
-        let options=OxideImportOptions {restore_managed_key_passphrases:true,..import_options.clone()};
-        return import_auth(store,auth,restored_managed_keys,imported_managed_keys,&options);
+    if import_options.restore_managed_keys
+        && matches!(
+            &auth,
+            EncryptedAuth::Certificate {
+                embedded_key: Some(_),
+                embedded_cert: Some(_),
+                ..
+            }
+        )
+    {
+        prepare_sync_auth(&mut auth, &mut Vec::new(), &mut HashMap::new())?;
+        let options = OxideImportOptions {
+            restore_managed_key_passphrases: true,
+            ..import_options.clone()
+        };
+        return import_auth(
+            store,
+            auth,
+            restored_managed_keys,
+            imported_managed_keys,
+            &options,
+        );
     }
     Ok(match auth {
         EncryptedAuth::Password {
@@ -1049,11 +1129,12 @@ fn prepare_managed_key_restore(
     }
 
     if let Some(fingerprint) = metadata.fingerprint.as_deref() {
-        if let Some(existing) = store
-            .managed_ssh_keys()
-            .into_iter()
-            .find(|key| key.fingerprint == fingerprint && store.managed_ssh_key_metadata(&key.id).is_ok_and(|key|key.certificate==metadata.certificate))
-        {
+        if let Some(existing) = store.managed_ssh_keys().into_iter().find(|key| {
+            key.fingerprint == fingerprint
+                && store
+                    .managed_ssh_key_metadata(&key.id)
+                    .is_ok_and(|key| key.certificate == metadata.certificate)
+        }) {
             restored_managed_keys.insert(metadata.key_id, existing.id.clone());
             return Ok(Some(SavedAuth::ManagedKey {
                 key_id: existing.id,
@@ -1062,10 +1143,9 @@ fn prepare_managed_key_restore(
             }));
         }
 
-        if let Some(pending) = imported_managed_keys
-            .iter()
-            .find(|entry| entry.key.fingerprint == fingerprint && entry.key.certificate==metadata.certificate)
-        {
+        if let Some(pending) = imported_managed_keys.iter().find(|entry| {
+            entry.key.fingerprint == fingerprint && entry.key.certificate == metadata.certificate
+        }) {
             restored_managed_keys.insert(metadata.key_id, pending.key.id.clone());
             return Ok(Some(SavedAuth::ManagedKey {
                 key_id: pending.key.id.clone(),
@@ -1111,8 +1191,12 @@ fn prepare_managed_key_restore(
         updated_at: now,
     };
     if key.certificate.is_some() {
-        crate::ManagedSshKeySyncRecord {metadata:key.clone(),private_key:SecretString::from(private_key.as_str())}
-            .validate_certificate().map_err(|error|OxideFileError::InvalidFormat(error.to_string()))?;
+        crate::ManagedSshKeySyncRecord {
+            metadata: key.clone(),
+            private_key: SecretString::from(private_key.as_str()),
+        }
+        .validate_certificate()
+        .map_err(|error| OxideFileError::InvalidFormat(error.to_string()))?;
     }
     let saved_auth = SavedAuth::ManagedKey {
         key_id: key_id.clone(),

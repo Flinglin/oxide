@@ -20,6 +20,257 @@ mod tests {
             std::env::temp_dir().join(format!("oxide-oxide-file-{name}-{}.json", Uuid::new_v4()));
         ConnectionStore::load(path).unwrap()
     }
+    #[test]
+    fn plugin_only_archives_keep_unknown_settings_and_opt_in_credentials_without_a_provider() {
+        let mut source = temp_store("plugin-source");
+        let now = Utc::now();
+        for id in ["selected", "excluded"] {
+            source
+                .save_plugin_profile_credentials(
+                    crate::PluginConnectionProfile {
+                        id: id.into(),
+                        plugin_id: "missing.provider".into(),
+                        type_id: "custom".into(),
+                        name: id.into(),
+                        group: Some("Devices".into()),
+                        config: [(
+                            "future/setting".into(),
+                            serde_json::json!({"values":[1,2,3]}),
+                        )]
+                        .into(),
+                        credential_refs: Default::default(),
+                        created_at: now,
+                        updated_at: now,
+                        last_used_at: None,
+                    },
+                    [(
+                        "auth/token".into(),
+                        crate::SecretString::from("archive-plugin-token\nline-two"),
+                    )]
+                    .into(),
+                )
+                .unwrap();
+        }
+        for include_passwords in [false, true] {
+            let bytes = export_connections_to_oxide(
+                &source,
+                &["selected".into()],
+                "archive-password",
+                OxideExportOptions {
+                    include_passwords,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let mut context = OxideBatchDecryptionContext::new("archive-password").unwrap();
+            let file = OxideFile::from_bytes(&bytes).unwrap();
+            let payload =
+                decrypt_oxide_file_with_context_and_progress(&file, &mut context, |_| {}).unwrap();
+            assert_eq!(
+                payload
+                    .plugin_profiles
+                    .iter()
+                    .map(|p| p.id.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["selected"]
+            );
+            assert_eq!(
+                payload.plugin_profiles[0].credential_refs,
+                [("auth/token".into(), None)].into()
+            );
+            assert_eq!(
+                payload.portable_secrets.len(),
+                usize::from(include_passwords)
+            );
+            for import_portable_secrets in [false, true] {
+                let mut target = temp_store("plugin-target");
+                let preview = preview_oxide_import_with_context_and_progress(
+                    &target,
+                    &bytes,
+                    &mut context,
+                    ImportConflictStrategy::Rename,
+                    |_, _, _| {},
+                )
+                .unwrap();
+                assert_eq!(preview.total_connections, 1);
+                assert_eq!(preview.unchanged, vec!["selected"]);
+                assert_eq!(preview.records[0].resource, "connection");
+                let result = apply_oxide_import_with_options_with_context_and_progress(
+                    &mut target,
+                    &bytes,
+                    &mut context,
+                    OxideImportOptions {
+                        import_portable_secrets,
+                        ..Default::default()
+                    },
+                    |_, _, _| {},
+                )
+                .unwrap();
+                assert_eq!(result.imported, 1);
+                let reloaded = ConnectionStore::load(target.path()).unwrap();
+                let profile = &reloaded.plugin_profiles()[0];
+                assert_ne!(profile.id, "selected");
+                assert_eq!(
+                    (
+                        &*profile.plugin_id,
+                        &*profile.type_id,
+                        &*profile.name,
+                        profile.group.as_deref()
+                    ),
+                    ("missing.provider", "custom", "selected", Some("Devices"))
+                );
+                assert_eq!(
+                    profile.config["future/setting"],
+                    serde_json::json!({"values":[1,2,3]})
+                );
+                let credentials = target.plugin_connection_credentials(&profile.id).unwrap();
+                if include_passwords && import_portable_secrets {
+                    assert_eq!(
+                        credentials["auth/token"].expose_secret(),
+                        "archive-plugin-token\nline-two"
+                    );
+                    assert_ne!(
+                        profile.credential_refs["auth/token"],
+                        source.plugin_profiles()[0].credential_refs["auth/token"]
+                    );
+                } else {
+                    assert!(credentials.is_empty());
+                }
+                let skipped = apply_oxide_import_with_options_with_context_and_progress(
+                    &mut target,
+                    &bytes,
+                    &mut context,
+                    OxideImportOptions {
+                        conflict_strategy: ImportConflictStrategy::Skip,
+                        ..Default::default()
+                    },
+                    |_, _, _| {},
+                )
+                .unwrap();
+                assert_eq!(skipped.skipped, 1);
+                assert_eq!(
+                    target
+                        .plugin_profiles()
+                        .iter()
+                        .map(|p| p.name.as_str())
+                        .collect::<Vec<_>>(),
+                    vec!["selected"]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn plugin_archive_conflicts_and_name_selection_follow_connection_import_rules() {
+        let mut source = temp_store("plugin-conflicts-source");
+        let now = Utc::now();
+        let profile = crate::PluginConnectionProfile {
+            id: "source".into(),
+            plugin_id: "missing.provider".into(),
+            type_id: "custom".into(),
+            name: "Device".into(),
+            group: None,
+            config: [
+                ("root/host".into(), serde_json::json!("remote")),
+                ("future/options".into(), serde_json::json!([1, 2])),
+            ]
+            .into(),
+            credential_refs: Default::default(),
+            created_at: now,
+            updated_at: now,
+            last_used_at: None,
+        };
+        source.save_plugin_profile(profile.clone()).unwrap();
+        let bytes = export_connections_to_oxide(
+            &source,
+            &["source".into()],
+            "archive-password",
+            Default::default(),
+        )
+        .unwrap();
+        let mut context = OxideBatchDecryptionContext::new("archive-password").unwrap();
+        for (strategy, action, expected_host) in [
+            (ImportConflictStrategy::Skip, "skip", "local"),
+            (ImportConflictStrategy::Replace, "replace", "remote"),
+            (ImportConflictStrategy::Merge, "merge", "local"),
+            (ImportConflictStrategy::Rename, "rename", "local"),
+        ] {
+            let mut target = temp_store("plugin-conflicts-target");
+            let mut local = profile.clone();
+            local.id = "target".into();
+            local.config = [("root/host".into(), serde_json::json!("local"))].into();
+            target.save_plugin_profile(local).unwrap();
+            let preview = preview_oxide_import_with_context_and_progress(
+                &target,
+                &bytes,
+                &mut context,
+                strategy,
+                |_, _, _| {},
+            )
+            .unwrap();
+            assert_eq!(preview.records[0].action, action);
+            let result = apply_oxide_import_with_options_with_context_and_progress(
+                &mut target,
+                &bytes,
+                &mut context,
+                OxideImportOptions {
+                    conflict_strategy: strategy,
+                    ..Default::default()
+                },
+                |_, _, _| {},
+            )
+            .unwrap();
+            assert_eq!(
+                target
+                    .plugin_profiles()
+                    .iter()
+                    .find(|p| p.id == "target")
+                    .unwrap()
+                    .config["root/host"],
+                serde_json::json!(expected_host),
+                "{action}"
+            );
+            assert_eq!(result.imported, usize::from(action != "skip"));
+            if action == "rename" {
+                let renamed = target
+                    .plugin_profiles()
+                    .iter()
+                    .find(|p| p.id != "target")
+                    .unwrap();
+                assert_eq!(renamed.name, preview.will_rename[0].1);
+                assert_eq!(renamed.config["root/host"], "remote");
+            } else {
+                assert_eq!(
+                    target
+                        .plugin_profiles()
+                        .iter()
+                        .map(|p| p.id.as_str())
+                        .collect::<Vec<_>>(),
+                    vec!["target"]
+                );
+                if action != "skip" {
+                    assert_eq!(
+                        target.plugin_profiles()[0].config["future/options"],
+                        serde_json::json!([1, 2])
+                    );
+                }
+            }
+        }
+        let mut target = temp_store("plugin-deselected");
+        let result = apply_oxide_import_with_options_with_context_and_progress(
+            &mut target,
+            &bytes,
+            &mut context,
+            OxideImportOptions {
+                selected_names: Some(vec!["Other".into()]),
+                ..Default::default()
+            },
+            |_, _, _| {},
+        )
+        .unwrap();
+        assert_eq!(result.imported, 0);
+        assert!(target.plugin_profiles().is_empty());
+    }
 
     #[test]
     fn embedded_certificate_migrates_into_protected_managed_auth() {
@@ -405,9 +656,24 @@ mod tests {
         let serial_profiles_json =
             serde_json::to_string_pretty(&source.export_serial_profiles_snapshot().unwrap())
                 .unwrap();
+        let now = Utc::now();
+        source
+            .save_plugin_profile(crate::PluginConnectionProfile {
+                id: "plugin-import".into(),
+                plugin_id: "missing.provider".into(),
+                type_id: "custom".into(),
+                name: "Imported plugin".into(),
+                group: None,
+                config: [("root/host".into(), serde_json::json!("remote.device"))].into(),
+                credential_refs: Default::default(),
+                created_at: now,
+                updated_at: now,
+                last_used_at: None,
+            })
+            .unwrap();
         let exported = export_connections_to_oxide(
             &source,
-            &["conn-import".to_string()],
+            &["conn-import".to_string(), "plugin-import".into()],
             IMPORT_PASSWORD,
             OxideExportOptions {
                 include_passwords: true,
@@ -473,6 +739,7 @@ mod tests {
             original_connections
         );
         assert_eq!(target.serial_profiles(), original_serial_profiles);
+        assert!(target.plugin_profiles().is_empty());
         assert_eq!(fs::read(&target_path).unwrap(), original_file);
 
         let reloaded = ConnectionStore::load(target_path).unwrap();
@@ -1025,7 +1292,7 @@ mod tests {
             .find(|connection| connection.name == "Prod")
             .unwrap();
 
-             assert_eq!(
+        assert_eq!(
             imported
                 .privilege_credentials
                 .iter()
@@ -1034,8 +1301,12 @@ mod tests {
             ["sudo-prod", "ssh-common:shared-sudo"]
         );
         let owners = [imported.id.clone()].into_iter().collect();
-        let common = target.export_privilege_sync_records(&owners).unwrap().into_iter()
-            .find(|record| record.metadata.id == "ssh-common:shared-sudo").unwrap();
+        let common = target
+            .export_privilege_sync_records(&owners)
+            .unwrap()
+            .into_iter()
+            .find(|record| record.metadata.id == "ssh-common:shared-sudo")
+            .unwrap();
         assert!(!common.metadata.enabled);
         assert_eq!(common.secret.unwrap(), "common-secret");
         assert!(
