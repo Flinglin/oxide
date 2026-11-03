@@ -565,7 +565,7 @@ impl FileManagerState {
                         "file_browse",
                         Some(&path),
                     );
-                    file_manager.set_path(path);
+                    file_manager.set_path(path, cx);
                     audit.finish(
                         if file_manager.error.is_none() {
                             oxide_audit::AuditOutcome::Succeeded
@@ -677,7 +677,7 @@ impl FileManagerState {
                     }
                     match result {
                         Ok(()) => {
-                            self.refresh();
+                            self.refresh(cx);
                             cx.emit(FileManagerWorkspaceEvent::OperationSucceeded);
                         }
                         Err(error) => cx.emit(FileManagerWorkspaceEvent::Error(error)),
@@ -722,27 +722,38 @@ impl FileManagerState {
         cx.notify();
     }
 
-    fn refresh(&mut self) {
+    fn refresh(&mut self, file_manager_state_cx: &mut Context<Self>) {
         self.loading = true;
-        match list_local_files(&self.path) {
-            Ok(files) => {
-                self.replace_files(files);
-                self.error = None;
-                self.prune_selection();
-            }
-            Err(error) => {
-                self.clear_files();
-                self.error = Some(error.to_string());
-            }
-        }
-        self.loading = false;
+        let path = self.path.clone();
+        file_manager_state_cx.spawn(async move |this, app_cx| {
+            let files = app_cx
+                .background_spawn(async move { list_local_files(&path) })
+                .await;
+            let _ = this.update(app_cx, |file_manager_state, file_manager_state_cx| {
+                match files {
+                    Ok(files) => {
+                        file_manager_state.replace_files(files);
+                        file_manager_state.error = None;
+                        file_manager_state.prune_selection();
+                    }
+                    Err(error) => {
+                        file_manager_state.clear_files();
+                        file_manager_state.error = Some(error.to_string());
+                    }
+                }
+                file_manager_state.loading = false;
+                file_manager_state_cx.notify();
+            });
+        })
+        .detach();
+        file_manager_state_cx.notify();
     }
 
     fn refresh_drives(&mut self) {
         self.drives = local_drives();
     }
 
-    fn set_path(&mut self, path: String) {
+    fn set_path(&mut self, path: String, cx: &mut Context<Self>) {
         let normalized_path = resolve_home_path(&path).into_owned();
         self.path = normalized_path.clone();
         self.path_input = normalized_path;
@@ -754,7 +765,7 @@ impl FileManagerState {
         self.last_selected = None;
         self.clear_context_menu_immediately();
         self.list_scroll = UniformListScrollHandle::new();
-        self.refresh();
+        self.refresh(cx);
     }
 
     fn clear_context_menu_immediately(&mut self) -> bool {

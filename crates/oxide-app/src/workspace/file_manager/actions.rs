@@ -68,7 +68,7 @@ impl WorkspaceApp {
             let path = self.file_manager.read(cx).path.clone();
             let audit = local_file_operation("file_browse", &path);
             self.file_manager.update(cx, |file_manager, cx| {
-                file_manager.refresh();
+                file_manager.refresh(cx);
                 audit.finish(
                     if file_manager.error.is_none() {
                         oxide_audit::AuditOutcome::Succeeded
@@ -403,7 +403,7 @@ impl WorkspaceApp {
 
     pub(super) fn refresh_file_manager(&mut self, cx: &mut Context<Self>) {
         self.file_manager.update(cx, |file_manager, cx| {
-            file_manager.refresh();
+            file_manager.refresh(cx);
             cx.notify();
         });
     }
@@ -414,7 +414,7 @@ impl WorkspaceApp {
         let audit = local_file_operation("file_browse", &path);
         self.file_manager.update(cx, |file_manager, cx| {
             file_manager.refresh_drives();
-            file_manager.refresh();
+            file_manager.refresh(cx);
             audit.finish(
                 if file_manager.error.is_none() {
                     oxide_audit::AuditOutcome::Succeeded
@@ -448,7 +448,7 @@ impl WorkspaceApp {
     pub(super) fn set_file_manager_path(&mut self, path: String, cx: &mut Context<Self>) {
         let audit = local_file_operation("file_browse", &path);
         self.file_manager.update(cx, |file_manager, cx| {
-            file_manager.set_path(path);
+            file_manager.set_path(path,cx);
             audit.finish(
                 if file_manager.error.is_none() {
                     oxide_audit::AuditOutcome::Succeeded
