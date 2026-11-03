@@ -1813,15 +1813,10 @@ pub(crate) async fn detect_remote_env_for_handle(handle: &SshConnectionHandle) -
     // Probe through registry-owned channels so gateways can require a PTY
     // without borrowing terminal input or triggering another authentication.
     for with_pty in [false, true] {
-        let opened = tokio::time::timeout(REMOTE_ENV_TOTAL_TIMEOUT, async {
-            if with_pty {
-                handle.open_persistent_pty_shell_channel("").await
-            } else {
-                handle.open_persistent_shell_channel("").await
-            }
-        })
-        .await;
-        let Ok(Ok(mut shell)) = opened else {
+        let opened = handle
+            .open_sampling_shell_channel("", with_pty, REMOTE_ENV_TOTAL_TIMEOUT)
+            .await;
+        let Ok(mut shell) = opened else {
             continue;
         };
         let detected = tokio::time::timeout(
@@ -1907,12 +1902,12 @@ async fn detect_remote_env_inner(
     .await
     {
         Ok(output) if is_windows => parse_remote_windows_env(&output),
-       Ok(output) => parse_remote_unix_env(&output, raw_platform),
+        Ok(output) => parse_remote_unix_env(&output, raw_platform),
         Err(_) => RemoteEnvInfo {
             os_type: if is_windows {
                 "Windows".to_string()
             } else {
-                 classify_remote_unix_os(raw_platform)
+                classify_remote_unix_os(raw_platform)
             },
             os_version: None,
             kernel: None,
@@ -1969,7 +1964,7 @@ fn parse_remote_unix_env(output: &str, raw_platform: &str) -> RemoteEnvInfo {
 }
 
 fn parse_remote_windows_env(output: &str) -> RemoteEnvInfo {
-        // POSIX shells can echo the remaining PowerShell probe after its first
+    // POSIX shells can echo the remaining PowerShell probe after its first
     // command fails. Delimiters alone do not establish a Windows platform.
     if extract_section_between(output, "===PLATFORM===", "===ENV===") != Some("Win32NT") {
         return RemoteEnvInfo::unknown();
@@ -2123,7 +2118,7 @@ mod tests {
 
     #[tokio::test]
     async fn shell_only_otp_server_keeps_sampling_on_shared_connection_despite_command_echo() {
-                assert_shell_only_sampling(false).await;
+        assert_shell_only_sampling(false).await;
     }
 
     #[tokio::test]
@@ -2136,7 +2131,7 @@ mod tests {
         use russh::{Channel, ChannelId, server};
         struct ShellOnlyPeer {
             channels: HashMap<ChannelId, Channel<server::Msg>>,
-                 pty_channels: HashSet<ChannelId>,
+            pty_channels: HashSet<ChannelId>,
             initialized_channels: HashSet<ChannelId>,
             readiness_attempts: HashMap<ChannelId, usize>,
             require_sampling_pty: bool,
@@ -2194,7 +2189,7 @@ mod tests {
                 reply.accept().await;
                 Ok(())
             }
-                        async fn pty_request(
+            async fn pty_request(
                 &mut self,
                 channel: ChannelId,
                 _: &str,
@@ -2230,7 +2225,7 @@ mod tests {
                 data: &[u8],
                 session: &mut server::Session,
             ) -> Result<(), Self::Error> {
-                             let command = std::str::from_utf8(data).unwrap();
+                let command = std::str::from_utf8(data).unwrap();
                 if self.require_sampling_pty
                     && self.pty_channels.contains(&channel)
                     && !data.ends_with(b"\r")
@@ -2304,7 +2299,7 @@ mod tests {
                 stream,
                 ShellOnlyPeer {
                     channels: HashMap::new(),
-                       pty_channels: HashSet::new(),
+                    pty_channels: HashSet::new(),
                     initialized_channels: HashSet::new(),
                     readiness_attempts: HashMap::new(),
                     require_sampling_pty,
@@ -2658,7 +2653,7 @@ mod tests {
         assert_eq!(registry.mark_visible_terminal_ready("missing"), None);
     }
 
-     #[test]
+    #[test]
     fn remote_platform_parser_ignores_echoed_probe_branches() {
         for (output, expected) in [
             (
