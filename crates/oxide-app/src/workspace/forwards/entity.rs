@@ -235,7 +235,9 @@ impl ForwardingWorkspaceEntity {
             self.worker_tx.clone(),
         );
     }
-
+    pub(in crate::workspace) fn operation_pending(&self) -> bool {
+        self.view.pending
+    }
     pub(super) fn request_port_scan(
         &mut self,
         node_id: NodeId,

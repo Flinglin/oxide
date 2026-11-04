@@ -1383,6 +1383,13 @@ fn create_cloud_sync_rollback_backup(
                     target_port: forward.rule.target_port,
                     description: Some(forward.rule.description),
                     auto_start: forward.auto_start,
+                    tunnel: forward.tunnel.map(|profile| {
+                        oxide_connections::oxide_file::OxideTunnelProfile {
+                            name: profile.name,
+                            group: profile.group,
+                            connect_on_startup: profile.connect_on_startup,
+                        }
+                    }),
                 })
         })
         .collect::<Vec<_>>();

@@ -1100,7 +1100,23 @@ impl WorkspaceApp {
         let _ = self.connection_store.mark_used(saved_connection_id);
         true
     }
-
+    pub(in crate::workspace) fn indexed_saved_ssh_node_for_connection(
+        &self,
+        saved_connection_id: &str,
+        connection: &oxide_connections::SavedConnection,
+    ) -> Option<NodeId> {
+        let node_id = self.saved_ssh_nodes.get(saved_connection_id)?;
+        let node = self.ssh_nodes.get(node_id)?;
+        indexed_saved_node_matches_saved_connection(
+            &self.node_router,
+            &self.connection_store,
+            node_id,
+            node,
+            connection,
+            saved_connection_id,
+        )
+        .then(|| node_id.clone())
+    }
     pub(in crate::workspace) fn materialize_ssh_root_node(
         &mut self,
         config: SshConfig,
