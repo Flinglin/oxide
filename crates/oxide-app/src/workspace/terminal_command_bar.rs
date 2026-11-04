@@ -38,7 +38,7 @@ mod highlight;
 mod history;
 mod privilege;
 mod sender;
-
+pub(in crate::workspace) use history::{SavedConsoleProfileKind, delete_saved_console_profile};
 const TERMINAL_BROADCAST_MENU_WIDTH: f32 = 340.0;
 const TERMINAL_BROADCAST_MENU_MAX_HEIGHT: f32 = 520.0;
 const TERMINAL_CWD_MENU_WIDTH: f32 = 520.0;
