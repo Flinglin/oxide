@@ -495,7 +495,9 @@ pub fn set_save_command_history(settings: &mut PersistedSettings, value: bool) {
 pub fn set_command_marks_enabled(settings: &mut PersistedSettings, value: bool) {
     settings.terminal.command_marks.enabled = value;
 }
-
+pub fn set_command_folding_enabled(settings: &mut PersistedSettings, value: bool) {
+    settings.terminal.command_marks.folding_enabled = value;
+}
 pub fn set_command_marks_hover_actions(settings: &mut PersistedSettings, value: bool) {
     settings.terminal.command_marks.show_hover_actions = value;
 }
