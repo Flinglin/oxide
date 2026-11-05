@@ -310,17 +310,18 @@ async fn open_interactive_shell_channel(
         }
     }
     if agent_forwarding {
-        if let Err(error) = request_agent_forwarding_for_shell(&mut channel).await {
-            // A rejected request leaves no usable shell channel. Close it
-            // explicitly so pooled transports do not retain a failed channel.
-            let _ = channel.close().await;
-            return Err(("request-agent-forwarding", error));
+        // OpenSSH accepts Agent forwarding once per physical connection. Serialize
+        // first-time requests so concurrently opened PTYs also reuse that acceptance.
+        let _request = pooled.agent_forwarding_request.lock().await;
+        if !pooled.agent_forwarding_accepted.load(Ordering::Acquire) {
+            if let Err(error) = request_agent_forwarding_for_shell(&mut channel).await {
+                let _ = channel.close().await;
+                return Err(("request-agent-forwarding", error));
+            }
+            pooled
+                .agent_forwarding_accepted
+                .store(true, Ordering::Release);
         }
-        // No later forwarding setup can fail after the connection-wide Agent
-        // admission flag becomes visible to server-opened channels.
-        pooled
-            .agent_forwarding_accepted
-            .store(true, Ordering::Release);
     }
     Ok((channel, x11_route_guard, x11_status))
 }
@@ -371,7 +372,7 @@ async fn open_plain_shell(
         let _ = channel.close().await;
         return Err(SshTransportError::Channel(error.to_string()));
     }
-     Ok((channel, x11_route_guard, x11_status))
+    Ok((channel, x11_route_guard, x11_status))
 }
 
 fn begin_connection_audit(
@@ -1592,7 +1593,7 @@ impl SshTransportClient {
             )
         };
         let shell_started = Arc::new(AtomicBool::new(false));
-                let x11_status = Arc::new(parking_lot::Mutex::new(None));
+        let x11_status = Arc::new(parking_lot::Mutex::new(None));
         let task_x11_status = x11_status.clone();
         let task_shell_started = shell_started.clone();
         let mut deferred_request_config = deferred_pty.then_some(request_config);
@@ -1803,7 +1804,7 @@ impl SshTransportClient {
             output_rx,
             auth_banners,
             shell_started,
-              x11_status,
+            x11_status,
             ssh_connection,
             registry_release,
         })
