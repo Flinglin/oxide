@@ -16,24 +16,40 @@ impl ConnectionStore {
             .iter()
             .filter(|connection| connection_ids.contains(&connection.id))
             .flat_map(|connection| connection.privilege_credentials.iter())
-            .chain(
-                self.data
-                    .ssh_common_privilege_credentials
-                    .iter()
-                    .filter(|_| connection_ids.contains(SSH_COMMON_PRIVILEGE_SCOPE_ID)),
-            )
-            .map(|credential| {
-                let secret = if let Some(reference) = &credential.keychain_id {
-                    Some(self.privilege_keychain.get(reference)?)
-                } else {
-                    credential.plaintext_secret.clone()
-                };
-                let mut metadata = credential.clone();
-                metadata.keychain_id = None;
-                metadata.plaintext_secret = None;
-                Ok(PrivilegeCredentialSyncRecord { metadata, secret })
-            })
+            .chain(self.data.ssh_common_privilege_credentials.iter()
+                .filter(|_| connection_ids.contains(SSH_COMMON_PRIVILEGE_SCOPE_ID)))
+            .map(|credential| self.export_privilege_sync_record(credential))
             .collect()
+    }
+
+    pub(crate) fn export_connection_privilege_records(
+        &self,
+        connection: &SavedConnection,
+    ) -> Result<Vec<PrivilegeCredentialSyncRecord>> {
+        // Select metadata before accessing the keychain: an excluded host's
+        // credentials must neither prompt for authentication nor block export.
+        connection.privilege_credentials.iter()
+            .chain(self.data.ssh_common_privilege_credentials.iter()
+                .filter(|credential| privilege_host_scope_matches(
+                    &connection.host, &credential.host_patterns,
+                )))
+            .map(|credential| self.export_privilege_sync_record(credential))
+            .collect()
+    }
+
+    fn export_privilege_sync_record(
+        &self,
+        credential: &SavedPrivilegeCredential,
+    ) -> Result<PrivilegeCredentialSyncRecord> {
+        let secret = if let Some(reference) = &credential.keychain_id {
+            Some(self.privilege_keychain.get(reference)?)
+        } else {
+            credential.plaintext_secret.clone()
+        };
+        let mut metadata = credential.clone();
+        metadata.keychain_id = None;
+        metadata.plaintext_secret = None;
+        Ok(PrivilegeCredentialSyncRecord { metadata, secret })
     }
 
     pub fn prepare_privilege_sync(

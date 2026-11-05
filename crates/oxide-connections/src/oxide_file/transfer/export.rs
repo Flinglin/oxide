@@ -207,11 +207,11 @@ fn export_connections_to_oxide_inner(
     }
     report_progress("collecting_portable_secrets");
 
-   let mut credential_selection = crate::CredentialSyncSelection {
+    let mut credential_selection = crate::CredentialSyncSelection {
         connection_ids: connection_ids.iter().cloned().collect(),
         ..Default::default()
     };
-        // Only TOTP seeds referenced by the privilege copies that actually appear
+    // Only TOTP seeds referenced by the privilege copies that actually appear
     // in this archive should travel; excluded shared credentials must not leak
     // their verification-code credential.
     for connection in &encrypted_connections {
@@ -272,7 +272,7 @@ fn export_connections_to_oxide_inner(
     let remote_desktop_profiles_count =
         count_remote_desktop_profiles_for_export(options.remote_desktop_profiles_json.as_deref());
     let has_extra_payload = options.app_settings_json.is_some()
-       || !plugin_profiles.is_empty()
+        || !plugin_profiles.is_empty()
         || options.quick_commands_json.is_some()
         || options.serial_profiles_json.is_some()
         || options.telnet_profiles_json.is_some()
@@ -282,7 +282,7 @@ fn export_connections_to_oxide_inner(
         || !options.plugin_settings.is_empty()
         || !portable_secrets.is_empty();
     let mut payload = EncryptedPayload {
-          plugin_profiles,
+        plugin_profiles,
         totp_credentials,
         version: if has_extra_payload { 2 } else { 1 },
         connections: encrypted_connections,
@@ -304,12 +304,12 @@ fn export_connections_to_oxide_inner(
         exported_at: Utc::now(),
         exported_by: format!("oxide v{}", env!("CARGO_PKG_VERSION")),
         description: options.description,
-       num_connections: payload.connections.len() + payload.plugin_profiles.len(),
+        num_connections: payload.connections.len() + payload.plugin_profiles.len(),
         connection_names: payload
             .connections
             .iter()
             .map(|conn| conn.name.clone())
-                        .chain(
+            .chain(
                 payload
                     .plugin_profiles
                     .iter()
@@ -466,26 +466,10 @@ fn export_privilege_credentials(
         return Ok(Vec::new());
     }
 
-    let owners = [
-        conn.id.clone(),
-        crate::SSH_COMMON_PRIVILEGE_SCOPE_ID.to_string(),
-    ]
-    .into_iter()
-    .collect();
     store
-        .export_privilege_sync_records(&owners)?
+        .export_connection_privilege_records(conn)?
         .into_iter()
-            // A shared credential restricted to another host must not become an
-        // unscoped copy on this connection, because import cannot restore a
-        // host restriction that the archive dropped.
-        .filter(|record| {
-            record.metadata.connection_id != crate::SSH_COMMON_PRIVILEGE_SCOPE_ID
-                || crate::privilege_host_scope_matches(
-                    &conn.host,
-                    &record.metadata.host_patterns,
-                )
-        })
-          .map(|record| {
+        .map(|record| {
             let credential = record.metadata;
             Ok(EncryptedPrivilegeCredential {
                 // A connection archive carries a scoped copy, never a new global default on import.
@@ -734,7 +718,7 @@ fn export_forward(forward: &OxideForwardRecord) -> EncryptedForward {
         target_port: forward.target_port,
         description: forward.description.clone(),
         auto_start: forward.auto_start,
-         tunnel: forward.tunnel.clone(),
+        tunnel: forward.tunnel.clone(),
     }
 }
 
