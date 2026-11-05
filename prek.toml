@@ -33,14 +33,15 @@ hooks = [
         "--autofix",
         "--indent=2",
         "--no-sort-keys",
-    ] }
+        "--no-ensure-ascii",
+    ] },
 ]
 
 # ========== Rust：cargo fmt + cargo clippy ==========
 [[repos]]
 repo = "local"
 hooks = [
-    { id = "cargo-fmt",name = "cargo fmt", language = "system", entry = "cargo fmt --all --", types = [
+    { id = "cargo-fmt", name = "cargo fmt", language = "system", entry = "cargo fmt --all --", types = [
         "rust",
     ], pass_filenames = false },
     { id = "cargo-clippy", name = "cargo clippy", language = "system", entry = "cargo clippy --all-targets --all-features -- -D warnings", types = [
