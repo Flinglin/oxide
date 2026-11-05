@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use gpui::{
     Font, FontFallbacks, FontFeatures, FontStyle, FontWeight, Pixels, SharedString, TextRun,
-    Window, px, rgb,
+    TextSystem, Window, px, rgb,
 };
 use oxide_render_policy::EffectiveRenderPolicy;
 use oxide_settings::{TerminalBackspaceSequence, TerminalDeleteSequence, TerminalSemanticScheme};
@@ -1070,12 +1070,14 @@ impl TerminalMetrics {
     ) -> Self {
         let font_size = px(preferences.font_size);
         let line_height = px(preferences.font_size * preferences.line_height);
-        let font = terminal_font_with_family_and_cjk(
+        let font = resolve_terminal_font(
+            window.text_system(),
             &preferences.font_family,
             preferences.cjk_font_family.as_deref(),
             preferences.font_ligatures,
             preferences.font_weight,
-        );
+        )
+        .font;
         let font_id = window.text_system().resolve_font(&font);
         let measured_width = window
             .text_system()
@@ -1132,6 +1134,59 @@ pub(crate) fn fallback_cell_width(window: &mut Window, font: &Font, font_size: P
         .width
 }
 
+pub struct ResolvedTerminalFont {
+    pub font: Font,
+    pub unavailable_families: Vec<String>,
+}
+
+/// Resolves the primary family before either measuring or shaping terminal cells.
+pub fn resolve_terminal_font(
+    text_system: &TextSystem,
+    family: &str,
+    cjk_family: Option<&str>,
+    font_ligatures: bool,
+    font_weight: f32,
+) -> ResolvedTerminalFont {
+    let mut font =
+        terminal_font_with_family_and_cjk(family, cjk_family, font_ligatures, font_weight);
+    let configured = oxide_ui::css_font_family_stack(family);
+    let available = |family: &str| {
+        // A glyph fallback must not disguise an unavailable configured family.
+        text_system
+            .font_id(&Font {
+                family: terminal_font_family_name(family),
+                fallbacks: None,
+                ..font.clone()
+            })
+            .is_ok()
+    };
+    let mut unavailable_families = Vec::new();
+    for name in configured.iter().map(|name| name.as_ref()) {
+        let name = name.trim();
+        if !name.is_empty() && !available(name) {
+            push_font_fallback(&mut unavailable_families, name);
+        }
+    }
+    let primary = configured
+        .iter()
+        .find(|family| available(family))
+        .map(|family| terminal_font_family_name(family))
+        .unwrap_or_else(|| TERMINAL_FONT.into());
+    // Keep glyph fallbacks intact: CJK and symbol-only fonts need not be usable as a primary.
+    font.family = primary;
+    ResolvedTerminalFont {
+        font,
+        unavailable_families,
+    }
+}
+
+fn terminal_font_family_name(family: &str) -> SharedString {
+    if family.eq_ignore_ascii_case("monospace") || family.eq_ignore_ascii_case("ui-monospace") {
+        TERMINAL_FONT.into()
+    } else {
+        oxide_ui::gpui_font_family_name(family)
+    }
+}
 pub(crate) fn terminal_font_with_family_and_cjk(
     family: &str,
     cjk_family: Option<&str>,
