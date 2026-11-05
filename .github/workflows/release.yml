@@ -70,4 +70,3 @@ jobs:
             version: ${{ needs.parse.outputs.version }}
             release_tag: ${{ needs.parse.outputs.release_tag }}
             upload_release: true
-        

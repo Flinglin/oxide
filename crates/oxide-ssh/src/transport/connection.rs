@@ -698,7 +698,7 @@ async fn run_command_capture_bytes_with_pty(
         }
         Ok(())
     }
-    
+
     pub fn set_remote_forward_handler(
         &self,
         handler: Arc<dyn RemoteForwardHandler>,

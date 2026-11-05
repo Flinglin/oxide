@@ -88,4 +88,3 @@ fn advance_bytes(
     }
     bytes
 }
-

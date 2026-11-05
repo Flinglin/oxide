@@ -4,13 +4,13 @@
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
-from dataclasses import dataclass
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tomllib
+from collections import defaultdict
+from dataclasses import dataclass
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 VENDOR_ROOTS = (
@@ -26,20 +26,48 @@ GENERATED_FILES = {
 }
 EXCLUDED_DIRS = {"target", "node_modules", "dist", "__pycache__", "resources", "assets"}
 LANGUAGES = {
-    ".rs": "Rust", ".py": "Python", ".sh": "Shell", ".bash": "Shell",
-    ".c": "C", ".h": "C", ".cc": "C++", ".cpp": "C++", ".hpp": "C++",
-    ".m": "Objective-C", ".mm": "Objective-C++",
-    ".js": "JavaScript", ".jsx": "JavaScript", ".mjs": "JavaScript", ".cjs": "JavaScript",
-    ".ts": "TypeScript", ".tsx": "TypeScript", ".css": "CSS", ".scss": "CSS",
-    ".metal": "Metal", ".wgsl": "WGSL",
-    ".md": "Markdown", ".toml": "TOML", ".json": "JSON",
-    ".yml": "YAML", ".yaml": "YAML", ".html": "HTML", ".htm": "HTML",
+    ".rs": "Rust",
+    ".py": "Python",
+    ".sh": "Shell",
+    ".bash": "Shell",
+    ".c": "C",
+    ".h": "C",
+    ".cc": "C++",
+    ".cpp": "C++",
+    ".hpp": "C++",
+    ".m": "Objective-C",
+    ".mm": "Objective-C++",
+    ".js": "JavaScript",
+    ".jsx": "JavaScript",
+    ".mjs": "JavaScript",
+    ".cjs": "JavaScript",
+    ".ts": "TypeScript",
+    ".tsx": "TypeScript",
+    ".css": "CSS",
+    ".scss": "CSS",
+    ".metal": "Metal",
+    ".wgsl": "WGSL",
+    ".md": "Markdown",
+    ".toml": "TOML",
+    ".json": "JSON",
+    ".yml": "YAML",
+    ".yaml": "YAML",
+    ".html": "HTML",
+    ".htm": "HTML",
 }
 DOCUMENT_LANGUAGES = {"Markdown", "TOML", "JSON", "YAML", "HTML"}
 HASH_COMMENTS = {"Python", "Shell", "TOML", "YAML", "Just"}
 BLOCK_COMMENTS = {
-    "Rust", "C", "C++", "Objective-C", "Objective-C++",
-    "JavaScript", "TypeScript", "CSS", "Metal", "WGSL",
+    "Rust",
+    "C",
+    "C++",
+    "Objective-C",
+    "Objective-C++",
+    "JavaScript",
+    "TypeScript",
+    "CSS",
+    "Metal",
+    "WGSL",
 }
 
 
@@ -73,7 +101,9 @@ def count_lines(text: str, language: str) -> Counts:
         if not line:
             counts.blank += 1
             continue
-        while line and (depth or (language in BLOCK_COMMENTS and line.startswith("/*"))):
+        while line and (
+            depth or (language in BLOCK_COMMENTS and line.startswith("/*"))
+        ):
             if not depth:
                 depth = 1
                 line = line[2:]
@@ -81,14 +111,16 @@ def count_lines(text: str, language: str) -> Counts:
             nested = line.find("/*") if language == "Rust" else -1
             if nested >= 0 and (end < 0 or nested < end):
                 depth += 1
-                line = line[nested + 2:]
+                line = line[nested + 2 :]
             elif end >= 0:
                 depth -= 1
-                line = line[end + 2:].lstrip()
+                line = line[end + 2 :].lstrip()
             else:
                 line = ""
-        if not line or (language in HASH_COMMENTS and line.startswith("#")) or (
-            language in BLOCK_COMMENTS - {"CSS"} and line.startswith("//")
+        if (
+            not line
+            or (language in HASH_COMMENTS and line.startswith("#"))
+            or (language in BLOCK_COMMENTS - {"CSS"} and line.startswith("//"))
         ):
             counts.comment += 1
         else:
@@ -98,7 +130,16 @@ def count_lines(text: str, language: str) -> Counts:
 
 def collect_files(root: Path, include_vendor: bool = False) -> list[Path]:
     output = subprocess.check_output(
-        ["git", "-C", str(root), "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        [
+            "git",
+            "-C",
+            str(root),
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+        ],
     )
     files = []
     for name in sorted(set(output.split(b"\0")) - {b""}):
@@ -131,7 +172,9 @@ def crate_name(root: Path, relative: Path, cache: dict[Path, str]) -> str:
         if "name" in package:
             cache[directory] = package["name"]
             return cache[directory]
-    result = "(repository)" if directory == Path(".") else crate_name(root, directory, cache)
+    result = (
+        "(repository)" if directory == Path(".") else crate_name(root, directory, cache)
+    )
     cache[directory] = result
     return result
 
@@ -143,18 +186,32 @@ def print_table(title: str, rows: dict[str, Counts]) -> None:
     print("-" * (width + 43))
     total = Counts()
     for name, counts in sorted(rows.items(), key=lambda item: (-item[1].code, item[0])):
-        print(f"{name:<{width}} {counts.files:>7,} {counts.blank:>10,} {counts.comment:>10,} {counts.code:>12,}")
+        print(
+            f"{name:<{width}} {counts.files:>7,} {counts.blank:>10,} {counts.comment:>10,} {counts.code:>12,}"
+        )
         total.add(counts)
     print("-" * (width + 43))
-    print(f"{'TOTAL':<{width}} {total.files:>7,} {total.blank:>10,} {total.comment:>10,} {total.code:>12,}")
+    print(
+        f"{'TOTAL':<{width}} {total.files:>7,} {total.blank:>10,} {total.comment:>10,} {total.code:>12,}"
+    )
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("root", nargs="?", type=Path, default=ROOT, help="Git repository root")
-    parser.add_argument("--by-crate", action="store_true", help="Group source code by Cargo package")
-    parser.add_argument("--by-dir", action="store_true", help="Group source code by top-level directory")
-    parser.add_argument("--include-vendor", action="store_true", help="Also report bundled third-party code separately")
+    parser.add_argument(
+        "root", nargs="?", type=Path, default=ROOT, help="Git repository root"
+    )
+    parser.add_argument(
+        "--by-crate", action="store_true", help="Group source code by Cargo package"
+    )
+    parser.add_argument(
+        "--by-dir", action="store_true", help="Group source code by top-level directory"
+    )
+    parser.add_argument(
+        "--include-vendor",
+        action="store_true",
+        help="Also report bundled third-party code separately",
+    )
     args = parser.parse_args()
     root = args.root.resolve()
     try:
@@ -167,10 +224,14 @@ def main() -> int:
         crate_cache: dict[Path, str] = {}
         for relative in files:
             language = language_for(relative)
-            counts = count_lines((root / relative).read_text(encoding="utf-8"), language)
+            counts = count_lines(
+                (root / relative).read_text(encoding="utf-8"), language
+            )
             vendor = is_vendor(relative)
             if language in DOCUMENT_LANGUAGES:
-                documents[f"{'Vendor' if vendor else 'Project'} / {language}"].add(counts)
+                documents[f"{'Vendor' if vendor else 'Project'} / {language}"].add(
+                    counts
+                )
                 continue
             (vendors if vendor else languages)[language].add(counts)
             prefix = "Vendor / " if vendor else ""
@@ -184,12 +245,18 @@ def main() -> int:
         return 1
 
     print(f"oxide project statistics: {root}")
-    print("Scope: tracked and non-ignored local files; generated files and asset directories excluded.")
-    print("Line-based estimates; inline comments count as code. Test code is included, not estimated separately.")
+    print(
+        "Scope: tracked and non-ignored local files; generated files and asset directories excluded."
+    )
+    print(
+        "Line-based estimates; inline comments count as code. Test code is included, not estimated separately."
+    )
     print_table("Project source", languages)
     if args.include_vendor:
         print_table("Bundled third-party source (including local patches)", vendors)
-    print_table("Documentation and configuration (Code = non-comment content)", documents)
+    print_table(
+        "Documentation and configuration (Code = non-comment content)", documents
+    )
     if args.by_crate:
         print_table("Source by Cargo package", crates)
     if args.by_dir:

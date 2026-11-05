@@ -11,15 +11,15 @@ use std::{
 };
 
 use oxide_sftp::{
-    LocalDownloadDisposition, SftpTransferManager, TarTransferOptions, probe_scp_capabilities,
-    probe_tar_capabilities, profile_local_directory, scp_download_directory, scp_download_file,
-    scp_upload_directory, scp_upload_file, tar_upload_directory,
-};
-use oxide_ssh::{
     LocalDownloadDisposition, SftpExecChannelOpener, SftpTransferManager, TarTransferOptions,
     probe_scp_capabilities, probe_tar_capabilities, profile_local_directory,
     scp_download_directory, scp_download_file, scp_upload_directory, scp_upload_file,
     tar_upload_directory,
+};
+use oxide_ssh::{
+    AuthMethod, ConnectionConsumer, ConnectionPoolConfig, ProxyHopConfig, SshConfig,
+    SshConnectionRegistry, SshTransportClient, SshTransportCommand, UpstreamProxyAuth,
+    UpstreamProxyConfig, UpstreamProxyProtocol, upstream_proxy_from_env,
 };
 use rand::{RngExt, SeedableRng};
 use tokio::{
@@ -709,7 +709,7 @@ async fn local_sshd_sftp_channel_pressure_preserves_transfers_and_refresh() {
         .expect("cancellation must leave the shared listing usable");
         assert!(matches!(
             cancelled,
-            Err(oxideterm_sftp::SftpError::TransferCancelled)
+            Err(oxide_sftp::SftpError::TransferCancelled)
         ));
         drop(transfer);
 

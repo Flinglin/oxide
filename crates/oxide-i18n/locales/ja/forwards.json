@@ -1,5 +1,5 @@
 {
-    "ssh_tunnel": {
+  "ssh_tunnel": {
     "title": "SSH トンネル",
     "name": "トンネル名",
     "group": "グループ",

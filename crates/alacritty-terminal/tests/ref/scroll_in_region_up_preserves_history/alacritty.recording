@@ -1,5 +1,6 @@
 ]0;undeadleech@archhq:~/programming/alacritty/alacritty[?2004h[undeadleech@archhq alacritty]$ ls -lah
-[?2004ltotal 464K
+[?2004l
+total 464K
 drwxr-xr-x 13 undeadleech undeadleech 4.0K Feb 12 20:50 .
 drwxr-xr-x 15 undeadleech undeadleech 4.0K Dec  9 18:42 ..
 drwxr-xr-x  5 undeadleech undeadleech 4.0K Feb 10 09:04 alacritty
@@ -31,61 +32,70 @@ drwxr-xr-x  2 undeadleech undeadleech 4.0K Sep  1  2022 scripts
 drwxr-xr-x  6 undeadleech undeadleech 4.0K Feb 12 18:19 target
 -rw-r--r--  1 undeadleech undeadleech   27 Apr  9  2023 TODO
 ]0;undeadleech@archhq:~/programming/alacritty/alacritty[?2004h[undeadleech@archhq alacritty]$ echo -e "\e[1[K2r"
-[?2004l[2r
+[?2004l
+[2r
 ]0;undeadleech@archhq:~/programming/alacritty/alacritty[?2004h[undeadleech@archhq alacritty]$ ls
-[?2004lalacritty		 Cargo.toml	  grid.json	  rustfmt.toml
+[?2004l
+alacritty		 Cargo.toml	  grid.json	  rustfmt.toml
 alacritty_config	 CHANGELOG.md	  INSTALL.md	  scripts
 alacritty_config_derive  config.json	  LICENSE-APACHE  size.json
 alacritty.recording	 CONTRIBUTING.md  LICENSE-MIT	  target
 alacritty_terminal	 docs		  Makefile	  TODO
 Cargo.lock		 extra		  README.md
 ]0;undeadleech@archhq:~/programming/alacritty/alacritty[?2004h[undeadleech@archhq alacritty]$ ls
-[?2004lalacritty		 Cargo.toml	  grid.json	  rustfmt.toml
+[?2004l
+alacritty		 Cargo.toml	  grid.json	  rustfmt.toml
 alacritty_config	 CHANGELOG.md	  INSTALL.md	  scripts
 alacritty_config_derive  config.json	  LICENSE-APACHE  size.json
 alacritty.recording	 CONTRIBUTING.md  LICENSE-MIT	  target
 alacritty_terminal	 docs		  Makefile	  TODO
 Cargo.lock		 extra		  README.md
 ]0;undeadleech@archhq:~/programming/alacritty/alacritty[?2004h[undeadleech@archhq alacritty]$ ls
-[?2004lalacritty		 Cargo.toml	  grid.json	  rustfmt.toml
+[?2004l
+alacritty		 Cargo.toml	  grid.json	  rustfmt.toml
 alacritty_config	 CHANGELOG.md	  INSTALL.md	  scripts
 alacritty_config_derive  config.json	  LICENSE-APACHE  size.json
 alacritty.recording	 CONTRIBUTING.md  LICENSE-MIT	  target
 alacritty_terminal	 docs		  Makefile	  TODO
 Cargo.lock		 extra		  README.md
 ]0;undeadleech@archhq:~/programming/alacritty/alacritty[?2004h[undeadleech@archhq alacritty]$ ls
-[?2004lalacritty		 Cargo.toml	  grid.json	  rustfmt.toml
+[?2004l
+alacritty		 Cargo.toml	  grid.json	  rustfmt.toml
 alacritty_config	 CHANGELOG.md	  INSTALL.md	  scripts
 alacritty_config_derive  config.json	  LICENSE-APACHE  size.json
 alacritty.recording	 CONTRIBUTING.md  LICENSE-MIT	  target
 alacritty_terminal	 docs		  Makefile	  TODO
 Cargo.lock		 extra		  README.md
 ]0;undeadleech@archhq:~/programming/alacritty/alacritty[?2004h[undeadleech@archhq alacritty]$ ls
-[?2004lalacritty		 Cargo.toml	  grid.json	  rustfmt.toml
+[?2004l
+alacritty		 Cargo.toml	  grid.json	  rustfmt.toml
 alacritty_config	 CHANGELOG.md	  INSTALL.md	  scripts
 alacritty_config_derive  config.json	  LICENSE-APACHE  size.json
 alacritty.recording	 CONTRIBUTING.md  LICENSE-MIT	  target
 alacritty_terminal	 docs		  Makefile	  TODO
 Cargo.lock		 extra		  README.md
 ]0;undeadleech@archhq:~/programming/alacritty/alacritty[?2004h[undeadleech@archhq alacritty]$ ls
-[?2004lalacritty		 Cargo.toml	  grid.json	  rustfmt.toml
+[?2004l
+alacritty		 Cargo.toml	  grid.json	  rustfmt.toml
 alacritty_config	 CHANGELOG.md	  INSTALL.md	  scripts
 alacritty_config_derive  config.json	  LICENSE-APACHE  size.json
 alacritty.recording	 CONTRIBUTING.md  LICENSE-MIT	  target
 alacritty_terminal	 docs		  Makefile	  TODO
 Cargo.lock		 extra		  README.md
 ]0;undeadleech@archhq:~/programming/alacritty/alacritty[?2004h[undeadleech@archhq alacritty]$ ls
-[?2004lalacritty		 Cargo.toml	  grid.json	  rustfmt.toml
+[?2004l
+alacritty		 Cargo.toml	  grid.json	  rustfmt.toml
 alacritty_config	 CHANGELOG.md	  INSTALL.md	  scripts
 alacritty_config_derive  config.json	  LICENSE-APACHE  size.json
 alacritty.recording	 CONTRIBUTING.md  LICENSE-MIT	  target
 alacritty_terminal	 docs		  Makefile	  TODO
 Cargo.lock		 extra		  README.md
 ]0;undeadleech@archhq:~/programming/alacritty/alacritty[?2004h[undeadleech@archhq alacritty]$ ls
-[?2004lalacritty		 Cargo.toml	  grid.json	  rustfmt.toml
+[?2004l
+alacritty		 Cargo.toml	  grid.json	  rustfmt.toml
 alacritty_config	 CHANGELOG.md	  INSTALL.md	  scripts
 alacritty_config_derive  config.json	  LICENSE-APACHE  size.json
 alacritty.recording	 CONTRIBUTING.md  LICENSE-MIT	  target
 alacritty_terminal	 docs		  Makefile	  TODO
 Cargo.lock		 extra		  README.md
-]0;undeadleech@archhq:~/programming/alacritty/alacritty[?2004h[undeadleech@archhq alacritty]$ 
+]0;undeadleech@archhq:~/programming/alacritty/alacritty[?2004h[undeadleech@archhq alacritty]$

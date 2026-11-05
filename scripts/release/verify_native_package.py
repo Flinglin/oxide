@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import plistlib
 import re
 import shutil
 import subprocess
@@ -14,8 +13,8 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-from conpty_runtime import runtime_files as conpty_runtime_files, verify_digest
-
+from conpty_runtime import runtime_files as conpty_runtime_files
+from conpty_runtime import verify_digest
 
 REQUIRED_DOCUMENTS = {
     "LICENSE",
@@ -32,8 +31,7 @@ PORTABLE_UPDATE_MANIFEST_FORMAT = 1
 def normalized_version(raw: str) -> str:
     """Match the package script's tag-to-artifact version normalization."""
     for prefix in ("refs/tags/", "native-v", "gpui-v", "v"):
-        if raw.startswith(prefix):
-            raw = raw[len(prefix) :]
+        raw = raw.removeprefix(prefix)
     return raw
 
 
@@ -68,7 +66,9 @@ def archive_names(path: Path) -> set[str]:
     raise ValueError(f"unsupported archive: {path}")
 
 
-def require_archive_suffixes(names: set[str], suffixes: set[str], artifact: Path) -> None:
+def require_archive_suffixes(
+    names: set[str], suffixes: set[str], artifact: Path
+) -> None:
     normalized_names = {name.rstrip("/") for name in names}
     missing = [
         suffix
@@ -76,7 +76,9 @@ def require_archive_suffixes(names: set[str], suffixes: set[str], artifact: Path
         if not any(name.endswith(suffix) for name in normalized_names)
     ]
     if missing:
-        raise RuntimeError(f"{artifact.name} is missing archive entries: {', '.join(missing)}")
+        raise RuntimeError(
+            f"{artifact.name} is missing archive entries: {', '.join(missing)}"
+        )
 
 
 def archive_entry_bytes(path: Path, suffix: str) -> bytes:
@@ -85,12 +87,18 @@ def archive_entry_bytes(path: Path, suffix: str) -> bytes:
         with zipfile.ZipFile(path) as archive:
             matches = [name for name in archive.namelist() if name.endswith(suffix)]
             if len(matches) != 1:
-                raise RuntimeError(f"expected one {suffix} in {path.name}, found {len(matches)}")
+                raise RuntimeError(
+                    f"expected one {suffix} in {path.name}, found {len(matches)}"
+                )
             return archive.read(matches[0])
     with tarfile.open(path, "r:gz") as archive:
-        matches = [member for member in archive.getmembers() if member.name.endswith(suffix)]
+        matches = [
+            member for member in archive.getmembers() if member.name.endswith(suffix)
+        ]
         if len(matches) != 1:
-            raise RuntimeError(f"expected one {suffix} in {path.name}, found {len(matches)}")
+            raise RuntimeError(
+                f"expected one {suffix} in {path.name}, found {len(matches)}"
+            )
         extracted = archive.extractfile(matches[0])
         if extracted is None:
             raise RuntimeError(f"{suffix} in {path.name} is not a regular file")
@@ -132,7 +140,9 @@ def verify_portable_archive(path: Path, target: str, expected_version: str) -> N
     if manifest.get("formatVersion") != PORTABLE_UPDATE_MANIFEST_FORMAT:
         raise RuntimeError(f"{path.name} has an unsupported portable update manifest")
     if manifest.get("appExecutable") != executable:
-        raise RuntimeError(f"{path.name} portable update manifest has the wrong executable")
+        raise RuntimeError(
+            f"{path.name} portable update manifest has the wrong executable"
+        )
     if manifest.get("updateHelper") != update_helper:
         raise RuntimeError(f"{path.name} portable update manifest has the wrong helper")
     managed_entries = manifest.get("managedEntries")
@@ -166,7 +176,9 @@ def run_checked(command: list[str], *, cwd: Path | None = None) -> str:
         check=False,
     )
     if result.returncode != 0:
-        raise RuntimeError(f"command failed ({result.returncode}): {' '.join(command)}\n{result.stdout}")
+        raise RuntimeError(
+            f"command failed ({result.returncode}): {' '.join(command)}\n{result.stdout}"
+        )
     return result.stdout
 
 
@@ -175,9 +187,13 @@ def verify_binary_architecture(path: Path, target: str) -> None:
     if not file_tool:
         raise RuntimeError("file is required for release architecture verification")
     description = run_checked([file_tool, str(path)]).lower()
-    expected = ("x86-64", "x86_64") if target.startswith("x86_64") else ("arm64", "aarch64")
+    expected = (
+        ("x86-64", "x86_64") if target.startswith("x86_64") else ("arm64", "aarch64")
+    )
     if not any(marker in description for marker in expected):
-        raise RuntimeError(f"{path.name} does not match {target}: {description.strip()}")
+        raise RuntimeError(
+            f"{path.name} does not match {target}: {description.strip()}"
+        )
 
 
 def extract_portable_binary(path: Path, target: str, destination: Path) -> Path:
@@ -190,8 +206,11 @@ def extract_portable_binary(path: Path, target: str, destination: Path) -> Path:
     executable = "oxide.exe" if "windows" in target else "oxide"
     matches = list(destination.rglob(executable))
     if len(matches) != 1:
-        raise RuntimeError(f"expected one {executable} in {path.name}, found {len(matches)}")
+        raise RuntimeError(
+            f"expected one {executable} in {path.name}, found {len(matches)}"
+        )
     return matches[0]
+
 
 def require_metadata_values(
     metadata: str,
@@ -209,7 +228,10 @@ def require_metadata_values(
 
 
 def verify_windows_installer(path: Path, expected_version: str, target: str) -> None:
-    seven_zip = next((shutil.which(name) for name in ("7z", "7zz", "7za") if shutil.which(name)), None)
+    seven_zip = next(
+        (shutil.which(name) for name in ("7z", "7zz", "7za") if shutil.which(name)),
+        None,
+    )
     if not seven_zip:
         raise RuntimeError("7-Zip is required for NSIS content verification")
     listing = run_checked([seven_zip, "l", "-slt", str(path)])
@@ -223,8 +245,13 @@ def verify_windows_installer(path: Path, expected_version: str, target: str) -> 
     with tempfile.TemporaryDirectory() as directory:
         run_checked([seven_zip, "x", "-y", f"-o{directory}", str(path)])
         versions = list(Path(directory).rglob(PACKAGE_VERSION_FILENAME))
-        if not versions or all(item.read_text(encoding="utf-8").strip() != expected_version for item in versions):
-            raise RuntimeError(f"{path.name} does not contain version {expected_version}")
+        if not versions or all(
+            item.read_text(encoding="utf-8").strip() != expected_version
+            for item in versions
+        ):
+            raise RuntimeError(
+                f"{path.name} does not contain version {expected_version}"
+            )
 
         # NSIS includes separate normal-install and staged-update payloads.
         for root in (Path(directory), Path(directory) / "install"):
@@ -259,9 +286,16 @@ def verify_release(dist: Path, target: str, version: str) -> dict[str, object]:
         verify_binary_architecture(binary, target)
 
     if "windows" in target:
-        verify_windows_installer(dist / f"oxide_{version}_{label}-setup.exe", version, target)
+        verify_windows_installer(
+            dist / f"oxide_{version}_{label}-setup.exe", version, target
+        )
 
-    return {"target": target, "version": version, "artifacts": sorted(expected), "status": "ok"}
+    return {
+        "target": target,
+        "version": version,
+        "artifacts": sorted(expected),
+        "status": "ok",
+    }
 
 
 def main() -> int:
@@ -273,7 +307,7 @@ def main() -> int:
 
     try:
         summary = verify_release(args.dist, args.target, args.version)
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001
         print(json.dumps({"status": "error", "error": str(error)}, ensure_ascii=True))
         return 1
     print(json.dumps(summary, ensure_ascii=True, sort_keys=True))

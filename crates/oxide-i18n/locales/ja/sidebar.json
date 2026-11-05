@@ -86,11 +86,33 @@
       "unsupported": "このオペレーティングシステムでは GPU / NPU の監視をサポートしていません。",
       "no_devices": "対応する GPU / NPU デバイスが見つかりません。",
       "error": "GPU / NPU の照会に失敗しました：{{error}}",
-      "actions": { "refresh": "GPU / NPU データを更新" },
-      "summary": { "utilization": "平均使用率", "memory": "デバイスメモリ", "temperature": "最高温度", "power": "合計消費電力" },
-      "columns": { "device": "デバイス", "utilization": "使用率", "memory": "メモリ" },
-      "details": { "uuid": "UUID", "driver": "ドライバー", "performance_state": "性能状態", "health": "健康状態", "temperature": "温度", "power": "消費電力", "fan": "ファン" },
-      "processes": { "title": "計算プロセス", "empty": "このデバイスを使用している計算プロセスはありません。" }
+      "actions": {
+        "refresh": "GPU / NPU データを更新"
+      },
+      "summary": {
+        "utilization": "平均使用率",
+        "memory": "デバイスメモリ",
+        "temperature": "最高温度",
+        "power": "合計消費電力"
+      },
+      "columns": {
+        "device": "デバイス",
+        "utilization": "使用率",
+        "memory": "メモリ"
+      },
+      "details": {
+        "uuid": "UUID",
+        "driver": "ドライバー",
+        "performance_state": "性能状態",
+        "health": "健康状態",
+        "temperature": "温度",
+        "power": "消費電力",
+        "fan": "ファン"
+      },
+      "processes": {
+        "title": "計算プロセス",
+        "empty": "このデバイスを使用している計算プロセスはありません。"
+      }
     },
     "host_processes": {
       "search_placeholder": "プロセスを検索...",

@@ -66,7 +66,7 @@ jobs:
               echo 'Release publishing requires release_tag.' >&2
               exit 1
             fi
-            
+
             git fetch --no-tags origin "refs/tags/${release_tag}:refs/tags/${release_tag}"
             tag_commit="$(git rev-list -n 1 "refs/tags/${release_tag}")"
             if ! git merge-base --is-ancestor "${tag_commit}" "${GITHUB_SHA}"; then
@@ -120,7 +120,7 @@ jobs:
         with:
           ref: ${{ needs.validate-release-request.outputs.release_commit }}
           submodules: recursive
-          
+
       - name: Install Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:

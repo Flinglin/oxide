@@ -19,19 +19,14 @@ from pathlib import Path
 
 from conpty_runtime import stage_runtime as stage_conpty_runtime
 
-
 ROOT_DIR = Path(__file__).resolve().parents[2]
 APP_MANIFEST = ROOT_DIR / "crates" / "oxide-app" / "Cargo.toml"
 RESOURCE_DIR = ROOT_DIR / "crates" / "oxide-app" / "resources"
 MACOS_INFO_PLIST_EXTENSION_DIR = RESOURCE_DIR / "info"
 MACOS_ENTITLEMENTS = RESOURCE_DIR / "oxide.entitlements"
-MACOS_UNSIGNED_INSTALL_NOTICE = (
-    RESOURCE_DIR / "macos" / "unsigned-install-notice.png"
-)
+MACOS_UNSIGNED_INSTALL_NOTICE = RESOURCE_DIR / "macos" / "unsigned-install-notice.png"
 MACOS_UNSIGNED_INSTALL_NOTICE_NAME = "READ FIRST - 未签名安装说明.png"
-MACOS_UNSIGNED_DMG_BACKGROUND = (
-    RESOURCE_DIR / "macos" / "unsigned-dmg-background.png"
-)
+MACOS_UNSIGNED_DMG_BACKGROUND = RESOURCE_DIR / "macos" / "unsigned-dmg-background.png"
 MACOS_DMG_BACKGROUND_DIR_NAME = ".background"
 MACOS_DMG_BACKGROUND_NAME = "unsigned-dmg-background.png"
 MACOS_DMG_DETACH_MAX_ATTEMPTS = 5
@@ -65,20 +60,42 @@ LINUX_PACKAGE_KIND_FILENAME = "PACKAGE_KIND"
 LINUX_DEB_GRAPHICS_RECOMMENDS = ("libegl1", "libvulkan1")
 LINUX_RPM_GRAPHICS_RECOMMENDS = ("libglvnd-egl", "vulkan-loader")
 LINUX_DEB_MEDIA_DEPENDENCIES = (
-    "gstreamer1.0-plugins-base", "gstreamer1.0-plugins-good",
-    "gstreamer1.0-plugins-bad", "gstreamer1.0-libav",
-    "gstreamer1.0-x", "gstreamer1.0-pulseaudio",
+    "gstreamer1.0-plugins-base",
+    "gstreamer1.0-plugins-good",
+    "gstreamer1.0-plugins-bad",
+    "gstreamer1.0-libav",
+    "gstreamer1.0-x",
+    "gstreamer1.0-pulseaudio",
 )
 LINUX_RPM_MEDIA_DEPENDENCIES = (
-    "gstreamer1-plugins-base", "gstreamer1-plugins-good",
-    "gstreamer1-plugins-bad-free", "gstreamer1-plugin-openh264", "openh264",
+    "gstreamer1-plugins-base",
+    "gstreamer1-plugins-good",
+    "gstreamer1-plugins-bad-free",
+    "gstreamer1-plugin-openh264",
+    "openh264",
 )
 LINUX_MEDIA_FACTORIES = (
-    "filesrc", "qtdemux", "decodebin", "playbin", "videoconvert", "videoflip",
-    "appsink", "h264parse", "avdec_h264", "typefindfunctions",
+    "filesrc",
+    "qtdemux",
+    "decodebin",
+    "playbin",
+    "videoconvert",
+    "videoflip",
+    "appsink",
+    "h264parse",
+    "avdec_h264",
+    "typefindfunctions",
     # Preserve native file-preview playback when the AppImage restricts plugin discovery.
-    "ximagesink", "autoaudiosink", "pulsesink", "videoscale", "audioconvert", "audioresample",
-    "matroskademux", "avidemux", "oggdemux", "flvdemux",
+    "ximagesink",
+    "autoaudiosink",
+    "pulsesink",
+    "videoscale",
+    "audioconvert",
+    "audioresample",
+    "matroskademux",
+    "avidemux",
+    "oggdemux",
+    "flvdemux",
 )
 LINUX_APPIMAGE_SYSTEM_LIBRARY_PREFIXES = (
     "ld-linux",
@@ -111,7 +128,9 @@ class ReleaseIdentity:
     linux_icon_name: str
 
 
-def run(command: list[str], *, cwd: Path = ROOT_DIR, env: dict[str, str] | None = None) -> None:
+def run(
+    command: list[str], *, cwd: Path = ROOT_DIR, env: dict[str, str] | None = None
+) -> None:
     print("+", " ".join(command), flush=True)
     subprocess.run(command, cwd=cwd, env=env, check=True)
 
@@ -257,8 +276,7 @@ def raw_release_version() -> str:
 
 def normalized_version(raw: str) -> str:
     for prefix in ("refs/tags/", "native-v", "gpui-v", "v"):
-        if raw.startswith(prefix):
-            raw = raw[len(prefix) :]
+        raw = raw.removeprefix(prefix)
     return raw
 
 
@@ -277,7 +295,11 @@ def release_channel(raw: str, version: str) -> str:
     version_lower = version.lower()
     if raw_lower.startswith("gpui-v") or "gpui-preview" in version_lower:
         return "gpui-preview"
-    if raw_lower.startswith("native-v") or "native-preview" in version_lower or "rustnative-preview" in version_lower:
+    if (
+        raw_lower.startswith("native-v")
+        or "native-preview" in version_lower
+        or "rustnative-preview" in version_lower
+    ):
         return "native-preview"
     if "-" in version:
         return "preview"
@@ -391,16 +413,20 @@ def copy_agent_resources(dst: Path, *, encode_binaries: bool) -> None:
             # AppImage tooling scans nested ELF files by architecture; encode
             # remote-agent payloads as data so both Linux agent targets remain bundled.
             encoded = base64.b64encode(source.read_bytes()).decode("ascii")
-            (dst / f"{source.name}{ENCODED_AGENT_SUFFIX}").write_text(encoded, encoding="ascii")
+            (dst / f"{source.name}{ENCODED_AGENT_SUFFIX}").write_text(
+                encoded, encoding="ascii"
+            )
         else:
             shutil.copy2(source, dst / source.name)
 
 
-def copy_runtime_resources(dst: Path, target: str, *, encode_agent_binaries: bool = False) -> None:
+def copy_runtime_resources(
+    dst: Path, target: str, *, encode_agent_binaries: bool = False
+) -> None:
     dst.mkdir(parents=True, exist_ok=True)
     # Agents and the target-specific CLI retain their resource layout.
     # Remote desktop executables are distributed through the plugin catalog.
-    #copy_agent_resources(dst / AGENT_RESOURCE_DIR, encode_binaries=encode_agent_binaries)
+    # copy_agent_resources(dst / AGENT_RESOURCE_DIR, encode_binaries=encode_agent_binaries)
     copy_tree(RESOURCE_DIR / "icons", dst / "icons")
 
     # Do not copy stale CLI binaries for other platforms. The app resolves the
@@ -408,7 +434,9 @@ def copy_runtime_resources(dst: Path, target: str, *, encode_agent_binaries: boo
     # missing, so release packages must contain exactly the current target CLI.
     cli_source = RESOURCE_DIR / "cli-bin" / target
     if not cli_source.exists():
-        raise FileNotFoundError(f"target CLI resource directory not found: {cli_source}")
+        raise FileNotFoundError(
+            f"target CLI resource directory not found: {cli_source}"
+        )
     copy_tree(cli_source, dst / "cli-bin" / target)
 
     if "windows" in target:
@@ -420,7 +448,7 @@ def nsis_path(path: Path) -> str:
 
 
 def nsis_string(value: str) -> str:
-    return value.replace("$", "$$").replace('"', "$\\\"")
+    return value.replace("$", "$$").replace('"', '$\\"')
 
 
 def find_makensis() -> str | None:
@@ -575,7 +603,7 @@ def read_macos_info_plist_extension(path: Path) -> dict:
         )
         loaded = plistlib.loads(wrapped.encode("utf-8"))
     if not isinstance(loaded, dict):
-        raise RuntimeError(f"macOS Info.plist extension must be a dict: {path}")
+        raise TypeError(f"macOS Info.plist extension must be a dict: {path}")
     return loaded
 
 
@@ -593,7 +621,9 @@ def merge_macos_info_plist_extensions(plist: dict) -> dict:
         return merged
     for extension in sorted(MACOS_INFO_PLIST_EXTENSION_DIR.glob("*.plist")):
         for key, value in read_macos_info_plist_extension(extension).items():
-            merged[key] = merge_plist_value(merged[key], value) if key in merged else value
+            merged[key] = (
+                merge_plist_value(merged[key], value) if key in merged else value
+            )
     return merged
 
 
@@ -697,8 +727,16 @@ def create_macos_disk_image(
     source: Path, destination: Path, volume_name: str, image_format: str
 ) -> None:
     command = [
-        "hdiutil", "create", "-volname", volume_name,
-        "-srcfolder", str(source), "-ov", "-format", image_format, str(destination),
+        "hdiutil",
+        "create",
+        "-volname",
+        volume_name,
+        "-srcfolder",
+        str(source),
+        "-ov",
+        "-format",
+        image_format,
+        str(destination),
     ]
     env = os.environ.copy()
     env["LC_ALL"] = "C"
@@ -706,8 +744,12 @@ def create_macos_disk_image(
         print("+", " ".join(command), flush=True)
         try:
             result = subprocess.run(
-                command, cwd=ROOT_DIR, env=env, check=True,
-                text=True, stderr=subprocess.PIPE,
+                command,
+                cwd=ROOT_DIR,
+                env=env,
+                check=True,
+                text=True,
+                stderr=subprocess.PIPE,
             )
         except subprocess.CalledProcessError as error:
             diagnostic = error.stderr or ""
@@ -724,7 +766,8 @@ def create_macos_disk_image(
             print(
                 "warning: DMG creation is busy; retrying "
                 f"({attempt}/{MACOS_DMG_CREATE_MAX_ATTEMPTS})",
-                file=sys.stderr, flush=True,
+                file=sys.stderr,
+                flush=True,
             )
             time.sleep(MACOS_DMG_CREATE_RETRY_DELAY_SECONDS)
         else:
@@ -733,9 +776,7 @@ def create_macos_disk_image(
             return
 
 
-def create_macos_dmg(
-    dmg_root: Path, dmg_path: Path, identity: ReleaseIdentity
-) -> None:
+def create_macos_dmg(dmg_root: Path, dmg_path: Path, identity: ReleaseIdentity) -> None:
     """Create a compressed DMG, applying Finder chrome when it is available."""
     if not should_include_macos_unsigned_install_notice(identity):
         create_macos_disk_image(dmg_root, dmg_path, identity.app_name, "UDZO")
@@ -841,9 +882,13 @@ def notarize_macos_artifact(path: Path, *, staple: bool) -> bool:
     if not any(configured):
         return False
     if not all(configured):
-        raise RuntimeError("macOS notarization requires key path, key id, and issuer id")
+        raise RuntimeError(
+            "macOS notarization requires key path, key id, and issuer id"
+        )
     if os.environ.get("MACOS_CODESIGN_IDENTITY", "-").strip() in ("", "-"):
-        raise RuntimeError("macOS notarization requires a Developer ID signing identity")
+        raise RuntimeError(
+            "macOS notarization requires a Developer ID signing identity"
+        )
 
     run(
         [
@@ -914,7 +959,9 @@ def zip_macos_app_bundle(app_dir: Path, dest: Path) -> None:
         dest.unlink()
     # ditto preserves macOS bundle metadata and code-signing state; Python zip
     # is fine for generic archives but can break .app signature metadata.
-    run([ditto, "-c", "-k", "--keepParent", app_dir.name, str(dest)], cwd=app_dir.parent)
+    run(
+        [ditto, "-c", "-k", "--keepParent", app_dir.name, str(dest)], cwd=app_dir.parent
+    )
 
 
 def archive_macos_tauri_bundle(app_dir: Path, dest: Path) -> None:
@@ -1023,9 +1070,13 @@ def create_windows_installer(
 ) -> None:
     makensis = find_makensis()
     if not makensis:
-        raise RuntimeError("makensis not found; install NSIS before packaging Windows installers")
+        raise RuntimeError(
+            "makensis not found; install NSIS before packaging Windows installers"
+        )
 
-    installer_root = stage_windows_installer_root(binary, target, version, label, update_helper)
+    installer_root = stage_windows_installer_root(
+        binary, target, version, label, update_helper
+    )
     installer_path = DIST_DIR / f"oxide_{version}_{label}-setup.exe"
     script_path = DIST_DIR / f"oxide_{version}_{label}.nsi"
     icon_path = RESOURCE_DIR / "icons" / "icon.ico"
@@ -1086,14 +1137,23 @@ def windows_protocol_unregistration_script(identity: ReleaseIdentity) -> str:
 
 def windows_installer_languages(identity: ReleaseIdentity) -> str:
     languages = (
-        ("en", "English"), ("zh-CN", "SimpChinese"), ("zh-TW", "TradChinese"),
-        ("de", "German"), ("es-ES", "Spanish"), ("fr-FR", "French"),
-        ("it", "Italian"), ("ja", "Japanese"), ("ko", "Korean"),
-        ("pt-BR", "PortugueseBR"), ("vi", "Vietnamese"),
+        ("en", "English"),
+        ("zh-CN", "SimpChinese"),
+        ("zh-TW", "TradChinese"),
+        ("de", "German"),
+        ("es-ES", "Spanish"),
+        ("fr-FR", "French"),
+        ("it", "Italian"),
+        ("ja", "Japanese"),
+        ("ko", "Korean"),
+        ("pt-BR", "PortugueseBR"),
+        ("vi", "Vietnamese"),
     )
     lines = []
     for locale, language in languages:
-        catalog = ROOT_DIR / "crates" / "oxide-i18n" / "locales" / locale / "common.json"
+        catalog = (
+            ROOT_DIR / "crates" / "oxide-i18n" / "locales" / locale / "common.json"
+        )
         messages = json.loads(catalog.read_text(encoding="utf-8"))["installer"]
         lines.append(f'!insertmacro MUI_LANGUAGE "{language}"')
         for key, name in (
@@ -1121,14 +1181,14 @@ def windows_installer_script(
     # replacement after the running app has exited.
     legacy_upgrade_init = ""
     if identity.channel == "stable":
-        legacy_upgrade_init = rf"""
-  ${{If}} $IsOxideUpdate == "0"
-  ${{AndIf}} ${{FileExists}} "$LOCALAPPDATA\oxide\oxide.exe"
+        legacy_upgrade_init = r"""
+  ${If} $IsOxideUpdate == "0"
+  ${AndIf} ${FileExists} "$LOCALAPPDATA\oxide\oxide.exe"
     StrCpy $INSTDIR "$LOCALAPPDATA\oxide"
     StrCpy $IsOxideUpdate "1"
     StrCpy $IsLegacyUpgrade "1"
     SetSilent silent
-  ${{EndIf}}"""
+  ${EndIf}"""
 
     # Windows installed-app surfaces read DisplayIcon from the uninstall entry.
     display_icon_registry_entry = (
@@ -1253,7 +1313,7 @@ update_install:
   CreateDirectory "$INSTDIR\\{UPDATE_HELPER_DIR}"
   SetOutPath "$INSTDIR\\{UPDATE_HELPER_DIR}"
   SetOverwrite on
-  File "{nsis_path(installer_root / UPDATE_HELPER_DIR / (UPDATE_HELPER_BIN + '.exe'))}"
+  File "{nsis_path(installer_root / UPDATE_HELPER_DIR / (UPDATE_HELPER_BIN + ".exe"))}"
   SetOutPath "$INSTDIR\\{WINDOWS_UPDATE_STAGING_DIR}"
   File /r "{nsis_path(installer_root)}\\*"
   WriteRegStr HKCU "Software\\{identity.windows_registry_key}" "InstallDir" "$INSTDIR"
@@ -1427,8 +1487,7 @@ def linux_deb_graphics_recommends() -> str:
 def linux_rpm_graphics_recommends() -> str:
     """Declare Fedora loader packages omitted by automatic RPM dependency scans."""
     return "\n".join(
-        f"Recommends: {package_name}"
-        for package_name in LINUX_RPM_GRAPHICS_RECOMMENDS
+        f"Recommends: {package_name}" for package_name in LINUX_RPM_GRAPHICS_RECOMMENDS
     )
 
 
@@ -1447,7 +1506,9 @@ def windows_numeric_version(version: str) -> str:
         raise RuntimeError(f"Windows package version is not SemVer: {version}")
     numeric = [int(part) for part in components] + [0]
     if any(part > 65535 for part in numeric):
-        raise RuntimeError(f"Windows package version component exceeds 65535: {version}")
+        raise RuntimeError(
+            f"Windows package version component exceeds 65535: {version}"
+        )
     return ".".join(str(part) for part in numeric)
 
 
@@ -1461,7 +1522,9 @@ def linux_appimage_arch(target: str) -> str:
     return mapping[target]
 
 
-def write_linux_desktop_file(path: Path, identity: ReleaseIdentity, exec_value: str) -> None:
+def write_linux_desktop_file(
+    path: Path, identity: ReleaseIdentity, exec_value: str
+) -> None:
     # The desktop id and icon name are channel-specific so preview installs do
     # not overwrite the future stable Linux desktop entry.
     path.write_text(
@@ -1537,7 +1600,9 @@ def copy_linux_appimage_kerberos_libraries(binary: Path, appdir: Path) -> None:
         if name.startswith(("libgssapi_krb5.so", "libgssapi.so"))
     ]
     if not pending:
-        raise RuntimeError("oxide binary does not expose its Kerberos runtime dependency")
+        raise RuntimeError(
+            "oxide binary does not expose its Kerberos runtime dependency"
+        )
 
     libraries: dict[str, Path] = {}
     while pending:
@@ -1556,7 +1621,9 @@ def copy_linux_appimage_kerberos_libraries(binary: Path, appdir: Path) -> None:
 def linux_gstreamer_plugin_scanner() -> Path:
     scanner_dir = subprocess.run(
         [require_tool("pkg-config"), "--variable=pluginscannerdir", "gstreamer-1.0"],
-        check=True, capture_output=True, text=True,
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout.strip()
     scanner = Path(scanner_dir) / "gst-plugin-scanner"
     if scanner_dir and scanner.is_file():
@@ -1566,14 +1633,19 @@ def linux_gstreamer_plugin_scanner() -> Path:
     # Query the installed package instead of guessing an architecture-specific lib directory.
     listing = subprocess.run(
         [require_tool("dpkg-query"), "-L", "libgstreamer1.0-0"],
-        check=True, capture_output=True, text=True,
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout
     scanners = {
-        Path(line) for line in listing.splitlines()
+        Path(line)
+        for line in listing.splitlines()
         if Path(line).name == "gst-plugin-scanner" and Path(line).is_file()
     }
     if len(scanners) != 1:
-        raise RuntimeError("GStreamer plugin scanner could not be uniquely located in libgstreamer1.0-0")
+        raise RuntimeError(
+            "GStreamer plugin scanner could not be uniquely located in libgstreamer1.0-0"
+        )
     return scanners.pop()
 
 
@@ -1583,13 +1655,21 @@ def copy_linux_appimage_media_runtime(binary: Path, appdir: Path) -> None:
     plugin_files: set[Path] = set()
     for factory in LINUX_MEDIA_FACTORIES:
         result = subprocess.run(
-            [inspect, factory], check=True, capture_output=True, text=True,
+            [inspect, factory],
+            check=True,
+            capture_output=True,
+            text=True,
             env={**os.environ, "LC_ALL": "C"},
         )
-        filenames = [line.split("Filename", 1)[1].strip() for line in result.stdout.splitlines()
-                     if line.strip().startswith("Filename")]
+        filenames = [
+            line.split("Filename", 1)[1].strip()
+            for line in result.stdout.splitlines()
+            if line.strip().startswith("Filename")
+        ]
         if len(filenames) != 1 or not Path(filenames[0]).is_file():
-            raise RuntimeError(f"GStreamer factory {factory} does not expose one plugin file")
+            raise RuntimeError(
+                f"GStreamer factory {factory} does not expose one plugin file"
+            )
         plugin_files.add(Path(filenames[0]).resolve())
 
     scanner = linux_gstreamer_plugin_scanner()
@@ -1603,8 +1683,11 @@ def copy_linux_appimage_media_runtime(binary: Path, appdir: Path) -> None:
         shutil.copy2(plugin, plugin_dir / plugin.name)
 
     libraries: dict[str, Path] = {}
-    pending = [dependency for source in [binary, scanner, *plugin_files]
-               for dependency in linux_dynamic_libraries(source).items()]
+    pending = [
+        dependency
+        for source in [binary, scanner, *plugin_files]
+        for dependency in linux_dynamic_libraries(source).items()
+    ]
     while pending:
         name, source = pending.pop()
         if name in libraries or name.startswith(LINUX_APPIMAGE_SYSTEM_LIBRARY_PREFIXES):
@@ -1626,7 +1709,12 @@ def copy_linux_appimage_media_runtime(binary: Path, appdir: Path) -> None:
             candidates.append(Path(str(source).removeprefix("/usr")))
         owner = None
         for candidate in candidates:
-            result = subprocess.run(["dpkg-query", "-S", str(candidate)], capture_output=True, text=True)
+            result = subprocess.run(
+                ["dpkg-query", "-S", str(candidate)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
             if result.returncode == 0:
                 owner = result.stdout.split(": ", 1)[0].split(", ", 1)[0]
                 break
@@ -1643,7 +1731,9 @@ def copy_linux_appimage_media_runtime(binary: Path, appdir: Path) -> None:
         "Package copyright files identify their authors, source distributions and licenses.\n",
         encoding="utf-8",
     )
-    shutil.copytree("/usr/share/common-licenses", licenses / "common-licenses", dirs_exist_ok=True)
+    shutil.copytree(
+        "/usr/share/common-licenses", licenses / "common-licenses", dirs_exist_ok=True
+    )
 
 
 def create_linux_appimage(
@@ -1651,7 +1741,9 @@ def create_linux_appimage(
 ) -> None:
     appimagetool = shutil.which("appimagetool")
     if not appimagetool:
-        raise RuntimeError("appimagetool not found; install AppImage tooling before packaging Linux")
+        raise RuntimeError(
+            "appimagetool not found; install AppImage tooling before packaging Linux"
+        )
 
     appdir = DIST_DIR / f"appimage-{label}"
     if appdir.exists():
@@ -1716,7 +1808,9 @@ def create_linux_deb(
     binary: Path, target: str, version: str, label: str, identity: ReleaseIdentity
 ) -> None:
     if not shutil.which("dpkg-deb"):
-        raise RuntimeError("dpkg-deb not found; install dpkg before packaging Linux deb")
+        raise RuntimeError(
+            "dpkg-deb not found; install dpkg before packaging Linux deb"
+        )
 
     deb_root = DIST_DIR / f"deb-{label}"
     if deb_root.exists():
@@ -1812,7 +1906,7 @@ Summary: oxide SSH workspace
 License: GPL-3.0-only
 URL: https://oxide.app
 BuildArch: {linux_rpm_arch(target)}
-Requires: {', '.join(LINUX_RPM_MEDIA_DEPENDENCIES)}
+Requires: {", ".join(LINUX_RPM_MEDIA_DEPENDENCIES)}
 {linux_rpm_graphics_recommends()}
 
 %description
@@ -1861,7 +1955,9 @@ def main() -> None:
     identity = release_identity(raw_version, version)
     label = target_label(target)
 
-    os.environ.setdefault("CLANG_MODULE_CACHE_PATH", str(ROOT_DIR / "target" / "clang-module-cache"))
+    os.environ.setdefault(
+        "CLANG_MODULE_CACHE_PATH", str(ROOT_DIR / "target" / "clang-module-cache")
+    )
     Path(os.environ["CLANG_MODULE_CACHE_PATH"]).mkdir(parents=True, exist_ok=True)
 
     if DIST_DIR.exists():
@@ -1878,7 +1974,9 @@ def main() -> None:
     if "windows" in target:
         sign_windows_file(app_binary)
         sign_windows_file(update_helper)
-        create_windows_installer(app_binary, update_helper, target, version, label, identity)
+        create_windows_installer(
+            app_binary, update_helper, target, version, label, identity
+        )
     if "apple-darwin" in target:
         sign_macos_path(app_binary)
     # Every target should publish a self-contained portable artifact; Windows

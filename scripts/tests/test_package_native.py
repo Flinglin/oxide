@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Tests for native release packaging helpers."""
 
-from pathlib import Path
 import codecs
 import os
 import plistlib
@@ -10,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import call, patch
 
 # Import the release helpers from their responsibility-specific directory.
@@ -20,14 +20,18 @@ import verify_background_package
 
 
 class RuntimeResourceTests(unittest.TestCase):
-    def test_remote_desktop_helpers_are_not_bundled_even_when_stale_resources_exist(self):
+    def test_remote_desktop_helpers_are_not_bundled_even_when_stale_resources_exist(
+        self,
+    ):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             resources = root / "resources"
             target = "aarch64-apple-darwin"
             for relative in [
-                "agents/oxide-agent-linux", "icons/app.png",
-                f"cli-bin/{target}/oxide", f"helpers/{target}/oxide-vnc-helper",
+                "agents/oxide-agent-linux",
+                "icons/app.png",
+                f"cli-bin/{target}/oxide",
+                f"helpers/{target}/oxide-vnc-helper",
                 f"helpers/{target}/oxide-rdp-helper",
             ]:
                 file = resources / relative
@@ -37,8 +41,14 @@ class RuntimeResourceTests(unittest.TestCase):
             with patch.object(package_native, "RESOURCE_DIR", resources):
                 package_native.copy_runtime_resources(destination, target)
             self.assertFalse((destination / "helpers").exists())
-            for relative in ["agents/oxide-agent-linux", "icons/app.png", f"cli-bin/{target}/oxide"]:
-                self.assertEqual((destination / relative).read_bytes(), relative.encode())
+            for relative in [
+                "agents/oxide-agent-linux",
+                "icons/app.png",
+                f"cli-bin/{target}/oxide",
+            ]:
+                self.assertEqual(
+                    (destination / relative).read_bytes(), relative.encode()
+                )
 
 
 class WindowsInstallerScriptTests(unittest.TestCase):
@@ -77,7 +87,9 @@ class WindowsInstallerScriptTests(unittest.TestCase):
         self.assertIn('"LegalCopyright" "Copyright (C) 2026 AnalyseDeCircuit"', script)
         self.assertIn('"ProductVersion" "1.2.0-gpui-preview.2"', script)
         self.assertIn("normal_install:", script)
-        normal_install = script.split("normal_install:\n", 1)[1].split("update_install:\n", 1)[0]
+        normal_install = script.split("normal_install:\n", 1)[1].split(
+            "update_install:\n", 1
+        )[0]
         self.assertLess(
             normal_install.index("Call EnsureApplicationClosed"),
             normal_install.index('SetOutPath "$INSTDIR"'),
@@ -100,17 +112,28 @@ class WindowsInstallerScriptTests(unittest.TestCase):
             installer_path=Path(r"C:\dist\oxide_setup.exe"),
             icon_path=Path(r"C:\icons\icon.ico"),
         )
-        preflight = script.split("Function EnsureApplicationClosed\n", 1)[1].split("FunctionEnd", 1)[0]
+        preflight = script.split("Function EnsureApplicationClosed\n", 1)[1].split(
+            "FunctionEnd", 1
+        )[0]
         self.assertIn(r'IfFileExists "$INSTDIR\oxide.exe"', preflight)
-        self.assertIn('RmRegisterResources(i r0, i 1, *w', preflight)
-        self.assertLess(preflight.index("IfSilent preflight_cancel"), preflight.index("MessageBox MB_OKCANCEL"))
-        self.assertIn('IDCANCEL preflight_cancel', preflight)
+        self.assertIn("RmRegisterResources(i r0, i 1, *w", preflight)
+        self.assertLess(
+            preflight.index("IfSilent preflight_cancel"),
+            preflight.index("MessageBox MB_OKCANCEL"),
+        )
+        self.assertIn("IDCANCEL preflight_cancel", preflight)
         shutdown = "RmShutdown(i r0, i 0, p 0)"
-        self.assertLess(preflight.index("MessageBox MB_OKCANCEL"), preflight.index(shutdown))
+        self.assertLess(
+            preflight.index("MessageBox MB_OKCANCEL"), preflight.index(shutdown)
+        )
         after_shutdown = preflight.split(shutdown, 1)[1]
-        self.assertLess(after_shutdown.index("RmGetList"), after_shutdown.index("preflight_done:"))
+        self.assertLess(
+            after_shutdown.index("RmGetList"), after_shutdown.index("preflight_done:")
+        )
         self.assertIn("StrCmp $2 0 preflight_done preflight_failed", after_shutdown)
-        cancel = preflight.split("preflight_cancel:\n", 1)[1].split("preflight_done:", 1)[0]
+        cancel = preflight.split("preflight_cancel:\n", 1)[1].split(
+            "preflight_done:", 1
+        )[0]
         self.assertIn("RmEndSession", cancel)
         self.assertIn("SetErrorLevel 2\n  Quit", cancel)
 
@@ -124,13 +147,28 @@ class WindowsInstallerScriptTests(unittest.TestCase):
             icon_path=Path(r"C:\icons\icon.ico"),
         )
         for language in (
-            "English", "SimpChinese", "TradChinese", "German", "Spanish",
-            "French", "Italian", "Japanese", "Korean", "PortugueseBR", "Vietnamese",
+            "English",
+            "SimpChinese",
+            "TradChinese",
+            "German",
+            "Spanish",
+            "French",
+            "Italian",
+            "Japanese",
+            "Korean",
+            "PortugueseBR",
+            "Vietnamese",
         ):
             with self.subTest(language=language):
                 self.assertIn(f'!insertmacro MUI_LANGUAGE "{language}"', script)
-                self.assertIn(f'LangString CloseRunningApplication ${{LANG_{language.upper()}}}', script)
-                self.assertIn(f'LangString ApplicationCloseFailed ${{LANG_{language.upper()}}}', script)
+                self.assertIn(
+                    f"LangString CloseRunningApplication ${{LANG_{language.upper()}}}",
+                    script,
+                )
+                self.assertIn(
+                    f"LangString ApplicationCloseFailed ${{LANG_{language.upper()}}}",
+                    script,
+                )
         self.assertIn("oxide GPUI Preview 仍在运行", script)
         self.assertNotIn("{{app}}", script)
         self.assertNotIn("{{path}}", script)
@@ -148,7 +186,9 @@ class WindowsInstallerScriptTests(unittest.TestCase):
             with (
                 patch.object(package_native, "DIST_DIR", root),
                 patch.object(package_native, "find_makensis", return_value="makensis"),
-                patch.object(package_native, "stage_windows_installer_root", return_value=payload),
+                patch.object(
+                    package_native, "stage_windows_installer_root", return_value=payload
+                ),
                 patch.object(package_native, "run", side_effect=capture_compiler_input),
                 patch.object(package_native, "sign_windows_file"),
             ):
@@ -161,9 +201,11 @@ class WindowsInstallerScriptTests(unittest.TestCase):
                     identity=self.identity(),
                 )
 
-            script_bytes, = compiler_inputs
+            (script_bytes,) = compiler_inputs
             self.assertTrue(script_bytes.startswith(codecs.BOM_UTF8))
-            self.assertIn("oxide GPUI Preview 仍在运行", script_bytes.decode("utf-8-sig"))
+            self.assertIn(
+                "oxide GPUI Preview 仍在运行", script_bytes.decode("utf-8-sig")
+            )
 
     @unittest.skipUnless(shutil.which("makensis"), "NSIS compiler is not installed")
     def test_installer_compiles_with_localized_preflight(self) -> None:
@@ -172,20 +214,31 @@ class WindowsInstallerScriptTests(unittest.TestCase):
             payload = root / "payload"
             (payload / "tools").mkdir(parents=True)
             (payload / "oxide.exe").write_bytes(b"app payload")
-            (payload / "tools" / "oxide-update-helper.exe").write_bytes(b"helper payload")
+            (payload / "tools" / "oxide-update-helper.exe").write_bytes(
+                b"helper payload"
+            )
             installer = root / "setup.exe"
             source = root / "setup.nsi"
-            source.write_text(package_native.windows_installer_script(
-                binary=Path("oxide.exe"),
-                version="2.0.31",
-                identity=self.identity(),
-                installer_root=payload,
-                installer_path=installer,
-                icon_path=package_native.RESOURCE_DIR / "icons" / "icon.ico",
-            ), encoding="utf-8-sig")
+            source.write_text(
+                package_native.windows_installer_script(
+                    binary=Path("oxide.exe"),
+                    version="2.0.31",
+                    identity=self.identity(),
+                    installer_root=payload,
+                    installer_path=installer,
+                    icon_path=package_native.RESOURCE_DIR / "icons" / "icon.ico",
+                ),
+                encoding="utf-8-sig",
+            )
             result = subprocess.run(
-                [shutil.which("makensis"), "/V2" if sys.platform == "win32" else "-V2", str(source)],
-                capture_output=True, text=True,
+                [
+                    shutil.which("makensis"),
+                    "/V2" if sys.platform == "win32" else "-V2",
+                    str(source),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(installer.read_bytes()[:2], b"MZ")
@@ -200,8 +253,8 @@ class WindowsInstallerScriptTests(unittest.TestCase):
             icon_path=Path(r"C:\icons\icon.ico"),
         )
 
-        self.assertIn('/oxide_UPDATE=1', script)
-        self.assertIn('SetSilent silent', script)
+        self.assertIn("/oxide_UPDATE=1", script)
+        self.assertIn("SetSilent silent", script)
         self.assertIn('RMDir /r "$INSTDIR\\install"', script)
         self.assertIn('SetOutPath "$INSTDIR\\tools"', script)
         self.assertIn('tools/oxide-update-helper.exe"', script)
@@ -211,8 +264,10 @@ class WindowsInstallerScriptTests(unittest.TestCase):
         self.assertIn('--app-exe "$INSTDIR\\oxide.exe" --launch', script)
         self.assertIn('StrCmp $IsOxideUpdate "1" start_menu_shortcut_done', script)
         self.assertIn('StrCmp $IsOxideUpdate "1" desktop_shortcut_done', script)
-        self.assertNotIn('$LOCALAPPDATA\\oxide\\oxide.exe', script)
-        update_install = script.split("update_install:\n", 1)[1].split("install_done:\n", 1)[0]
+        self.assertNotIn("$LOCALAPPDATA\\oxide\\oxide.exe", script)
+        update_install = script.split("update_install:\n", 1)[1].split(
+            "install_done:\n", 1
+        )[0]
         self.assertNotIn("Call EnsureApplicationClosed", update_install)
         helper_launch = update_install.split("legacy_shortcuts_done:\n", 1)[1]
         self.assertIn('StrCmp $IsLegacyUpgrade "1" 0 install_done', helper_launch)
@@ -220,6 +275,7 @@ class WindowsInstallerScriptTests(unittest.TestCase):
             helper_launch.index('StrCmp $IsLegacyUpgrade "1" 0 install_done'),
             helper_launch.index("Exec "),
         )
+
     def test_installer_and_installed_application_use_the_application_icon(self) -> None:
         icon_path = Path(r"C:\icons\icon.ico")
         script = package_native.windows_installer_script(
@@ -253,19 +309,20 @@ class WindowsInstallerScriptTests(unittest.TestCase):
             icon_path=Path(r"C:\icons\icon.ico"),
         )
 
-        self.assertIn('$LOCALAPPDATA\\oxide\\oxide.exe', script)
+        self.assertIn("$LOCALAPPDATA\\oxide\\oxide.exe", script)
         self.assertIn('StrCpy $INSTDIR "$LOCALAPPDATA\\oxide"', script)
         self.assertIn('StrCpy $IsOxideUpdate "1"', script)
         self.assertIn('StrCpy $IsLegacyUpgrade "1"', script)
-        self.assertIn('SetSilent silent', script)
+        self.assertIn("SetSilent silent", script)
         self.assertIn(
-            'CreateShortcut "$SMPROGRAMS\\oxide\\oxide.lnk" '
-            '"$INSTDIR\\oxide.exe"',
+            'CreateShortcut "$SMPROGRAMS\\oxide\\oxide.lnk" "$INSTDIR\\oxide.exe"',
             script,
         )
         self.assertIn('IfFileExists "$DESKTOP\\oxide.lnk"', script)
 
-    def test_installer_registers_connection_uri_capabilities_without_embedding_credentials(self) -> None:
+    def test_installer_registers_connection_uri_capabilities_without_embedding_credentials(
+        self,
+    ) -> None:
         identity = self.identity()
         script = package_native.windows_installer_script(
             binary=Path("oxide.exe"),
@@ -279,7 +336,7 @@ class WindowsInstallerScriptTests(unittest.TestCase):
         for scheme in package_native.CONNECTION_URI_SCHEMES:
             self.assertIn(f'"{scheme}" "{identity.app_identifier}.{scheme}"', script)
         self.assertIn(r'"$\"$INSTDIR\oxide.exe$\" $\"%1$\""', script)
-        self.assertIn('Software\\RegisteredApplications', script)
+        self.assertIn("Software\\RegisteredApplications", script)
 
 
 class MacosConnectionUriTests(unittest.TestCase):
@@ -307,60 +364,108 @@ class MacosBridgeArchiveTests(unittest.TestCase):
             package_native.archive_macos_tauri_bundle(app, archive_path)
 
             with package_native.tarfile.open(archive_path, "r:gz") as archive:
-                member = archive.getmember(
-                    "oxide.app/Contents/MacOS/oxide"
-                )
+                member = archive.getmember("oxide.app/Contents/MacOS/oxide")
                 self.assertEqual(member.mode & 0o111, 0o111)
 
 
 class MacosDmgCreateTests(unittest.TestCase):
     def test_creation_retries_resource_busy_for_both_image_formats(self) -> None:
         for notice, image_format in [(False, "UDZO"), (True, "UDRW")]:
-            with self.subTest(image_format=image_format), tempfile.TemporaryDirectory() as tmp:
+            with (
+                self.subTest(image_format=image_format),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
                 root = Path(tmp)
                 image = root / "oxide.dmg"
                 attempts = []
 
-                def run_command(command, **kwargs):
+                def run_command(command, attempts=attempts, **kwargs):
                     if command[:2] == ["hdiutil", "create"]:
                         attempts.append(command)
                         if len(attempts) == 1:
                             raise subprocess.CalledProcessError(
-                                1, command, stderr="hdiutil: create failed - Resource busy\n"
+                                1,
+                                command,
+                                stderr="hdiutil: create failed - Resource busy\n",
                             )
                     return subprocess.CompletedProcess(command, 0, stderr="")
 
                 with (
-                    patch.object(package_native, "should_include_macos_unsigned_install_notice", return_value=notice),
-                    patch.object(package_native.subprocess, "run", side_effect=run_command),
-                    patch.object(package_native, "attach_macos_dmg", return_value="/dev/disk9"),
+                    patch.object(
+                        package_native,
+                        "should_include_macos_unsigned_install_notice",
+                        return_value=notice,
+                    ),
+                    patch.object(
+                        package_native.subprocess, "run", side_effect=run_command
+                    ),
+                    patch.object(
+                        package_native, "attach_macos_dmg", return_value="/dev/disk9"
+                    ),
                     patch.object(package_native, "detach_macos_dmg"),
                     patch.object(package_native.time, "sleep") as sleep,
                 ):
-                    package_native.create_macos_dmg(root, image, package_native.release_identity("v2.0.30", "2.0.30"))
+                    package_native.create_macos_dmg(
+                        root,
+                        image,
+                        package_native.release_identity("v2.0.30", "2.0.30"),
+                    )
                 expected_image = root / ".oxide.writable.dmg" if notice else image
-                expected = ["hdiutil", "create", "-volname", "oxide", "-srcfolder", str(root), "-ov", "-format", image_format, str(expected_image)]
+                expected = [
+                    "hdiutil",
+                    "create",
+                    "-volname",
+                    "oxide",
+                    "-srcfolder",
+                    str(root),
+                    "-ov",
+                    "-format",
+                    image_format,
+                    str(expected_image),
+                ]
                 self.assertEqual(attempts, [expected, expected])
                 sleep.assert_called_once_with(2)
 
-    def test_creation_fails_after_busy_limit_and_does_not_retry_other_errors(self) -> None:
+    def test_creation_fails_after_busy_limit_and_does_not_retry_other_errors(
+        self,
+    ) -> None:
         for code, diagnostic, expected_attempts in [
             (1, "hdiutil: create failed - Resource busy\n", 3),
             (16, "", 3),
             (1, "hdiutil: create failed - No space left on device\n", 1),
         ]:
             with self.subTest(code=code, diagnostic=diagnostic):
-                command = ["hdiutil", "create", "-volname", "oxide", "-srcfolder", "/tmp/source", "-ov", "-format", "UDZO", "/tmp/output.dmg"]
+                command = [
+                    "hdiutil",
+                    "create",
+                    "-volname",
+                    "oxide",
+                    "-srcfolder",
+                    "/tmp/source",
+                    "-ov",
+                    "-format",
+                    "UDZO",
+                    "/tmp/output.dmg",
+                ]
                 error = subprocess.CalledProcessError(code, command, stderr=diagnostic)
                 with (
-                    patch.object(package_native.subprocess, "run", side_effect=error) as run_mock,
+                    patch.object(
+                        package_native.subprocess, "run", side_effect=error
+                    ) as run_mock,
                     patch.object(package_native.time, "sleep") as sleep,
                     self.assertRaises(subprocess.CalledProcessError) as raised,
                 ):
-                    package_native.create_macos_disk_image(Path("/tmp/source"), Path("/tmp/output.dmg"), "oxide", "UDZO")
+                    package_native.create_macos_disk_image(
+                        Path("/tmp/source"), Path("/tmp/output.dmg"), "oxide", "UDZO"
+                    )
                 self.assertIs(raised.exception, error)
-                self.assertEqual([args.args[0] for args in run_mock.call_args_list], [command] * expected_attempts)
-                self.assertEqual(sleep.call_args_list, [call(2)] * (expected_attempts - 1))
+                self.assertEqual(
+                    [args.args[0] for args in run_mock.call_args_list],
+                    [command] * expected_attempts,
+                )
+                self.assertEqual(
+                    sleep.call_args_list, [call(2)] * (expected_attempts - 1)
+                )
 
 
 class MacosDmgDetachTests(unittest.TestCase):
@@ -409,7 +514,9 @@ class MacosDmgDetachTests(unittest.TestCase):
             {"/dev/disk4", "/dev/disk4s1", "/dev/disk8"},
         )
 
-    def test_detach_retries_only_busy_attached_devices_with_bounded_force_fallback(self) -> None:
+    def test_detach_retries_only_busy_attached_devices_with_bounded_force_fallback(
+        self,
+    ) -> None:
         device = "/dev/disk9"
         normal = ["hdiutil", "detach", device]
         forced = ["hdiutil", "detach", "-force", device]
@@ -418,7 +525,14 @@ class MacosDmgDetachTests(unittest.TestCase):
         for name, results, attached, expected_commands, waits, error in [
             ("retry", [busy, None], True, [normal] * 2, 1, None),
             ("force", [busy] * 5 + [None], True, [normal] * 5 + [forced], 4, None),
-            ("force retry", [busy] * 6 + [None], True, [normal] * 5 + [forced] * 2, 5, None),
+            (
+                "force retry",
+                [busy] * 6 + [None],
+                True,
+                [normal] * 5 + [forced] * 2,
+                5,
+                None,
+            ),
             ("exhausted", [busy] * 20, True, [normal] * 5 + [forced] * 15, 18, busy),
             ("permission", [permission], True, [normal], 0, permission),
             ("already detached", [busy], False, [normal], 0, None),
@@ -426,7 +540,11 @@ class MacosDmgDetachTests(unittest.TestCase):
             with (
                 self.subTest(case=name),
                 patch.object(package_native, "run", side_effect=results) as run_mock,
-                patch.object(package_native, "macos_dmg_device_is_attached", return_value=attached) as probe,
+                patch.object(
+                    package_native,
+                    "macos_dmg_device_is_attached",
+                    return_value=attached,
+                ) as probe,
                 patch.object(package_native.time, "sleep") as sleep,
             ):
                 if error:
@@ -435,7 +553,10 @@ class MacosDmgDetachTests(unittest.TestCase):
                     self.assertIs(raised.exception, error)
                 else:
                     package_native.detach_macos_dmg(device)
-                self.assertEqual(run_mock.call_args_list, [call(command) for command in expected_commands])
+                self.assertEqual(
+                    run_mock.call_args_list,
+                    [call(command) for command in expected_commands],
+                )
                 self.assertEqual(sleep.call_args_list, [call(2)] * waits)
                 expected_probes = sum(result is busy for result in results)
                 self.assertEqual(probe.call_args_list, [call(device)] * expected_probes)
@@ -446,14 +567,31 @@ class ReleaseDocumentTests(unittest.TestCase):
         import hashlib
         import re
 
-        notice = (package_native.THIRD_PARTY_LICENSE_DIR / "DISTRO-ICONS-NOTICE.md").read_text()
-        assets = re.findall(r"Bundled file: `([^`]+)`\.\n- SHA-256: `([0-9a-f]+)`", notice)
-        self.assertEqual([Path(path).stem for path, _ in assets], ["ubuntu", "archlinux", "debian", "gentoo", "nixos", "rocky", "linuxmint"])
-        asset_directory = package_native.ROOT_DIR / "crates/oxide-app/resources/distro-icons"
-        self.assertEqual({Path(path).name for path, _ in assets}, {path.name for path in asset_directory.glob("*.svg")})
+        notice = (
+            package_native.THIRD_PARTY_LICENSE_DIR / "DISTRO-ICONS-NOTICE.md"
+        ).read_text()
+        assets = re.findall(
+            r"Bundled file: `([^`]+)`\.\n- SHA-256: `([0-9a-f]+)`", notice
+        )
+        self.assertEqual(
+            [Path(path).stem for path, _ in assets],
+            ["ubuntu", "archlinux", "debian", "gentoo", "nixos", "rocky", "linuxmint"],
+        )
+        asset_directory = (
+            package_native.ROOT_DIR / "crates/oxide-app/resources/distro-icons"
+        )
+        self.assertEqual(
+            {Path(path).name for path, _ in assets},
+            {path.name for path in asset_directory.glob("*.svg")},
+        )
         for path, expected_hash in assets:
             with self.subTest(asset=path):
-                self.assertEqual(hashlib.sha256((package_native.ROOT_DIR / path).read_bytes()).hexdigest(), expected_hash)
+                self.assertEqual(
+                    hashlib.sha256(
+                        (package_native.ROOT_DIR / path).read_bytes()
+                    ).hexdigest(),
+                    expected_hash,
+                )
 
     def test_release_documents_include_native_and_agent_notices(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -465,10 +603,11 @@ class ReleaseDocumentTests(unittest.TestCase):
                 {
                     "LICENSE",
                     "README.md",
-
                 },
             )
-            self.assertGreater((destination / "THIRD_PARTY_NOTICES.md").stat().st_size, 0)
+            self.assertGreater(
+                (destination / "THIRD_PARTY_NOTICES.md").stat().st_size, 0
+            )
             background_license = (
                 destination / "BACKGROUND-ASSETS-LICENSE.md"
             ).read_text(encoding="utf-8")
@@ -507,7 +646,9 @@ class ReleaseDocumentTests(unittest.TestCase):
 class ReleaseVersionTests(unittest.TestCase):
     def test_release_version_must_match_compiled_workspace_version(self) -> None:
         workspace_version = package_native.workspace_version()
-        package_native.validate_release_version(f"gpui-v{workspace_version}", workspace_version)
+        package_native.validate_release_version(
+            f"gpui-v{workspace_version}", workspace_version
+        )
 
         mismatched_version = f"{workspace_version}.mismatch"
         with self.assertRaisesRegex(RuntimeError, "scripts/release/bump_version.py"):
@@ -535,18 +676,25 @@ class LinuxDesktopEntryTests(unittest.TestCase):
 class PlatformSigningTests(unittest.TestCase):
     def test_macos_signing_options_follow_the_selected_identity(self) -> None:
         for environment, identity, hardened in [
-            ({"MACOS_CODESIGN_IDENTITY": "Developer ID Application: oxide"},
-             "Developer ID Application: oxide", True),
+            (
+                {"MACOS_CODESIGN_IDENTITY": "Developer ID Application: oxide"},
+                "Developer ID Application: oxide",
+                True,
+            ),
             ({}, "-", False),
         ]:
             with (
                 self.subTest(identity=identity),
                 patch.dict(package_native.os.environ, environment, clear=True),
             ):
-                command = package_native.macos_codesign_command("codesign", Path("oxide.app"))
+                command = package_native.macos_codesign_command(
+                    "codesign", Path("oxide.app")
+                )
                 self.assertEqual(command[-3:], ["--sign", identity, "oxide.app"])
                 if hardened:
-                    self.assertEqual(command[3:6], ["--options", "runtime", "--timestamp"])
+                    self.assertEqual(
+                        command[3:6], ["--options", "runtime", "--timestamp"]
+                    )
                 else:
                     self.assertNotIn("--options", command)
                     self.assertNotIn("--timestamp", command)
@@ -565,7 +713,10 @@ class PlatformSigningTests(unittest.TestCase):
             ("v2.0.0", "2.0.0", "Developer ID Application: oxide", False),
             ("gpui-v2.0.0-gpui-preview.16", "2.0.0-gpui-preview.16", "", False),
         ]:
-            with self.subTest(tag=tag, signer=signer), tempfile.TemporaryDirectory() as directory:
+            with (
+                self.subTest(tag=tag, signer=signer),
+                tempfile.TemporaryDirectory() as directory,
+            ):
                 root = Path(directory)
                 source = root / "notice-source.png"
                 source.write_bytes(b"png notice")
@@ -574,17 +725,28 @@ class PlatformSigningTests(unittest.TestCase):
                 dmg_root = root / "dmg"
                 dmg_root.mkdir()
                 with (
-                    patch.object(package_native, "MACOS_UNSIGNED_INSTALL_NOTICE", source),
-                    patch.object(package_native, "MACOS_UNSIGNED_DMG_BACKGROUND", background),
-                    patch.dict(package_native.os.environ, {"MACOS_CODESIGN_IDENTITY": signer}, clear=True),
+                    patch.object(
+                        package_native, "MACOS_UNSIGNED_INSTALL_NOTICE", source
+                    ),
+                    patch.object(
+                        package_native, "MACOS_UNSIGNED_DMG_BACKGROUND", background
+                    ),
+                    patch.dict(
+                        package_native.os.environ,
+                        {"MACOS_CODESIGN_IDENTITY": signer},
+                        clear=True,
+                    ),
                 ):
                     copied = package_native.copy_macos_unsigned_install_notice(
                         dmg_root, package_native.release_identity(tag, version)
                     )
                 self.assertEqual(copied, expected)
-                notice_path = dmg_root / package_native.MACOS_UNSIGNED_INSTALL_NOTICE_NAME
+                notice_path = (
+                    dmg_root / package_native.MACOS_UNSIGNED_INSTALL_NOTICE_NAME
+                )
                 background_path = (
-                    dmg_root / package_native.MACOS_DMG_BACKGROUND_DIR_NAME
+                    dmg_root
+                    / package_native.MACOS_DMG_BACKGROUND_DIR_NAME
                     / package_native.MACOS_DMG_BACKGROUND_NAME
                 )
                 if expected:
@@ -593,7 +755,9 @@ class PlatformSigningTests(unittest.TestCase):
                 else:
                     self.assertEqual(list(dmg_root.iterdir()), [])
 
-    def test_unsigned_finder_layout_keeps_primary_icons_and_notice_separate(self) -> None:
+    def test_unsigned_finder_layout_keeps_primary_icons_and_notice_separate(
+        self,
+    ) -> None:
         script = package_native.macos_dmg_finder_script()
 
         self.assertIn("set dmgFolder to POSIX file mountPath as alias", script)
@@ -610,44 +774,76 @@ class PlatformSigningTests(unittest.TestCase):
 
 
 class LinuxPackagingTests(unittest.TestCase):
-    def test_plugin_scanner_uses_installed_package_when_configured_path_is_stale(self) -> None:
+    def test_plugin_scanner_uses_installed_package_when_configured_path_is_stale(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             configured = root / "libexec" / "gstreamer-1.0"
-            installed = root / "lib" / "aarch64-linux-gnu" / "gstreamer1.0" / "gstreamer-1.0" / "gst-plugin-scanner"
+            installed = (
+                root
+                / "lib"
+                / "aarch64-linux-gnu"
+                / "gstreamer1.0"
+                / "gstreamer-1.0"
+                / "gst-plugin-scanner"
+            )
             installed.parent.mkdir(parents=True)
             installed.write_bytes(b"packaged scanner")
             for configured_dir in (str(configured), ""):
                 with (
                     self.subTest(configured_dir=configured_dir),
-                    patch.object(package_native, "require_tool", side_effect=lambda name: name),
-                    patch.object(package_native.subprocess, "run", side_effect=[
-                        subprocess.CompletedProcess([], 0, stdout=configured_dir),
-                        subprocess.CompletedProcess([], 0, stdout=f"{root}\n{installed}\n"),
-                    ]),
+                    patch.object(
+                        package_native, "require_tool", side_effect=lambda name: name
+                    ),
+                    patch.object(
+                        package_native.subprocess,
+                        "run",
+                        side_effect=[
+                            subprocess.CompletedProcess([], 0, stdout=configured_dir),
+                            subprocess.CompletedProcess(
+                                [], 0, stdout=f"{root}\n{installed}\n"
+                            ),
+                        ],
+                    ),
                 ):
-                    self.assertEqual(package_native.linux_gstreamer_plugin_scanner(), installed)
+                    self.assertEqual(
+                        package_native.linux_gstreamer_plugin_scanner(), installed
+                    )
             configured.mkdir(parents=True)
             configured_scanner = configured / "gst-plugin-scanner"
             configured_scanner.write_bytes(b"configured scanner")
             with (
-                patch.object(package_native, "require_tool", side_effect=lambda name: name),
-                patch.object(package_native.subprocess, "run", return_value=
-                    subprocess.CompletedProcess([], 0, stdout=str(configured))) as run,
+                patch.object(
+                    package_native, "require_tool", side_effect=lambda name: name
+                ),
+                patch.object(
+                    package_native.subprocess,
+                    "run",
+                    return_value=subprocess.CompletedProcess(
+                        [], 0, stdout=str(configured)
+                    ),
+                ) as run,
             ):
-                self.assertEqual(package_native.linux_gstreamer_plugin_scanner(), configured_scanner)
+                self.assertEqual(
+                    package_native.linux_gstreamer_plugin_scanner(), configured_scanner
+                )
                 self.assertEqual(run.call_count, 1)
 
     def test_missing_elf_dependencies_stop_packaging(self) -> None:
         result = subprocess.CompletedProcess(
             ["ldd"], 0, stdout="libgstvideo-1.0.so.0 => not found\n", stderr=""
         )
-        with patch.object(package_native.subprocess, "run", return_value=result):
-            with self.assertRaisesRegex(RuntimeError, "libgstvideo-1.0.so.0"):
-                package_native.linux_dynamic_libraries(Path("oxide"))
+        with (
+            patch.object(package_native.subprocess, "run", return_value=result),
+            self.assertRaisesRegex(RuntimeError, "libgstvideo-1.0.so.0"),
+        ):
+            package_native.linux_dynamic_libraries(Path("oxide"))
 
     @unittest.skipUnless(
-        sys.platform == "linux" and shutil.which("gst-inspect-1.0") and shutil.which("dpkg-query"),
+        sys.platform == "linux"
+        and shutil.which("gst-inspect-1.0")
+        and shutil.which("dpkg-query"),
         "Ubuntu GStreamer packaging tools are required",
     )
     def test_appimage_plugins_load_from_bundled_runtime(self) -> None:
@@ -663,24 +859,41 @@ class LinuxPackagingTests(unittest.TestCase):
                 "GST_PLUGIN_SYSTEM_PATH": str(appdir / "usr/lib/gstreamer-1.0"),
                 "GST_PLUGIN_SYSTEM_PATH_1_0": str(appdir / "usr/lib/gstreamer-1.0"),
                 "GST_PLUGIN_SCANNER": str(appdir / "usr/libexec/gst-plugin-scanner"),
-                "GST_PLUGIN_SCANNER_1_0": str(appdir / "usr/libexec/gst-plugin-scanner"),
+                "GST_PLUGIN_SCANNER_1_0": str(
+                    appdir / "usr/libexec/gst-plugin-scanner"
+                ),
                 "GST_REGISTRY_1_0": str(appdir / "registry.bin"),
             }
-            for factory in ("avdec_h264", "qtdemux", "appsink", "videoflip", "audioconvert"):
+            for factory in (
+                "avdec_h264",
+                "qtdemux",
+                "appsink",
+                "videoflip",
+                "audioconvert",
+            ):
                 result = subprocess.run(
-                    ["gst-inspect-1.0", factory], env=environment,
-                    check=True, capture_output=True, text=True,
+                    ["gst-inspect-1.0", factory],
+                    env=environment,
+                    check=True,
+                    capture_output=True,
+                    text=True,
                 )
                 self.assertIn(str(appdir / "usr/lib/gstreamer-1.0"), result.stdout)
             license_dir = appdir / "usr/share/doc/gstreamer-runtime"
-            self.assertIn("GStreamer", (license_dir / "gstreamer1.0-libav.copyright").read_text())
+            self.assertIn(
+                "GStreamer", (license_dir / "gstreamer1.0-libav.copyright").read_text()
+            )
             self.assertIn("GNU", (license_dir / "common-licenses/LGPL-2.1").read_text())
 
     def test_package_probe_checks_pixels_timing_and_loop_restart(self) -> None:
-        colors = [[0, 0, 253, 255]] * 25 + [[254, 0, 0, 255]] * 25 + [[0, 0, 253, 255]] * 6
+        colors = (
+            [[0, 0, 253, 255]] * 25 + [[254, 0, 0, 255]] * 25 + [[0, 0, 253, 255]] * 6
+        )
         frames = [[i + 1, i * 40, 40, 64, 48, *color] for i, color in enumerate(colors)]
+
         def output(rows):
             return "\n".join(" ".join(map(str, row)) for row in rows)
+
         verify_background_package.verify_frames(output(frames))
         for row, column, replacement in ((50, 1, 0), (25, 5, 0), (0, 3, 16), (0, 8, 0)):
             with self.subTest(row=row, column=column):
@@ -819,7 +1032,8 @@ class LinuxPackagingTests(unittest.TestCase):
             for package_name in package_native.LINUX_RPM_GRAPHICS_RECOMMENDS:
                 self.assertIn(package_name, recommendations)
             dependencies = subprocess.check_output(
-                ["rpm", "-qp", "--requires", str(artifact)], text=True,
+                ["rpm", "-qp", "--requires", str(artifact)],
+                text=True,
             ).splitlines()
             self.assertIn("gstreamer1-plugin-openh264", dependencies)
             self.assertIn("openh264", dependencies)

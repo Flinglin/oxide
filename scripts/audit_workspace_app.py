@@ -7,10 +7,9 @@ import argparse
 import json
 import re
 import sys
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterable
-
 
 WORKSPACE_FILE = Path("crates/oxide-app/src/workspace.rs")
 WORKSPACE_DIRECTORY = Path("crates/oxide-app/src/workspace")
@@ -322,7 +321,9 @@ def collect_metrics(repo_root: Path) -> AuditMetrics:
         else ""
     )
     init_source = read_source(repo_root, ROOT_INIT_FILE)
-    workspace_fields, workspace_struct_lines = collect_workspace_struct(workspace_source)
+    workspace_fields, workspace_struct_lines = collect_workspace_struct(
+        workspace_source
+    )
 
     workspace_sources = [
         repo_root / WORKSPACE_FILE,
@@ -334,11 +335,7 @@ def collect_metrics(repo_root: Path) -> AuditMetrics:
         if WORKSPACE_IMPL_PATTERN.search(source_file.read_text(encoding="utf-8"))
     ]
     impl_blocks = sum(
-        len(
-            WORKSPACE_IMPL_PATTERN.findall(
-                source_file.read_text(encoding="utf-8")
-            )
-        )
+        len(WORKSPACE_IMPL_PATTERN.findall(source_file.read_text(encoding="utf-8")))
         for source_file in impl_files
     )
 
@@ -356,11 +353,7 @@ def collect_metrics(repo_root: Path) -> AuditMetrics:
         r"WeakEntity\s*<\s*(?:crate::workspace::)?WorkspaceApp\s*>"
     )
     high_load_weak_references = sum(
-        len(
-            weak_reference_pattern.findall(
-                source_file.read_text(encoding="utf-8")
-            )
-        )
+        len(weak_reference_pattern.findall(source_file.read_text(encoding="utf-8")))
         for source_file in high_load_sources
     )
     heartbeat_call_names = collect_heartbeat_calls(init_source)

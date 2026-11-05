@@ -1,5 +1,5 @@
 {
-    "ssh_tunnel": {
+  "ssh_tunnel": {
     "title": "SSH 隧道",
     "name": "隧道名称",
     "group": "分组",

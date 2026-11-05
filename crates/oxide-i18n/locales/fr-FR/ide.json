@@ -137,9 +137,11 @@
       "alreadyExists": "Existe déjà",
       "fileAlreadyOpen": "Le fichier est déjà ouvert",
       "noSession": "Pas de session SFTP",
-      "unsavedChanges": "A des modifications non enregistrées"    },
+      "unsavedChanges": "A des modifications non enregistrées"
+    },
     "tree": {
-      "truncated": "+{{count}} éléments supplémentaires non affichés"    },
+      "truncated": "+{{count}} éléments supplémentaires non affichés"
+    },
     "searchQueryTooLong": "Requête de recherche trop longue",
     "split_editor": "Diviser l'éditeur",
     "close_split": "Fermer la division"

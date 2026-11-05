@@ -8,9 +8,8 @@ import json
 import subprocess
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-
 
 PERMISSIVE_LICENSES = {
     "MIT",
@@ -68,11 +67,26 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Generate THIRD_PARTY_NOTICES.md from cargo deny license data.",
     )
-    parser.add_argument("--cwd", default=".", help="Cargo project directory to inspect.")
-    parser.add_argument("--output", default="THIRD_PARTY_NOTICES.md", help="Output file path relative to --cwd.")
-    parser.add_argument("--title", default="Third-Party Notices", help="Markdown title.")
-    parser.add_argument("--exclude-name", action="append", default=[], help="Crate name to exclude.")
-    parser.add_argument("--exclude-prefix", action="append", default=[], help="Crate name prefix to exclude.")
+    parser.add_argument(
+        "--cwd", default=".", help="Cargo project directory to inspect."
+    )
+    parser.add_argument(
+        "--output",
+        default="THIRD_PARTY_NOTICES.md",
+        help="Output file path relative to --cwd.",
+    )
+    parser.add_argument(
+        "--title", default="Third-Party Notices", help="Markdown title."
+    )
+    parser.add_argument(
+        "--exclude-name", action="append", default=[], help="Crate name to exclude."
+    )
+    parser.add_argument(
+        "--exclude-prefix",
+        action="append",
+        default=[],
+        help="Crate name prefix to exclude.",
+    )
     parser.add_argument(
         "--check",
         action="store_true",
@@ -89,8 +103,7 @@ def cargo_deny_license_data(cwd: Path) -> dict[str, dict[str, list[str]]]:
         cwd=cwd,
         check=True,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
     return json.loads(completed.stdout)
 
@@ -105,15 +118,15 @@ def workspace_package_names(cwd: Path) -> set[str]:
         cwd=cwd,
         check=True,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
     metadata = json.loads(completed.stdout)
     workspace_members = set(metadata.get("workspace_members") or [])
     return {
         package.get("name", "")
         for package in metadata.get("packages", [])
-        if package.get("id") in workspace_members and package.get("name")
+        if package.get("id") in workspace_members
+        and package.get("name")
         and package.get("name") not in VENDORED_WORKSPACE_PACKAGES
     }
 
@@ -137,13 +150,17 @@ def normalize_source_url(name: str, source: str) -> str:
     return source
 
 
-def is_excluded(crate: CrateNotice, exclude_names: set[str], exclude_prefixes: list[str]) -> bool:
-    return crate.name in exclude_names or any(crate.name.startswith(prefix) for prefix in exclude_prefixes)
+def is_excluded(
+    crate: CrateNotice, exclude_names: set[str], exclude_prefixes: list[str]
+) -> bool:
+    return crate.name in exclude_names or any(
+        crate.name.startswith(prefix) for prefix in exclude_prefixes
+    )
 
 
 def is_copyleft(license_name: str) -> bool:
     normalized = license_name.upper()
-    return normalized.startswith("GPL-") or normalized.startswith("AGPL-") or normalized.startswith("LGPL-")
+    return normalized.startswith(("GPL-", "AGPL-", "LGPL-"))
 
 
 def has_permissive_option(crate: CrateNotice) -> bool:
@@ -273,18 +290,26 @@ def build_notices(args: argparse.Namespace) -> tuple[str, int, int]:
 
     crates.sort(key=lambda crate: (crate.name, crate.version, crate.source))
 
-    license_counts = Counter(license_name for crate in crates for license_name in crate.licenses)
+    license_counts = Counter(
+        license_name for crate in crates for license_name in crate.licenses
+    )
     copyleft_strict = [
-        crate for crate in crates if any(is_copyleft(license_name) for license_name in crate.licenses) and not has_permissive_option(crate)
+        crate
+        for crate in crates
+        if any(is_copyleft(license_name) for license_name in crate.licenses)
+        and not has_permissive_option(crate)
     ]
     copyleft_with_permissive = [
-        crate for crate in crates if any(is_copyleft(license_name) for license_name in crate.licenses) and has_permissive_option(crate)
+        crate
+        for crate in crates
+        if any(is_copyleft(license_name) for license_name in crate.licenses)
+        and has_permissive_option(crate)
     ]
 
     generated_at = getattr(
         args,
         "generated_at",
-        datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     )
     lines = [
         f"# {args.title}",
@@ -298,7 +323,9 @@ def build_notices(args: argparse.Namespace) -> tuple[str, int, int]:
     ]
 
     if license_counts:
-        for license_name, count in sorted(license_counts.items(), key=lambda item: (-item[1], item[0])):
+        for license_name, count in sorted(
+            license_counts.items(), key=lambda item: (-item[1], item[0])
+        ):
             lines.append(f"- {license_name}: {count}")
     else:
         lines.append("No third-party crates detected.")
@@ -334,12 +361,16 @@ def build_notices(args: argparse.Namespace) -> tuple[str, int, int]:
         output += bundled_asset_table(bundled_assets)
     # Asset attribution must survive notice regeneration during native packaging.
     output += "## Distribution Icon Assets\n\n"
-    output += (cwd / "licenses/third-party/DISTRO-ICONS-NOTICE.md").read_text(encoding="utf-8") + "\n"
+    output += (cwd / "licenses/third-party/DISTRO-ICONS-NOTICE.md").read_text(
+        encoding="utf-8"
+    ) + "\n"
     output += "## Notes\n\n"
     output += "- Multi-license policy: where a crate offers multiple licenses, oxide uses the most permissive compatible option available.\n"
     output += "- License data is generated from crate metadata through cargo-deny and may include multiple licenses per crate.\n"
     output += "- This notice list is for attribution and compliance tracking. It does not replace upstream license texts.\n"
-    output += "- GPUI-CE's complete Apache-2.0 text is shipped as `GPUI-CE-LICENSE-APACHE`.\n"
+    output += (
+        "- GPUI-CE's complete Apache-2.0 text is shipped as `GPUI-CE-LICENSE-APACHE`.\n"
+    )
 
     return output, len(crates), len(copyleft_strict) + len(copyleft_with_permissive)
 
@@ -357,12 +388,19 @@ def main() -> None:
                 break
     output, crate_count, copyleft_count = build_notices(args)
     if args.check:
-        if not output_path.is_file() or output_path.read_text(encoding="utf-8") != output:
+        if (
+            not output_path.is_file()
+            or output_path.read_text(encoding="utf-8") != output
+        ):
             raise SystemExit(f"{output_path} is stale; regenerate third-party notices")
-        print(f"Verified {output_path.relative_to(Path.cwd())} with {crate_count} crate entries.")
+        print(
+            f"Verified {output_path.relative_to(Path.cwd())} with {crate_count} crate entries."
+        )
         return
     output_path.write_text(output, encoding="utf-8")
-    print(f"Wrote {output_path.relative_to(Path.cwd())} with {crate_count} crate entries ({copyleft_count} copyleft-flagged).")
+    print(
+        f"Wrote {output_path.relative_to(Path.cwd())} with {crate_count} crate entries ({copyleft_count} copyleft-flagged)."
+    )
 
 
 if __name__ == "__main__":

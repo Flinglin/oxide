@@ -738,7 +738,7 @@ impl<T> Term<T> {
         self.grid.saved_cursor = self.grid.cursor.clone();
         self.mark_fully_damaged();
     }
-    
+
     /// Resize terminal to new dimensions.
     pub fn resize<S: Dimensions>(&mut self, size: S) {
         let old_cols = self.columns();

@@ -35,4 +35,4 @@ drwxr-xr-x  3 undeadleech undeadleech  100 Nov 15 20:33 winpty
 [10H
 [undeadleech@archhq alacritty]$ echo -e "\e[1000M"
 [1000M
-[undeadleech@archhq alacritty]$ 
+[undeadleech@archhq alacritty]$

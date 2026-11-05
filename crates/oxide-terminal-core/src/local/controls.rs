@@ -12,4 +12,3 @@ pub fn control_code_for_ascii(ch: char) -> Option<u8> {
         None
     }
 }
-

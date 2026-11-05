@@ -1,5 +1,8 @@
-[?2004h[kchibisov@NightLord alacritty]$ [K[kchibisov@NightLord alacritty]$ [K[kchibisov@NightLord alacritty]$ ls -lah
-[?2004ltotal 308K
+[?2004h[kchibisov@NightLord alacritty]$
+[K[kchibisov@NightLord alacritty]$
+[K[kchibisov@NightLord alacritty]$ ls -lah
+[?2004l
+total 308K
 drwxr-xr-x 17 kchibisov kchibisov 4.0K Nov 16 05:14 .
 drwxr-xr-x 17 kchibisov kchibisov 4.0K Nov 15 23:21 ..
 -rw-r--r--  1 kchibisov kchibisov   10 Sep 26 16:22 .agignore
@@ -32,7 +35,8 @@ drwxr-xr-x  4 kchibisov kchibisov 4.0K Nov 12 16:22 target
 -rw-r--r--  1 kchibisov kchibisov 1.7K Nov 13 20:02 .travis.yml
 drwxr-xr-x  3 kchibisov kchibisov 4.0K Nov 13 20:02 winpty
 [?2004h[kchibisov@NightLord alacritty]$ ls -lah
-[?2004ltotal 308K
+[?2004l
+total 308K
 drwxr-xr-x 17 kchibisov kchibisov 4.0K Nov 16 05:14 .
 drwxr-xr-x 17 kchibisov kchibisov 4.0K Nov 15 23:21 ..
 -rw-r--r--  1 kchibisov kchibisov   10 Sep 26 16:22 .agignore
@@ -65,7 +69,8 @@ drwxr-xr-x  4 kchibisov kchibisov 4.0K Nov 12 16:22 target
 -rw-r--r--  1 kchibisov kchibisov 1.7K Nov 13 20:02 .travis.yml
 drwxr-xr-x  3 kchibisov kchibisov 4.0K Nov 13 20:02 winpty
 [?2004h[kchibisov@NightLord alacritty]$ ls - [Klah
-[?2004ltotal 312K
+[?2004l
+total 312K
 drwxr-xr-x 17 kchibisov kchibisov 4.0K Nov 16 05:14 .
 drwxr-xr-x 17 kchibisov kchibisov 4.0K Nov 15 23:21 ..
 -rw-r--r--  1 kchibisov kchibisov   10 Sep 26 16:22 .agignore
@@ -97,9 +102,14 @@ drwxr-xr-x  3 kchibisov kchibisov 4.0K Nov  3 09:50 servo-freetype-proxy
 drwxr-xr-x  4 kchibisov kchibisov 4.0K Nov 12 16:22 target
 -rw-r--r--  1 kchibisov kchibisov 1.7K Nov 13 20:02 .travis.yml
 drwxr-xr-x  3 kchibisov kchibisov 4.0K Nov 13 20:02 winpty
-[?2004h[kchibisov@NightLord alacritty]$ echo -e "\[K[K[K[K[K[K[K[K[K[K[11P(reverse-i-search)`':[C[24@p':  printf "\e[31;1;4;9m"[1@r[C[C[C[C[1@i[C[C[C[C[8@[kchibisov@NightLord alacritty]$[C[C
-[?2004l[31;1;4;9m[?2004h[kchibisov@NightLord alacritty]$ echo =e "[K[K[K[K-e \{[K[K"\e[10H"
-[?2004l[10H
+[?2004h[kchibisov@NightLord alacritty]$ echo -e "\[K[K[K[K[K[K[K[K[K[K
+[11P(reverse-i-search)`':[C[24@p':  printf "\e[31;1;4;9m"[1@r[C[C[C[C[1@i[C[C[C[C
+[8@[kchibisov@NightLord alacritty]$[C[C
+[?2004l
+[31;1;4;9m[?2004h[kchibisov@NightLord alacritty]$ echo =e "[K[K[K[K-e \{[K[K"\e[10H"
+[?2004l
+[10H
 [?2004h[kchibisov@NightLord alacritty]$ echo -e "\p[K[K\e[[[K1-[K0M"
-[?2004l[10M
-[?2004h[kchibisov@NightLord alacritty]$ 
+[?2004l
+[10M
+[?2004h[kchibisov@NightLord alacritty]$

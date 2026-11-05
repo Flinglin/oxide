@@ -1,4 +1,4 @@
-[undeadleech@archhq row_reset]$ cat ~/downloads/dmesg.txt 
+[undeadleech@archhq row_reset]$ cat ~/downloads/dmesg.txt
 [32m[228741.085647] [0m[33miwlwifi 0000:03:00.0[0m[31m: Unhandled alg: 0x707
 [0m[32m[228741.091432] [0m[33mwlp3s0[0m: authenticate with 00:00:00:00:00:00
 [32m[228741.097335] [0m[33mwlp3s0[0m: send auth to 00:00:00:00:00:00 (try 1/3)

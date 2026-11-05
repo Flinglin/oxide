@@ -12,7 +12,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-
 DEFAULT_LOCALE_ROOT = Path("crates/oxide-i18n/locales")
 DEFAULT_SOURCE_ROOTS = (Path("crates"),)
 PLACEHOLDER_RE = re.compile(r"\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}")
@@ -164,9 +163,13 @@ def audit(
     catalogs, parse_errors = load_catalogs(locale_root)
     source_keys = scan_source_keys(source_roots, ignored_source_keys)
 
-    file_union = sorted({file_name for catalog in catalogs.values() for file_name in catalog.files})
+    file_union = sorted(
+        {file_name for catalog in catalogs.values() for file_name in catalog.files}
+    )
     missing_files = {
-        locale: [file_name for file_name in file_union if file_name not in catalog.files]
+        locale: [
+            file_name for file_name in file_union if file_name not in catalog.files
+        ]
         for locale, catalog in catalogs.items()
     }
     missing_files = {locale: files for locale, files in missing_files.items() if files}
@@ -176,12 +179,20 @@ def audit(
         locale: [key for key in key_union if key not in catalog.values]
         for locale, catalog in catalogs.items()
     }
-    missing_by_locale = {locale: keys for locale, keys in missing_by_locale.items() if keys}
+    missing_by_locale = {
+        locale: keys for locale, keys in missing_by_locale.items() if keys
+    }
 
     any_locale_keys = set(key_union)
-    source_absent_everywhere = sorted(key for key in source_keys if key not in any_locale_keys)
+    source_absent_everywhere = sorted(
+        key for key in source_keys if key not in any_locale_keys
+    )
     source_missing_by_locale = {
-        locale: sorted(key for key in source_keys if key in any_locale_keys and key not in catalog.values)
+        locale: sorted(
+            key
+            for key in source_keys
+            if key in any_locale_keys and key not in catalog.values
+        )
         for locale, catalog in catalogs.items()
     }
     source_missing_by_locale = {
@@ -195,11 +206,14 @@ def audit(
             for locale, catalog in catalogs.items()
             if key in catalog.values
         }
-        unique_sets = {tuple(sorted(placeholders)) for placeholders in expected_sets.values()}
+        unique_sets = {
+            tuple(sorted(placeholders)) for placeholders in expected_sets.values()
+        }
         if len(unique_sets) <= 1:
             continue
         placeholder_mismatches[key] = {
-            locale: sorted(placeholders) for locale, placeholders in expected_sets.items()
+            locale: sorted(placeholders)
+            for locale, placeholders in expected_sets.items()
         }
 
     english_copies: dict[str, list[str]] = {}
@@ -214,7 +228,9 @@ def audit(
                 if not local_text or local_text != english_text:
                     continue
                 # Keep empty strings and pure tokens out of the signal.
-                if not english_text.strip() or not re.search(r"[A-Za-z]{4,}", english_text):
+                if not english_text.strip() or not re.search(
+                    r"[A-Za-z]{4,}", english_text
+                ):
                     continue
                 copied.append(key)
             if copied:
@@ -242,7 +258,9 @@ def print_limited(title: str, items: list[str], limit: int | None = 30) -> None:
         print(f"  ... {len(items) - limit} more")
 
 
-def print_result(result: AuditResult, fail_on_english_copy: bool, show_all: bool) -> int:
+def print_result(
+    result: AuditResult, fail_on_english_copy: bool, show_all: bool
+) -> int:
     limit = None if show_all else 30
     print(f"Locales: {', '.join(sorted(result.catalogs))}")
     print(f"Source i18n keys scanned: {len(result.source_keys)}")
@@ -256,7 +274,8 @@ def print_result(result: AuditResult, fail_on_english_copy: bool, show_all: bool
     print_limited("Duplicate flattened keys", duplicate_lines, limit)
 
     missing_file_lines = [
-        f"{locale}: {', '.join(files)}" for locale, files in sorted(result.missing_files.items())
+        f"{locale}: {', '.join(files)}"
+        for locale, files in sorted(result.missing_files.items())
     ]
     print_limited("Missing locale files", missing_file_lines, limit)
 
@@ -279,7 +298,9 @@ def print_result(result: AuditResult, fail_on_english_copy: bool, show_all: bool
         for locale, keys in sorted(result.source_missing_by_locale.items())
         for key in keys
     ]
-    print_limited("Source-used keys missing from some locales", source_missing_lines, limit)
+    print_limited(
+        "Source-used keys missing from some locales", source_missing_lines, limit
+    )
 
     placeholder_lines = [
         f"{key}: {per_locale}"

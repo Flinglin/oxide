@@ -504,7 +504,7 @@ impl LocalPtySession {
     pub fn launch_shell(&self) -> &crate::ShellInfo {
         &self.launch_shell
     }
-    
+
     pub fn shell_integration_launch_state(&self) -> TerminalCwdIntegrationLaunchState {
         self.shell_integration_launch_state
     }

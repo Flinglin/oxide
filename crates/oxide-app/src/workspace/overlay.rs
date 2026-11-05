@@ -29,6 +29,12 @@ pub(in crate::workspace) enum WorkspaceOverlayIntent {
         label: String,
         workspace: WeakEntity<WorkspaceApp>,
     },
+    ShellIntegrationReady {
+        notice: TerminalNotice,
+        node_id: NodeId,
+        label: String,
+        workspace: WeakEntity<WorkspaceApp>,
+    },
     PluginProgress {
         key: String,
         notice: TerminalNotice,
@@ -112,19 +118,24 @@ pub(in crate::workspace) struct WorkspaceOverlayConfirmOwnerSnapshot {
 struct OverlayToast {
     id: u64,
     notice: TerminalNotice,
-    plugin_action: Option<PluginNoticeAction>,
+    action: Option<NoticeAction>,
     expires_at: Instant,
     remove_at: Option<Instant>,
     presence: oxide_ui::motion::ExitPresence,
 }
 
 #[derive(Clone, Debug)]
-struct PluginNoticeAction {
-    plugin_id: String,
+struct NoticeAction {
+    target: NoticeActionTarget,
     label: String,
     workspace: WeakEntity<WorkspaceApp>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum NoticeActionTarget {
+    Plugin(String),
+    SshTerminal(NodeId),
+}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct TerminalFontSizeHud {
     font_size: i64,
@@ -278,8 +289,26 @@ impl WorkspaceOverlayEntity {
                 self.push_notice(
                     notice,
                     PLUGIN_REQUIRED_NOTICE_TTL,
-                    Some(PluginNoticeAction {
-                        plugin_id,
+                    Some(NoticeAction {
+                        target: NoticeActionTarget::Plugin(plugin_id),
+                        label,
+                        workspace,
+                    }),
+                    cx.background_executor().now(),
+                );
+                true
+            }
+            WorkspaceOverlayIntent::ShellIntegrationReady {
+                notice,
+                node_id,
+                label,
+                workspace,
+            } => {
+                self.push_notice(
+                    notice,
+                    Duration::from_secs(12),
+                    Some(NoticeAction {
+                        target: NoticeActionTarget::SshTerminal(node_id),
                         label,
                         workspace,
                     }),
@@ -532,7 +561,7 @@ impl WorkspaceOverlayEntity {
         &mut self,
         notice: TerminalNotice,
         ttl: Duration,
-        plugin_action: Option<PluginNoticeAction>,
+        action: Option<NoticeAction>,
         now: Instant,
     ) {
         let id = self.next_toast_id;
@@ -540,7 +569,7 @@ impl WorkspaceOverlayEntity {
         self.standard_toasts.push(OverlayToast {
             id,
             notice,
-            plugin_action,
+            action,
             expires_at: now + ttl,
             remove_at: None,
             presence: oxide_ui::motion::ExitPresence::visible(),
@@ -571,7 +600,7 @@ impl WorkspaceOverlayEntity {
             OverlayToast {
                 id,
                 notice,
-                plugin_action: None,
+                action: None,
                 expires_at,
                 remove_at: None,
                 presence: oxide_ui::motion::ExitPresence::visible(),
@@ -1115,7 +1144,7 @@ impl WorkspaceOverlayEntity {
                 status_text: toast.notice.status_text.clone(),
                 progress: toast.notice.progress,
                 variant: toast_variant_from_terminal(toast.notice.variant),
-                actions: toast.plugin_action.as_ref().map(|action| {
+                actions: toast.action.as_ref().map(|action| {
                     let action = action.clone();
                     let overlay = overlay.clone();
                     oxide_ui::button::button_with(
@@ -1128,9 +1157,20 @@ impl WorkspaceOverlayEntity {
                         },
                     )
                     .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
-                        let _ = action.workspace.update(cx, |workspace, cx| {
-                            workspace.open_required_plugin(&action.plugin_id, window, cx);
-                        });
+                        let _ = action
+                            .workspace
+                            .update(cx, |workspace, cx| match &action.target {
+                                NoticeActionTarget::Plugin(plugin_id) => {
+                                    workspace.open_required_plugin(plugin_id, window, cx)
+                                }
+                                NoticeActionTarget::SshTerminal(node_id) => {
+                                    let _ = workspace.queue_ssh_terminal_tab_for_sidebar_node(
+                                        node_id.clone(),
+                                        window,
+                                        cx,
+                                    );
+                                }
+                            });
                         let _ = overlay.update(cx, |overlay, cx| {
                             if overlay.begin_standard_exit(toast_id, cx.background_executor().now())
                             {

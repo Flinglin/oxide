@@ -8,7 +8,6 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-
 ROOT_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT = (
     ROOT_DIR
@@ -26,14 +25,7 @@ DEFAULT_DMG_BACKGROUND = (
     / "macos"
     / "unsigned-dmg-background.png"
 )
-APP_ICON = (
-    ROOT_DIR
-    / "crates"
-    / "oxide-app"
-    / "resources"
-    / "icons"
-    / "128x128@2x.png"
-)
+APP_ICON = ROOT_DIR / "crates" / "oxide-app" / "resources" / "icons" / "128x128@2x.png"
 UI_FONT = Path("/System/Library/Fonts/PingFang.ttc")
 MONO_FONT = Path("/System/Library/Fonts/SFNSMono.ttf")
 
@@ -80,7 +72,9 @@ def generate_notice(output: Path) -> None:
     detail_font = load_font(UI_FONT, 23)
     mono_font = load_font(MONO_FONT, 26)
 
-    draw.rounded_rectangle((48, 42, 1152, 678), radius=20, fill=PANEL, outline=BORDER, width=2)
+    draw.rounded_rectangle(
+        (48, 42, 1152, 678), radius=20, fill=PANEL, outline=BORDER, width=2
+    )
 
     icon = Image.open(APP_ICON).convert("RGBA")
     icon.thumbnail((112, 112), Image.Resampling.LANCZOS)
@@ -95,8 +89,16 @@ def generate_notice(output: Path) -> None:
 
     steps = [
         ("1", "Drag oxide to Applications", "将 oxide 拖入“应用程序”文件夹"),
-        ("2", "If macOS blocks the first launch, open Terminal", "若首次启动被 macOS 阻止，请打开“终端”"),
-        ("3", "Run the command below, then launch oxide again", "执行下方命令，然后重新启动 oxide"),
+        (
+            "2",
+            "If macOS blocks the first launch, open Terminal",
+            "若首次启动被 macOS 阻止，请打开“终端”",
+        ),
+        (
+            "3",
+            "Run the command below, then launch oxide again",
+            "执行下方命令，然后重新启动 oxide",
+        ),
     ]
     start_y = 220
     for index, (number, english, chinese) in enumerate(steps):
@@ -154,7 +156,9 @@ def generate_dmg_background(output: Path) -> None:
     )
 
     arrow_y = 196
-    draw.rounded_rectangle((278, arrow_y - 4, 428, arrow_y + 4), radius=4, fill="#F97316")
+    draw.rounded_rectangle(
+        (278, arrow_y - 4, 428, arrow_y + 4), radius=4, fill="#F97316"
+    )
     draw.polygon(
         [(428, arrow_y - 18), (456, arrow_y), (428, arrow_y + 18)], fill="#F97316"
     )

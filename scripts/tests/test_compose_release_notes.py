@@ -7,7 +7,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = ROOT / ".github" / "scripts" / "compose_release_notes.py"
 SPEC = importlib.util.spec_from_file_location("compose_release_notes", SCRIPT_PATH)
@@ -92,7 +91,9 @@ class ComposeReleaseNotesTests(unittest.TestCase):
             )
         )
         self.assertNotIn("that is\nsoft-wrapped", notes)
-        self.assertLess(notes.index("### Fixes"), notes.index("## 📥 Download for your system"))
+        self.assertLess(
+            notes.index("### Fixes"), notes.index("## 📥 Download for your system")
+        )
 
     def test_markdown_block_at_start_is_not_unwrapped(self) -> None:
         section = "> Important first line.\n> Important second line.\n\nDetails."
@@ -106,7 +107,9 @@ class ComposeReleaseNotesTests(unittest.TestCase):
             root = Path(directory)
             base = root / "base.md"
             changelog = root / "oxide_changelog.md"
-            base.write_text("# Preview\n\n<!-- RELEASE_CHANGELOG -->\n", encoding="utf-8")
+            base.write_text(
+                "# Preview\n\n<!-- RELEASE_CHANGELOG -->\n", encoding="utf-8"
+            )
             changelog.write_text(
                 "## 2.0.0-preview.1\n\nPreview notes.\n", encoding="utf-8"
             )

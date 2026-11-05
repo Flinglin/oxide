@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """Tests for native package verification helpers."""
 
-from pathlib import Path
 import hashlib
 import sys
 import tarfile
 import tempfile
 import unittest
-from unittest.mock import patch
 import zipfile
+from pathlib import Path
+from unittest.mock import patch
 
 # Import the release helpers from their responsibility-specific directory.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "release"))
 
-import verify_native_package
 import conpty_runtime
+import verify_native_package
 
 
 class ArtifactNameTests(unittest.TestCase):
@@ -26,33 +26,52 @@ class ArtifactNameTests(unittest.TestCase):
             "2.0.0-gpui-preview.15",
         )
 
-    def test_artifact_names_cover_platforms_and_stable_update_compatibility(self) -> None:
+    def test_artifact_names_cover_platforms_and_stable_update_compatibility(
+        self,
+    ) -> None:
         for target, version, expected in [
-            ("x86_64-pc-windows-msvc", "2.0.0", {
-                "oxide_2.0.0_windows_x64-setup.exe",
-                "oxide_2.0.0_windows_x64_portable.zip",
-            }),
-            ("aarch64-unknown-linux-gnu", "2.0.0", {
-                "oxide_2.0.0_linux_arm64.AppImage",
-                "oxide_2.0.0_linux_arm64.deb",
-                "oxide_2.0.0_linux_arm64.rpm",
-                "oxide_2.0.0_linux_arm64_portable.tar.gz",
-            }),
-            ("aarch64-apple-darwin", "2.0.0", {
-                "oxide_2.0.0_macos_arm64.app.zip",
-                "oxide_2.0.0_macos_arm64.app.tar.gz",
-                "oxide_2.0.0_macos_arm64.dmg",
-                "oxide_2.0.0_macos_arm64_portable.tar.gz",
-            }),
-            ("aarch64-apple-darwin", "2.0.0-gpui-preview.15", {
-                "oxide_2.0.0-gpui-preview.15_macos_arm64.app.zip",
-                "oxide_2.0.0-gpui-preview.15_macos_arm64.dmg",
-                "oxide_2.0.0-gpui-preview.15_macos_arm64_portable.tar.gz",
-            }),
+            (
+                "x86_64-pc-windows-msvc",
+                "2.0.0",
+                {
+                    "oxide_2.0.0_windows_x64-setup.exe",
+                    "oxide_2.0.0_windows_x64_portable.zip",
+                },
+            ),
+            (
+                "aarch64-unknown-linux-gnu",
+                "2.0.0",
+                {
+                    "oxide_2.0.0_linux_arm64.AppImage",
+                    "oxide_2.0.0_linux_arm64.deb",
+                    "oxide_2.0.0_linux_arm64.rpm",
+                    "oxide_2.0.0_linux_arm64_portable.tar.gz",
+                },
+            ),
+            (
+                "aarch64-apple-darwin",
+                "2.0.0",
+                {
+                    "oxide_2.0.0_macos_arm64.app.zip",
+                    "oxide_2.0.0_macos_arm64.app.tar.gz",
+                    "oxide_2.0.0_macos_arm64.dmg",
+                    "oxide_2.0.0_macos_arm64_portable.tar.gz",
+                },
+            ),
+            (
+                "aarch64-apple-darwin",
+                "2.0.0-gpui-preview.15",
+                {
+                    "oxide_2.0.0-gpui-preview.15_macos_arm64.app.zip",
+                    "oxide_2.0.0-gpui-preview.15_macos_arm64.dmg",
+                    "oxide_2.0.0-gpui-preview.15_macos_arm64_portable.tar.gz",
+                },
+            ),
         ]:
             with self.subTest(target=target, version=version):
                 self.assertEqual(
-                    verify_native_package.expected_artifact_names(target, version), expected
+                    verify_native_package.expected_artifact_names(target, version),
+                    expected,
                 )
 
 
@@ -64,18 +83,28 @@ class WindowsInstallerTests(unittest.TestCase):
         for root in ("", "install"):
             for name in files:
                 relative = str(Path(root) / "resources/conpty" / name)
-                cases.extend([
-                    (f"missing {relative}", relative, None),
-                    (f"corrupt {relative}", None, relative),
-                ])
+                cases.extend(
+                    [
+                        (f"missing {relative}", relative, None),
+                        (f"corrupt {relative}", None, relative),
+                    ]
+                )
         for label, missing, corrupt in cases:
             with self.subTest(case=label):
-                def extract(args):
+
+                def extract(args, missing=missing, corrupt=corrupt):
                     if args[1] == "l":
-                        return "\n".join(verify_native_package.REQUIRED_DOCUMENTS | {
-                            "VERSION", "oxide.exe", "oxide-update-helper.exe",
-                        })
-                    directory = Path(next(arg[2:] for arg in args if arg.startswith("-o")))
+                        return "\n".join(
+                            verify_native_package.REQUIRED_DOCUMENTS
+                            | {
+                                "VERSION",
+                                "oxide.exe",
+                                "oxide-update-helper.exe",
+                            }
+                        )
+                    directory = Path(
+                        next(arg[2:] for arg in args if arg.startswith("-o"))
+                    )
                     # 7-Zip exposes both NSIS File /r destinations, not just the install branch.
                     for root in ("", "install"):
                         (directory / root).mkdir(parents=True, exist_ok=True)
@@ -86,37 +115,60 @@ class WindowsInstallerTests(unittest.TestCase):
                                 continue
                             file = directory / relative
                             file.parent.mkdir(parents=True, exist_ok=True)
-                            file.write_bytes(b"corrupt" if relative == corrupt else b"runtime fixture")
+                            file.write_bytes(
+                                b"corrupt"
+                                if relative == corrupt
+                                else b"runtime fixture"
+                            )
                     return ""
 
                 with (
-                    patch.object(verify_native_package.shutil, "which", return_value="7z"),
-                    patch.object(verify_native_package, "run_checked", side_effect=extract),
-                    patch.object(conpty_runtime, "RUNTIMES", {
-                        "aarch64-pc-windows-msvc": ("arm64", digest, digest),
-                    }),
+                    patch.object(
+                        verify_native_package.shutil, "which", return_value="7z"
+                    ),
+                    patch.object(
+                        verify_native_package, "run_checked", side_effect=extract
+                    ),
+                    patch.object(
+                        conpty_runtime,
+                        "RUNTIMES",
+                        {
+                            "aarch64-pc-windows-msvc": ("arm64", digest, digest),
+                        },
+                    ),
                 ):
                     if missing or corrupt:
                         with self.assertRaisesRegex(
-                            RuntimeError, "must contain" if missing else "SHA-256 mismatch",
+                            RuntimeError,
+                            "must contain" if missing else "SHA-256 mismatch",
                         ) as error:
                             verify_native_package.verify_windows_installer(
-                                Path("setup.exe"), "2.2.1", "aarch64-pc-windows-msvc",
+                                Path("setup.exe"),
+                                "2.2.1",
+                                "aarch64-pc-windows-msvc",
                             )
-                        self.assertIn(Path(missing or corrupt).as_posix(), str(error.exception))
+                        self.assertIn(
+                            Path(missing or corrupt).as_posix(), str(error.exception)
+                        )
                     else:
                         verify_native_package.verify_windows_installer(
-                            Path("setup.exe"), "2.2.1", "aarch64-pc-windows-msvc",
+                            Path("setup.exe"),
+                            "2.2.1",
+                            "aarch64-pc-windows-msvc",
                         )
 
 
 class PortableArchiveTests(unittest.TestCase):
     def setUp(self) -> None:
         digest = hashlib.sha256(b"data").hexdigest()
-        runtime = patch.object(conpty_runtime, "RUNTIMES", {
-            "x86_64-pc-windows-msvc": ("x64", digest, digest),
-            "aarch64-pc-windows-msvc": ("arm64", digest, digest),
-        })
+        runtime = patch.object(
+            conpty_runtime,
+            "RUNTIMES",
+            {
+                "x86_64-pc-windows-msvc": ("x64", digest, digest),
+                "aarch64-pc-windows-msvc": ("arm64", digest, digest),
+            },
+        )
         runtime.start()
         self.addCleanup(runtime.stop)
 
@@ -133,10 +185,14 @@ class PortableArchiveTests(unittest.TestCase):
                 else f"{root}/tools/oxide-update-helper"
             ),
             *(f"{root}/{name}" for name in verify_native_package.REQUIRED_DOCUMENTS),
-            *([
-                f"{root}/resources/conpty/conpty.dll",
-                f"{root}/resources/conpty/x64/OpenConsole.exe",
-            ] if executable.endswith(".exe") else []),
+            *(
+                [
+                    f"{root}/resources/conpty/conpty.dll",
+                    f"{root}/resources/conpty/x64/OpenConsole.exe",
+                ]
+                if executable.endswith(".exe")
+                else []
+            ),
         ]
 
     def entry_bytes(self, name: str, executable: str) -> bytes:
@@ -160,7 +216,9 @@ class PortableArchiveTests(unittest.TestCase):
             ).encode()
         return b"data"
 
-    def test_portable_archive_validates_contents_version_runtime_and_update_ownership(self) -> None:
+    def test_portable_archive_validates_contents_version_runtime_and_update_ownership(
+        self,
+    ) -> None:
         cases = [
             ("valid", None, None, None),
             ("version", None, "VERSION", "contains version"),
@@ -169,10 +227,12 @@ class PortableArchiveTests(unittest.TestCase):
             ("wrong architecture", None, None, "conpty"),
         ]
         for entry in ("conpty.dll", "OpenConsole.exe"):
-            cases.extend([
-                (f"missing {entry}", entry, None, "conpty"),
-                (f"corrupt {entry}", None, entry, "conpty"),
-            ])
+            cases.extend(
+                [
+                    (f"missing {entry}", entry, None, "conpty"),
+                    (f"corrupt {entry}", None, entry, "conpty"),
+                ]
+            )
         for name, omitted, replaced, expected_error in cases:
             with self.subTest(case=name), tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / "portable.zip"
@@ -193,12 +253,15 @@ class PortableArchiveTests(unittest.TestCase):
                                 content = b"corrupt runtime"
                         archive.writestr(entry, content)
                 target = (
-                    "aarch64-pc-windows-msvc" if name == "wrong architecture"
+                    "aarch64-pc-windows-msvc"
+                    if name == "wrong architecture"
                     else "x86_64-pc-windows-msvc"
                 )
                 if expected_error:
                     with self.assertRaisesRegex(RuntimeError, expected_error):
-                        verify_native_package.verify_portable_archive(path, target, "2.0.0")
+                        verify_native_package.verify_portable_archive(
+                            path, target, "2.0.0"
+                        )
                 else:
                     verify_native_package.verify_portable_archive(path, target, "2.0.0")
 
@@ -270,9 +333,8 @@ class LinuxCompatibilityTests(unittest.TestCase):
             ),
             self.assertRaisesRegex(RuntimeError, "exceeding the supported 2.35"),
         ):
-            verify_native_package.verify_linux_glibc_compatibility(
-                Path("oxide")
-            )
+            verify_native_package.verify_linux_glibc_compatibility(Path("oxide"))
+
 
 if __name__ == "__main__":
     unittest.main()

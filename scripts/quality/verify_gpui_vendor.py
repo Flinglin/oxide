@@ -10,7 +10,6 @@ import tarfile
 import tomllib
 from pathlib import Path
 
-
 ROOT_DIR = Path(__file__).resolve().parents[2]
 GPUI_VENDOR_DIR = ROOT_DIR / "crates" / "gpui-ce"
 BASELINE_PATH = GPUI_VENDOR_DIR / "gpui" / "UPSTREAM_BASELINE.toml"
@@ -50,7 +49,9 @@ def verify_package(manifest: dict, entry: dict, baseline: dict) -> None:
         package["name"] != entry["name"]
         or package["version"] != baseline["gpui_pre_version"]
     ):
-        raise RuntimeError(f"package name/version differs from baseline: {entry['name']}")
+        raise RuntimeError(
+            f"package name/version differs from baseline: {entry['name']}"
+        )
     if package.get("license") != "Apache-2.0":
         raise RuntimeError(f"unexpected GPUI package license: {entry['name']}")
     metadata = package.get("metadata", {}).get("gpui-pre", {})
@@ -60,7 +61,9 @@ def verify_package(manifest: dict, entry: dict, baseline: dict) -> None:
         "zed-rev": baseline["zed_commit"],
     }
     if metadata != expected:
-        raise RuntimeError(f"Zed source metadata differs from baseline: {entry['name']}")
+        raise RuntimeError(
+            f"Zed source metadata differs from baseline: {entry['name']}"
+        )
 
 
 def upstream_file_bytes(checkout: Path, revision: str, source_path: str) -> bytes:
@@ -80,19 +83,27 @@ def main() -> None:
     names = {entry["name"] for entry in crates}
     paths = {entry["local_path"] for entry in crates}
     if len(crates) != 6 or len(names) != 6 or len(paths) != 6:
-        raise RuntimeError("baseline must describe six distinct local GPUI patch packages")
+        raise RuntimeError(
+            "baseline must describe six distinct local GPUI patch packages"
+        )
     workspace = load_toml(ROOT_DIR / "Cargo.toml")
     missing = paths - set(workspace["workspace"]["members"])
     if missing:
-        raise RuntimeError(f"GPUI patch crates missing from workspace: {sorted(missing)}")
+        raise RuntimeError(
+            f"GPUI patch crates missing from workspace: {sorted(missing)}"
+        )
     patches = {
         name: value
         for name, value in workspace["patch"]["crates-io"].items()
         if name.startswith("gpui-pre")
     }
-    expected_patches = {entry["name"]: {"path": entry["local_path"]} for entry in crates}
+    expected_patches = {
+        entry["name"]: {"path": entry["local_path"]} for entry in crates
+    }
     if patches != expected_patches:
-        raise RuntimeError("root crates.io patches differ from the six recorded GPUI paths")
+        raise RuntimeError(
+            "root crates.io patches differ from the six recorded GPUI paths"
+        )
 
     canonical_license = CANONICAL_LICENSE.read_bytes()
     ROOT_UPSTREAM_LICENSE.read_bytes()
@@ -100,37 +111,49 @@ def main() -> None:
         MICROSOFT_TERMINAL_LICENSE.read_bytes()
     ).hexdigest()
     if microsoft_license_digest != MICROSOFT_TERMINAL_LICENSE_SHA256:
-        raise RuntimeError("Microsoft Terminal license differs from recorded source text")
+        raise RuntimeError(
+            "Microsoft Terminal license differs from recorded source text"
+        )
     locked = load_toml(ROOT_DIR / "Cargo.lock")["package"]
     for entry in crates:
         directory = ROOT_DIR / entry["local_path"]
         verify_package(load_toml(directory / "Cargo.toml"), entry, baseline)
         if (directory / "LICENSE-APACHE").read_bytes() != canonical_license:
-            raise RuntimeError(f"GPUI patch license differs from canonical copy: {directory}")
+            raise RuntimeError(
+                f"GPUI patch license differs from canonical copy: {directory}"
+            )
         packages = [package for package in locked if package["name"] == entry["name"]]
         if (
             len(packages) != 1
             or packages[0]["version"] != baseline["gpui_pre_version"]
             or "source" in packages[0]
         ):
-            raise RuntimeError(f"Cargo.lock does not resolve the recorded local patch: {entry['name']}")
+            raise RuntimeError(
+                f"Cargo.lock does not resolve the recorded local patch: {entry['name']}"
+            )
         if args.registry_archives is not None:
             archive_path = args.registry_archives / f"{entry['name']}.crate"
             archive_digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
             if archive_digest != entry["registry_checksum"]:
-                raise RuntimeError(f"registry archive checksum differs from baseline: {archive_path}")
+                raise RuntimeError(
+                    f"registry archive checksum differs from baseline: {archive_path}"
+                )
             prefix = f"{entry['name']}-{baseline['gpui_pre_version']}"
             with tarfile.open(archive_path, "r:gz") as archive:
                 # Read members directly; verification never extracts untrusted archive paths.
                 manifest_file = archive.extractfile(f"{prefix}/Cargo.toml")
                 license_file = archive.extractfile(f"{prefix}/LICENSE-APACHE")
                 if manifest_file is None or license_file is None:
-                    raise RuntimeError(f"missing registry manifest/license: {archive_path}")
+                    raise RuntimeError(
+                        f"missing registry manifest/license: {archive_path}"
+                    )
                 verify_package(
                     tomllib.loads(manifest_file.read().decode("utf-8")), entry, baseline
                 )
                 if license_file.read() != canonical_license:
-                    raise RuntimeError(f"registry license differs from canonical copy: {archive_path}")
+                    raise RuntimeError(
+                        f"registry license differs from canonical copy: {archive_path}"
+                    )
 
     if args.gpui_ce_checkout is not None:
         revision = baseline["gpui_ce_commit"]
@@ -143,7 +166,9 @@ def main() -> None:
         ) != normalized_markdown_lines(
             upstream_file_bytes(args.gpui_ce_checkout, revision, "LICENSE.md")
         ):
-            raise RuntimeError("retained GPUI-CE root license differs from historical source")
+            raise RuntimeError(
+                "retained GPUI-CE root license differs from historical source"
+            )
     print(
         f"verified six gpui-pre {baseline['gpui_pre_version']} local patches "
         f"with Zed source metadata {baseline['zed_commit']}"

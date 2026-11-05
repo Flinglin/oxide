@@ -4,12 +4,16 @@
       "id": "production",
       "title": "Production",
       "bookmarkIds": [],
-      "bookmarkGroupIds": ["edge"]
+      "bookmarkGroupIds": [
+        "edge"
+      ]
     },
     {
       "id": "edge",
       "title": "Edge",
-      "bookmarkIds": ["gateway"],
+      "bookmarkIds": [
+        "gateway"
+      ],
       "bookmarkGroupIds": []
     }
   ],
@@ -25,8 +29,16 @@
       "port": 2223,
       "type": "ssh",
       "enableSsh": true,
-      "connectionHoppings": [{"password": "nested-secret-sentinel"}],
-      "sshTunnels": [{"sshTunnelLocalPort": 8080}]
+      "connectionHoppings": [
+        {
+          "password": "nested-secret-sentinel"
+        }
+      ],
+      "sshTunnels": [
+        {
+          "sshTunnelLocalPort": 8080
+        }
+      ]
     },
     {
       "id": "ignored",

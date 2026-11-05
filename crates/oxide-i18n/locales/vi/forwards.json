@@ -1,5 +1,5 @@
 {
-    "ssh_tunnel": {
+  "ssh_tunnel": {
     "title": "Đường hầm SSH",
     "name": "Tên đường hầm",
     "group": "Nhóm",

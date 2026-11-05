@@ -9,7 +9,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 ROOT_DIR = Path(__file__).resolve().parents[2]
 WORKSPACE_MANIFEST = ROOT_DIR / "Cargo.toml"
 SEMVER_RE = re.compile(
@@ -24,7 +23,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Update the native workspace package version and keep Cargo.lock in sync.",
     )
-    parser.add_argument("version", help="New SemVer version, for example 2.0.0-gpui-preview.1.")
+    parser.add_argument(
+        "version", help="New SemVer version, for example 2.0.0-gpui-preview.1."
+    )
     parser.add_argument(
         "--no-lock",
         action="store_true",
@@ -94,7 +95,7 @@ def main() -> int:
         manifest_text = WORKSPACE_MANIFEST.read_text(encoding="utf-8")
         old_version = workspace_version(manifest_text)
         new_manifest_text = updated_manifest(manifest_text, args.version)
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001
         print(f"error: {error}", file=sys.stderr)
         return 1
 

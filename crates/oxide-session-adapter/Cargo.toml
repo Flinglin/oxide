@@ -20,4 +20,3 @@ chrono.workspace = true
 
 [target.'cfg(not(target_os = "macos"))'.dev-dependencies]
 keyring.workspace = true
-

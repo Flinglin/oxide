@@ -1,7 +1,19 @@
-[1m[7m%[27m[1m[0m                                                                         ]2;jwilm@jwilm-desk: ~/code/alacritty]1;..ode/alacritty[0m[27m[24m[Jjwilm@jwilm-desk [01;32m➜ [01;32m [36m~/code/alacritty [00m [K[?1h=[?2004h
-bck-i-search: _[K[A[23Ctarget/debug/alacritty --ref-test --title alacritty-reftes[4mt[24m
-bck-i-search: t_[K[A[7C[A[15C[4mt[4mp[24mut cup 20[K[1Bbck-i-search: tp_      [24m [1B[K[A[A[38C[4mt[4mp[4mu[24m[1B[25Du_[A[20C[2C[4mu[4mt[24m[1B[25Dt_[A[19C[6Csr 3 7[12D[24m[35mt[24m[35mp[24m[35mu[24m[35mt[39m[1B[K[A[38C[?1l>[?2004l[1B]2;tput csr 3 7]1;tput[4;8r[1m[7m%[27m[1m[0m                                                                         ]2;jwilm@jwilm-desk: ~/code/alacritty]1;..ode/alacritty[0m[27m[24m[Jjwilm@jwilm-desk [01;32m➜ [01;32m [36m~/code/alacritty [00m [K[?1h=[?2004h
-bck-i-search: _[K[A[23Ctput [4mc[24msr 3 7[1B[36Dc_[A[27C[4mc[4mu[24mp 20 [1B[35Du_[A[26C[4mc[24m[24msr 3 7[1B[35D_ [A[26C     [24m       [1B[K[A[38C[35ml[39m[35ml[35ml[39m[?1l>[?2004l[1B]2;ls --color=tty -lh]1;lltotal 90M
+[1m[7m%[27m[1m[0m
+
+]2;jwilm@jwilm-desk: ~/code/alacritty]1;..ode/alacritty
+[0m[27m[24m[Jjwilm@jwilm-desk [01;32m➜ [01;32m [36m~/code/alacritty [00m [K[?1h=[?2004h
+bck-i-search: _[K[A[23Ctarget/debug/alacritty --ref-test --title alacritty-reftes[4mt[24m
+bck-i-search: t_[K[A[7C[A[15C[4mt[4mp[24mut cup 20[K[1B
+bck-i-search: tp_      [24m [1B
+[K[A[A[38C[4mt[4mp[4mu[24m[1B[25Du_[A[20C[2C[4mu[4mt[24m[1B[25Dt_[A[19C[6Csr 3 7[12D[24m[35mt[24m[35mp[24m[35mu[24m[35mt[39m[1B
+[K[A[38C[?1l>[?2004l[1B
+]2;tput csr 3 7]1;tput[4;8r[1m[7m%[27m[1m[0m
+
+]2;jwilm@jwilm-desk: ~/code/alacritty]1;..ode/alacritty
+[0m[27m[24m[Jjwilm@jwilm-desk [01;32m➜ [01;32m [36m~/code/alacritty [00m [K[?1h=[?2004h
+bck-i-search: _[K[A[23Ctput [4mc[24msr 3 7[1B[36Dc_[A[27C[4mc[4mu[24mp 20 [1B[35Du_[A[26C[4mc[24m[24msr 3 7[1B[35D_ [A[26C     [24m       [1B
+[K[A[38C[35ml[39m[35ml[35ml[39m[?1l>[?2004l[1B
+]2;ls --color=tty -lh]1;lltotal 90M
 -rw-rw-r-- 1 jwilm jwilm  40K May  5  2017 ]
 -rw-rw-r-- 1 jwilm jwilm  35K May  8  2017 0001-wip.patch
 -rwxrwxr-x 1 jwilm jwilm  328 Oct 22 11:43 [0m[01;32mAlacritty.desktop[0m
@@ -62,8 +74,16 @@ drwxrwxr-x 3 jwilm jwilm 4.0K Nov 11 08:48 [01;34mtests[0m
 -rw-rw-r-- 1 jwilm jwilm  128 May  4  2017 TODO.md
 -rw-rw-r-- 1 jwilm jwilm  12K Apr 19  2017 typescript
 -rw-rw-r-- 1 jwilm jwilm 3.0K Mar  7  2017 wego.example
-[1m[7m%[27m[1m[0m                                                                         ]2;jwilm@jwilm-desk: ~/code/alacritty]1;..ode/alacritty[0m[27m[24m[Jjwilm@jwilm-desk [01;32m➜ [01;32m [36m~/code/alacritty [00m [K[?1h=[?2004h
-bck-i-search: _[K[A[23Ctput [4mc[24msr 3 7[1B[36Dc_[A[27C[4mc[4mu[24mp 20 [1B[35Du_[A[26C[1C[4mu[4mp[24m[1B[30Dp_[A[25C[35mt[35mp[35mu[35mt[39m [24mc[24mu[24mp[1B[K[A[44C[1C[1C[1C[1C[36m0[39m [39m10[?1l>[?2004l[1B]2;tput cup 10]1;tput[11;1H[1m[7m%[27m[1m[0m                                                                         ]2;jwilm@jwilm-desk: ~/code/alacritty]1;..ode/alacritty[0m[27m[24m[Jjwilm@jwilm-desk [01;32m➜ [01;32m [36m~/code/alacritty [00m [K[?1h=[?2004h[35ml[39m[35ml[35ml[39m[?1l>[?2004l
+[1m[7m%[27m[1m[0m
+
+]2;jwilm@jwilm-desk: ~/code/alacritty]1;..ode/alacritty
+[0m[27m[24m[Jjwilm@jwilm-desk [01;32m➜ [01;32m [36m~/code/alacritty [00m [K[?1h=[?2004h
+bck-i-search: _[K[A[23Ctput [4mc[24msr 3 7[1B[36Dc_[A[27C[4mc[4mu[24mp 20 [1B[35Du_[A[26C[1C[4mu[4mp[24m[1B[30Dp_[A[25C[35mt[35mp[35mu[35mt[39m [24mc[24mu[24mp[1B
+[K[A[44C[1C[1C[1C[1C[36m0[39m [39m10[?1l>[?2004l[1B
+]2;tput cup 10]1;tput[11;1H[1m[7m%[27m[1m[0m
+
+]2;jwilm@jwilm-desk: ~/code/alacritty]1;..ode/alacritty
+[0m[27m[24m[Jjwilm@jwilm-desk [01;32m➜ [01;32m [36m~/code/alacritty [00m [K[?1h=[?2004h[35ml[39m[35ml[35ml[39m[?1l>[?2004l
 ]2;ls --color=tty -lh]1;lltotal 90M
 -rw-rw-r-- 1 jwilm jwilm  40K May  5  2017 ]
 -rw-rw-r-- 1 jwilm jwilm  35K May  8  2017 0001-wip.patch
@@ -125,12 +145,30 @@ drwxrwxr-x 3 jwilm jwilm 4.0K Nov 11 08:48 [01;34mtests[0m
 -rw-rw-r-- 1 jwilm jwilm  128 May  4  2017 TODO.md
 -rw-rw-r-- 1 jwilm jwilm  12K Apr 19  2017 typescript
 -rw-rw-r-- 1 jwilm jwilm 3.0K Mar  7  2017 wego.example
-[1m[7m%[27m[1m[0m                                                                         ]2;jwilm@jwilm-desk: ~/code/alacritty]1;..ode/alacritty[0m[27m[24m[Jjwilm@jwilm-desk [01;32m➜ [01;32m [36m~/code/alacritty [00m [K[?1h=[?2004h[?1l>[?2004l
-[1m[7m%[27m[1m[0m                                                                         ]2;jwilm@jwilm-desk: ~/code/alacritty]1;..ode/alacritty[0m[27m[24m[Jjwilm@jwilm-desk [01;32m➜ [01;32m [36m~/code/alacritty [00m [K[?1h=[?2004h[?1l>[?2004l
-[1m[7m%[27m[1m[0m                                                                         ]2;jwilm@jwilm-desk: ~/code/alacritty]1;..ode/alacritty[0m[27m[24m[Jjwilm@jwilm-desk [01;32m➜ [01;32m [36m~/code/alacritty [00m [K[?1h=[?2004h[?1l>[?2004l
-[1m[7m%[27m[1m[0m                                                                         ]2;jwilm@jwilm-desk: ~/code/alacritty]1;..ode/alacritty[0m[27m[24m[Jjwilm@jwilm-desk [01;32m➜ [01;32m [36m~/code/alacritty [00m [K[?1h=[?2004h[?1l>[?2004l
-[1m[7m%[27m[1m[0m                                                                         ]2;jwilm@jwilm-desk: ~/code/alacritty]1;..ode/alacritty[0m[27m[24m[Jjwilm@jwilm-desk [01;32m➜ [01;32m [36m~/code/alacritty [00m [K[?1h=[?2004h[?1l>[?2004l
-[1m[7m%[27m[1m[0m                                                                         ]2;jwilm@jwilm-desk: ~/code/alacritty]1;..ode/alacritty[0m[27m[24m[Jjwilm@jwilm-desk [01;32m➜ [01;32m [36m~/code/alacritty [00m [K[?1h=[?2004h[35ml[39m[35ml[35ms[39m[?1l>[?2004l
+[1m[7m%[27m[1m[0m
+
+]2;jwilm@jwilm-desk: ~/code/alacritty]1;..ode/alacritty
+[0m[27m[24m[Jjwilm@jwilm-desk [01;32m➜ [01;32m [36m~/code/alacritty [00m [K[?1h=[?2004h[?1l>[?2004l
+[1m[7m%[27m[1m[0m
+
+]2;jwilm@jwilm-desk: ~/code/alacritty]1;..ode/alacritty
+[0m[27m[24m[Jjwilm@jwilm-desk [01;32m➜ [01;32m [36m~/code/alacritty [00m [K[?1h=[?2004h[?1l>[?2004l
+[1m[7m%[27m[1m[0m
+
+]2;jwilm@jwilm-desk: ~/code/alacritty]1;..ode/alacritty
+[0m[27m[24m[Jjwilm@jwilm-desk [01;32m➜ [01;32m [36m~/code/alacritty [00m [K[?1h=[?2004h[?1l>[?2004l
+[1m[7m%[27m[1m[0m
+
+]2;jwilm@jwilm-desk: ~/code/alacritty]1;..ode/alacritty
+[0m[27m[24m[Jjwilm@jwilm-desk [01;32m➜ [01;32m [36m~/code/alacritty [00m [K[?1h=[?2004h[?1l>[?2004l
+[1m[7m%[27m[1m[0m
+
+]2;jwilm@jwilm-desk: ~/code/alacritty]1;..ode/alacritty
+[0m[27m[24m[Jjwilm@jwilm-desk [01;32m➜ [01;32m [36m~/code/alacritty [00m [K[?1h=[?2004h[?1l>[?2004l
+[1m[7m%[27m[1m[0m
+
+]2;jwilm@jwilm-desk: ~/code/alacritty]1;..ode/alacritty
+[0m[27m[24m[Jjwilm@jwilm-desk [01;32m➜ [01;32m [36m~/code/alacritty [00m [K[?1h=[?2004h[35ml[39m[35ml[35ms[39m[?1l>[?2004l
 ]2;ls --color=tty]1;ls]                           [0m[01;34mcopypasta[0m         [01;34mpasswd[0m
 0001-wip.patch              curse.py          perf.data
 [01;32mAlacritty.desktop[0m           [01;34mdocs[0m              perf.data.old
@@ -151,7 +189,10 @@ build.txt                   massif.out.25053  test.log
 Cargo.lock                  mutrace.log       TODO.md
 Cargo.toml                  notes.md          typescript
 [01;34mclip[0m                        original          wego.example
-[1m[7m%[27m[1m[0m                                                                         ]2;jwilm@jwilm-desk: ~/code/alacritty]1;..ode/alacritty[0m[27m[24m[Jjwilm@jwilm-desk [01;32m➜ [01;32m [36m~/code/alacritty [00m [K[?1h=[?2004h[35ml[39m[35ml[35ml[39m[?1l>[?2004l
+[1m[7m%[27m[1m[0m
+
+]2;jwilm@jwilm-desk: ~/code/alacritty]1;..ode/alacritty
+[0m[27m[24m[Jjwilm@jwilm-desk [01;32m➜ [01;32m [36m~/code/alacritty [00m [K[?1h=[?2004h[35ml[39m[35ml[35ml[39m[?1l>[?2004l
 ]2;ls --color=tty -lh]1;lltotal 90M
 -rw-rw-r-- 1 jwilm jwilm  40K May  5  2017 ]
 -rw-rw-r-- 1 jwilm jwilm  35K May  8  2017 0001-wip.patch
@@ -213,4 +254,7 @@ drwxrwxr-x 3 jwilm jwilm 4.0K Nov 11 08:48 [01;34mtests[0m
 -rw-rw-r-- 1 jwilm jwilm  128 May  4  2017 TODO.md
 -rw-rw-r-- 1 jwilm jwilm  12K Apr 19  2017 typescript
 -rw-rw-r-- 1 jwilm jwilm 3.0K Mar  7  2017 wego.example
-[1m[7m%[27m[1m[0m                                                                         ]2;jwilm@jwilm-desk: ~/code/alacritty]1;..ode/alacritty[0m[27m[24m[Jjwilm@jwilm-desk [01;32m➜ [01;32m [36m~/code/alacritty [00m [K[?1h=[?2004h
+[1m[7m%[27m[1m[0m
+
+]2;jwilm@jwilm-desk: ~/code/alacritty]1;..ode/alacritty
+[0m[27m[24m[Jjwilm@jwilm-desk [01;32m➜ [01;32m [36m~/code/alacritty [00m [K[?1h=[?2004h

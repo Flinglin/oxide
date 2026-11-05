@@ -411,7 +411,7 @@ mod tests {
                     .eq_ignore_ascii_case("PATH")
             })
             .map(|(index, _)| {
-     
+
                    String::from_utf16_lossy(entries[index])
             })
             .collect::<Vec<_>>();

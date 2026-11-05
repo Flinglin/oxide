@@ -38,9 +38,10 @@ tasks/*
 .deepseek/*
 docs/design/*
 !docs/design/public-mcp-server-contract.zh-Hans.md
-audit-evidence-archive/ 
+audit-evidence-archive/
 docs/remote-agent-terminal-awareness-design.md
 .qoder/
 .architecture/
 docs/development/benchmarks/mixed-text-2026-09-11.md
 docs/media/social/
+.ruff_cache/

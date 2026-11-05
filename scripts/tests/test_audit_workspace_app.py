@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Tests for the WorkspaceApp ownership audit."""
 
-from pathlib import Path
 import sys
 import unittest
+from pathlib import Path
 
 # Import the audit helper from the scripts root without making scripts a package.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

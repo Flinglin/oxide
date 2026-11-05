@@ -1,4 +1,7 @@
-[1m[7m%[27m[1m[0m                                                                                                                                                                                                                                                                                        [0m[27m[24m[J[0;30;101m UL [0m[0;37;100m ~/…/tests/ref/grid_reset [0m[0;30;101m dynamic-alloc [0m [K[?2004hf[90mor i in {0..100}; do echo $i; done[39m[34Df[39mo[39mr[39m [39mi[39m [39mi[39mn[39m [39m{[39m0[39m.[39m.[39m1[39m0[39m0[39m}[39m;[39m [39md[39mo[39m [39me[39mc[39mh[39mo[39m [39m$[39mi[39m;[39m [39md[39mo[39mn[39me[?2004l
+[1m[7m%[27m[1m[0m
+
+
+[0m[27m[24m[J[0;30;101m UL [0m[0;37;100m ~/…/tests/ref/grid_reset [0m[0;30;101m dynamic-alloc [0m [K[?2004hf[90mor i in {0..100}; do echo $i; done[39m[34Df[39mo[39mr[39m [39mi[39m [39mi[39mn[39m [39m{[39m0[39m.[39m.[39m1[39m0[39m0[39m}[39m;[39m [39md[39mo[39m [39me[39mc[39mh[39mo[39m [39m$[39mi[39m;[39m [39md[39mo[39mn[39me[?2004l
 0
 1
 2
@@ -100,5 +103,12 @@
 98
 99
 100
-[1m[7m%[27m[1m[0m                                                                                                                                                                                                                                                                                        [0m[27m[24m[J[0;30;101m UL [0m[0;37;100m ~/…/tests/ref/grid_reset [0m[0;30;101m dynamic-alloc [0m [K[?2004hr[90mm *[39mr[39me[90ms[90me[90mt[39m[39ms[39me[39mt[?2004l
-c]104[!p[?3;4l[4l>[1m[7m%[27m[1m[0m                                                                                                                                                                                                                                                                                        [0m[27m[24m[J[0;30;101m UL [0m[0;37;100m ~/…/tests/ref/grid_reset [0m[0;30;101m dynamic-alloc [0m [K[?2004h
+[1m[7m%[27m[1m[0m
+
+
+[0m[27m[24m[J[0;30;101m UL [0m[0;37;100m ~/…/tests/ref/grid_reset [0m[0;30;101m dynamic-alloc [0m [K[?2004hr[90mm *[39mr[39me[90ms[90me[90mt[39m[39ms[39me[39mt[?2004l
+c]104[!p[?3;4l[4l>
+[1m[7m%[27m[1m[0m
+
+
+[0m[27m[24m[J[0;30;101m UL [0m[0;37;100m ~/…/tests/ref/grid_reset [0m[0;30;101m dynamic-alloc [0m [K[?2004h

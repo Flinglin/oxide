@@ -10,7 +10,6 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-
 PACKAGE_VERSION = "1.24.260710001"
 PACKAGE_SHA256 = "175640566a3b59c4b132070ee96c2c77e5ab7edd2e92732a5eb3610bbf63d90e"
 PACKAGE_NAME = f"microsoft.windows.console.conpty.{PACKAGE_VERSION}.nupkg"
@@ -39,7 +38,8 @@ def runtime_files(target: str) -> dict[str, tuple[str, str]]:
     return {
         "conpty.dll": (f"runtimes/win-{arch}/native/conpty.dll", dll_digest),
         f"{arch}/OpenConsole.exe": (
-            f"build/native/runtimes/{arch}/OpenConsole.exe", host_digest
+            f"build/native/runtimes/{arch}/OpenConsole.exe",
+            host_digest,
         ),
     }
 
@@ -86,7 +86,12 @@ def stage_runtime(resources: Path, target: str, package: Path | None = None) -> 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", choices=RUNTIMES, required=True)
-    parser.add_argument("--destination", type=Path, required=True, help="Directory containing the application executable")
+    parser.add_argument(
+        "--destination",
+        type=Path,
+        required=True,
+        help="Directory containing the application executable",
+    )
     args = parser.parse_args()
     stage_runtime(args.destination / "resources", args.target)
 

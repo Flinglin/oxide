@@ -137,9 +137,11 @@
       "alreadyExists": "既に存在します",
       "fileAlreadyOpen": "ファイルは既に開かれています",
       "noSession": "SFTPセッションがありません",
-      "unsavedChanges": "未保存の変更があります"    },
+      "unsavedChanges": "未保存の変更があります"
+    },
     "tree": {
-      "truncated": "他 {{count}} 件は表示されていません"    },
+      "truncated": "他 {{count}} 件は表示されていません"
+    },
     "searchQueryTooLong": "検索クエリが長すぎます",
     "split_editor": "エディタを分割",
     "close_split": "分割を閉じる"

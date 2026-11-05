@@ -9,7 +9,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "release" / "bump_version.py"
 SPEC = importlib.util.spec_from_file_location("bump_version", SCRIPT_PATH)
 assert SPEC is not None and SPEC.loader is not None
@@ -51,7 +50,9 @@ class BumpVersionTests(unittest.TestCase):
                     self.assertEqual(BUMP_VERSION.main(), 0)
                 expected = "2.2.0" if options == ["--dry-run"] else "2.2.1-beta.1"
                 self.assertEqual(
-                    tomllib.loads(manifest.read_text(encoding="utf-8"))["workspace"]["package"]["version"],
+                    tomllib.loads(manifest.read_text(encoding="utf-8"))["workspace"][
+                        "package"
+                    ]["version"],
                     expected,
                 )
                 self.assertEqual(readme.read_text(encoding="utf-8"), badge)
