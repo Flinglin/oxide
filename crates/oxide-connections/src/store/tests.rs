@@ -1837,7 +1837,7 @@ mod tests {
             SecretString::from("replacement-secret")
         );
     }
-    
+
     #[test]
     fn privilege_save_preserves_metadata_error_when_staged_secret_cleanup_fails() {
         let mut store = load_empty_store("privilege-save-cleanup-error");
@@ -1904,7 +1904,7 @@ mod tests {
         assert!(persisted.pending_privilege_keychain_cleanup.is_empty());
         fs::remove_dir(failed_save_path).unwrap();
     }
-    
+
     #[test]
     fn legacy_sudo_privilege_prompt_fragments_are_displayed_as_current_defaults() {
         let mut store = load_empty_store("privilege-legacy-sudo-patterns");
@@ -3208,6 +3208,8 @@ mod tests {
     fn telnet_profile_metadata_round_trips_without_ssh_fields() {
         let now = Utc::now();
         let profile = TelnetProfile {
+              input_line_ending: SerialLineEnding::None,
+            output_line_ending: SerialLineEnding::None,
             upstream_proxy: SavedUpstreamProxyPolicy::Direct,
             id: "telnet-1".to_string(),
             name: "Router console".to_string(),

@@ -576,6 +576,12 @@ impl WorkspaceApp {
             NewConnectionSelect::TerminalDeleteSequence => {
                 SelectAnchorId::NewConnectionTerminalDeleteSequence
             }
+            NewConnectionSelect::TelnetInputLineEnding => {
+                SelectAnchorId::NewConnectionTelnetInputLineEnding
+            }
+            NewConnectionSelect::TelnetOutputLineEnding => {
+                SelectAnchorId::NewConnectionTelnetOutputLineEnding
+            }
             NewConnectionSelect::TerminalSemanticScheme => {
                 SelectAnchorId::NewConnectionTerminalSemanticScheme
             }
@@ -1583,6 +1589,8 @@ impl WorkspaceApp {
                     | NewConnectionSelect::TerminalEncoding
                     | NewConnectionSelect::TerminalBackspaceSequence
                     | NewConnectionSelect::TerminalDeleteSequence
+                    | NewConnectionSelect::TelnetInputLineEnding
+                    | NewConnectionSelect::TelnetOutputLineEnding
                     | NewConnectionSelect::TerminalSemanticScheme
                     | NewConnectionSelect::TerminalHighlightRuleSet
                     | NewConnectionSelect::TerminalSessionLogPolicy => return,
@@ -4494,6 +4502,17 @@ impl WorkspaceApp {
         else {
             return div().into_any_element();
         };
+        let telnet_line_endings = self
+            .connection_form_state(cx)
+            .form
+            .as_ref()
+            .filter(|form| form.transport == NewConnectionTransport::Telnet)
+            .map(|form| {
+                (
+                    form.telnet_input_line_ending,
+                    form.telnet_output_line_ending,
+                )
+            });
         let application_defaults = &self.settings_store.settings().terminal;
         let default_encoding = terminal_encoding_label(application_defaults.terminal_encoding);
         let default_backspace =
@@ -4639,6 +4658,39 @@ impl WorkspaceApp {
                                 ),
                             )),
                     )
+                    .when_some(telnet_line_endings, |row, (input, output)| {
+                        row.children(
+                            [
+                                (
+                                    NewConnectionSelect::TelnetInputLineEnding,
+                                    "terminal.serial_control.line_ending",
+                                    input,
+                                ),
+                                (
+                                    NewConnectionSelect::TelnetOutputLineEnding,
+                                    "terminal.serial_control.output_line_ending",
+                                    output,
+                                ),
+                            ]
+                            .into_iter()
+                            .map(|(select, label, value)| {
+                                div()
+                                    .flex_1()
+                                    .min_w(px(CONNECTION_TERMINAL_CONTROL_MIN_WIDTH))
+                                    .child(form_field(
+                                        &self.theme_tokens,
+                                        self.i18n.t(label),
+                                        self.render_new_connection_select_control(
+                                            select,
+                                            self.connection_line_ending_label(value),
+                                            false,
+                                            false,
+                                            cx,
+                                        ),
+                                    ))
+                            }),
+                        )
+                    })
                     .child(
                         div()
                             .flex_1()
@@ -4969,7 +5021,18 @@ impl WorkspaceApp {
             .child(self.render_connection_hint(self.i18n.t("ssh.form.connect_timeout_hint")))
             .into_any_element()
     }
-
+    pub(super) fn connection_line_ending_label(
+        &self,
+        value: oxide_connections::SerialLineEnding,
+    ) -> String {
+        use oxide_connections::SerialLineEnding;
+        self.i18n.t(match value {
+            SerialLineEnding::None => "terminal.serial_control.line_ending_none",
+            SerialLineEnding::Lf => "terminal.serial_control.line_ending_lf",
+            SerialLineEnding::CrLf => "terminal.serial_control.line_ending_crlf",
+            SerialLineEnding::Cr => "terminal.serial_control.line_ending_cr",
+        })
+    }
     pub(super) fn set_new_connection_terminal_encoding(
         &mut self,
         encoding: Option<ConnectionTerminalEncoding>,
