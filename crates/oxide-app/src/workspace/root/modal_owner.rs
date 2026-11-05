@@ -141,7 +141,7 @@ impl ActiveWindowModalOwner {
             Self::NativePluginConfirm { .. } => 28,
             Self::TabRename => 29,
             Self::ArchiveCommand => 30,
-            Self::SshTunnel => 30,
+            Self::SshTunnel => 1,
             Self::ActiveTabWindowModal { .. } => 31,
             Self::TerminalCastPlayer => 32,
             Self::ThemeEditor { .. } => 33,
@@ -239,7 +239,7 @@ impl ActiveWindowModalOwner {
     fn key_route(self, key: &str) -> ActiveWindowModalKeyRoute {
         let visible = self.phase() == oxide_ui::motion::ExitPhase::Visible;
         let focused_child_owns_key = visible
-            && (matches!(self, Self::ArchiveCommand | Self::SshTunnel)
+            && (matches!(self, Self::ArchiveCommand)
                 || matches!(
                     self,
                     Self::ActiveTabWindowModal {
@@ -825,9 +825,7 @@ impl WorkspaceApp {
                 }
             }
             ActiveWindowModalOwner::SshTunnel => {
-                if event.keystroke.key.as_str() == "escape" {
-                    self.close_ssh_tunnel_form(window, cx);
-                }
+                let _ = self.handle_new_connection_key(event, window, cx);
             }
             ActiveWindowModalOwner::TerminalTriggerQuickCommand => {
                 let _ = self.handle_terminal_trigger_quick_command_key(event, cx);
