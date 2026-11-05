@@ -93,6 +93,11 @@ def parse_args() -> argparse.Namespace:
         help="Static source key to ignore. Intended for explicit fallback-test sentinels.",
     )
     parser.add_argument(
+        "--show-english-copies",
+        action="store_true",
+        help="Print English-copy details (only the count is shown by default).",
+    )
+    parser.add_argument(
         "--show-all",
         action="store_true",
         help="Print every finding instead of truncating long sections.",
@@ -259,7 +264,10 @@ def print_limited(title: str, items: list[str], limit: int | None = 30) -> None:
 
 
 def print_result(
-    result: AuditResult, fail_on_english_copy: bool, show_all: bool
+    result: AuditResult,
+    fail_on_english_copy: bool,
+    show_all: bool,
+    show_english_copies: bool = False,
 ) -> int:
     limit = None if show_all else 30
     print(f"Locales: {', '.join(sorted(result.catalogs))}")
@@ -316,7 +324,10 @@ def print_result(
     heading = "English-copy warnings"
     if fail_on_english_copy:
         heading = "English-copy errors"
-    print_limited(heading, english_copy_lines, limit)
+    if show_english_copies or show_all:
+        print_limited(heading, english_copy_lines, limit)
+    else:
+        print(f"\n{heading}: {len(english_copy_lines)}")
 
     has_structural_errors = result.has_errors()
     has_english_copy_errors = fail_on_english_copy and bool(result.english_copies)
@@ -331,7 +342,9 @@ def main() -> int:
     ignored_source_keys = set(DEFAULT_IGNORED_SOURCE_KEYS)
     ignored_source_keys.update(args.ignore_source_key)
     result = audit(args.locale_root, source_roots, ignored_source_keys)
-    return print_result(result, args.fail_on_english_copy, args.show_all)
+    return print_result(
+        result, args.fail_on_english_copy, args.show_all, args.show_english_copies
+    )
 
 
 if __name__ == "__main__":
