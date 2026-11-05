@@ -314,8 +314,8 @@ fn integration_versions(content: &str) -> impl Iterator<Item = u32> + '_ {
     content.lines().filter_map(|line| {
         let line = line.trim();
         let version = line
-            .strip_prefix("# oxideterm-shell-integration-version: ")
-            .or_else(|| line.strip_prefix("# OxideTerm remote shell integration v"))
+            .strip_prefix("# oxide-shell-integration-version: ")
+            .or_else(|| line.strip_prefix("# Oxide remote shell integration v"))
             .or_else(|| line.strip_prefix("Version: "));
         version.and_then(|version| version.trim_end_matches('.').trim().parse::<u32>().ok())
     })
@@ -824,11 +824,8 @@ mod tests {
     #[test]
     fn managed_startup_blocks_preserve_user_content_during_install_upgrade_and_removal() {
         for (content, expected) in [
-            (
-                "# oxideterm-shell-integration-version: 4\nsource old",
-                vec![4],
-            ),
-            ("# OxideTerm remote shell integration v5.\n", vec![5]),
+            ("# oxide-shell-integration-version: 4\nsource old", vec![4]),
+            ("# Oxide remote shell integration v5.\n", vec![5]),
             ("Version: 6\n", vec![6]),
             ("source old\n", vec![]),
         ] {

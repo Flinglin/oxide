@@ -394,7 +394,8 @@ impl ConfigurationView {
                 match field.resource.kind {
                     ResourceKind::Connection
                     | ResourceKind::Mosh
-                    | ResourceKind::StandaloneSftp => {
+                    | ResourceKind::StandaloneSftp
+                    | ResourceKind::PrivilegeCredential => {
                         collect_totp_references(&value.0, &mut dependencies);
                     }
                     ResourceKind::QuickCommand => {

@@ -1451,12 +1451,12 @@ mod tests {
             let mut parser = Processor::<StdSyncHandler>::new();
             let mut integration = crate::shell_integration::TerminalShellIntegration::default();
             let bytes = format!(
-                "\x1b]133;A;aid=oxideterm\x07\
+                "\x1b]133;A;aid=oxide\x07\
                  \x1b]{protocol};A\x07$ \x1b]{protocol};B\x07\
-                 \x1b]133;B;aid=oxideterm\x07echo hi\r\n\
-                 \x1b]133;C;aid=oxideterm\x07\
+                 \x1b]133;B;aid=oxide\x07echo hi\r\n\
+                 \x1b]133;C;aid=oxide\x07\
                  \x1b]{protocol};C\x07hi\r\n\
-                 \x1b]133;D;9;aid=oxideterm\x07\
+                 \x1b]133;D;9;aid=oxide\x07\
                  \x1b]{protocol};D;0\x07"
             );
             for byte in bytes.as_bytes().chunks(1) {
@@ -1522,9 +1522,9 @@ mod tests {
         integration.advance(
             &mut parser,
             &mut term,
-            b"\x1b]133;A;aid=oxideterm\x07$ \x1b]133;B;aid=oxideterm\x07theme\r\n\
-              \x1b]133;C;aid=oxideterm\x07NEW> \x1b]133;B;aid=oxideterm\x07echo ok\r\n\
-              \x1b]133;C;aid=oxideterm\x07ok\r\n\x1b]133;D;0;aid=oxideterm\x07",
+            b"\x1b]133;A;aid=oxide\x07$ \x1b]133;B;aid=oxide\x07theme\r\n\
+              \x1b]133;C;aid=oxide\x07NEW> \x1b]133;B;aid=oxide\x07echo ok\r\n\
+              \x1b]133;C;aid=oxide\x07ok\r\n\x1b]133;D;0;aid=oxide\x07",
             |_| {},
         );
         let marks = integration.command_marks();

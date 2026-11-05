@@ -890,7 +890,7 @@ impl WorkspaceApp {
                 div()
                     .font_family("monospace")
                     .text_color(rgb(self.theme_tokens.ui.text))
-                    .child("~/.oxideterm/shell-integration/"),
+                    .child("~/.oxide/shell-integration/"),
             )
             .into_any_element()
     }
@@ -1169,8 +1169,8 @@ mod tests {
                     RemoteShellIntegrationStatus {
                         shell: RemoteShellKind::Zsh,
                         state,
-                        integration_directory: "/home/user/.oxideterm/shell-integration".into(),
-                        integration_file: "/home/user/.oxideterm/shell-integration/zsh.zsh".into(),
+                        integration_directory: "/home/user/.oxide/shell-integration".into(),
+                        integration_file: "/home/user/.oxide/shell-integration/zsh.zsh".into(),
                         startup_files: vec!["/home/user/.zshrc".into()],
                     },
                     None,
@@ -1255,7 +1255,7 @@ mod tests {
             ),
             (
                 RemoteShellIntegrationError::UnsupportedShell,
-                "当前远端 Shell 不支持 OxideTerm 集成，无法启用目录跟踪。",
+                "当前远端 Shell 不支持 Oxide 集成，无法启用目录跟踪。",
                 TerminalNoticeVariant::Default,
             ),
             (

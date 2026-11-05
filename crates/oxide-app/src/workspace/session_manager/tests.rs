@@ -1071,8 +1071,7 @@ fn standalone_sftp_empty_password_roundtrip_keeps_both_endpoints_independent() {
 }
 #[gpui::test]
 fn single_console_profile_delete_retires_its_history_scope(cx: &mut TestAppContext) {
-    let Some(fixture_dir) =
-        isolated_workspace_fixture(cx, "OXIDETERM_SESSION_DELETE_SINGLE_TEST_DIR")
+    let Some(fixture_dir) = isolated_workspace_fixture(cx, "OXIDE_SESSION_DELETE_SINGLE_TEST_DIR")
     else {
         return;
     };
@@ -1104,8 +1103,7 @@ fn single_console_profile_delete_retires_its_history_scope(cx: &mut TestAppConte
 
 #[gpui::test]
 fn batch_console_profile_delete_retires_its_history_scope(cx: &mut TestAppContext) {
-    let Some(fixture_dir) =
-        isolated_workspace_fixture(cx, "OXIDETERM_SESSION_DELETE_BATCH_TEST_DIR")
+    let Some(fixture_dir) = isolated_workspace_fixture(cx, "OXIDE_SESSION_DELETE_BATCH_TEST_DIR")
     else {
         return;
     };

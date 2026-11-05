@@ -4,11 +4,12 @@ mod tests {
     use std::fs;
 
     use crate::{
-        ConnectionTerminalOptions, ConnectionTerminalSessionLogPolicy, MoshIpFamily,
-        MoshPredictionMode, MoshUdpPortSelection, PrivilegeCredentialKind, SaveMoshProfileRequest,
-        SavePrivilegeCredentialRequest, SaveRemoteDesktopProfileRequest, SaveSerialProfileRequest,
-        SaveTelnetProfileRequest, SavedUpstreamProxyProtocol, SerialFlowControl, SerialProfile,
-        SerialProfilesSyncSnapshot,
+            ConnectionTerminalOptions, ConnectionTerminalSessionLogPolicy, MoshIpFamily,
+        MoshPredictionMode, MoshUdpPortSelection, PrivilegePromptType, PrivilegeResponseMode,
+        SaveMoshProfileRequest,
+        SavePrivilegeCredentialRequest,
+        SaveRemoteDesktopProfileRequest, SaveSerialProfileRequest, SaveTelnetProfileRequest,
+        SavedUpstreamProxyProtocol, SerialFlowControl, SerialProfile, SerialProfilesSyncSnapshot,
     };
     use oxide_remote_desktop_core::RemoteDesktopProtocol;
     use rand::{rand_core::UnwrapErr, rngs::SysRng};
@@ -1210,7 +1211,48 @@ mod tests {
         assert!(serialized.get("raw_tcp_profiles_json").is_none());
         assert!(serialized.get("raw_udp_profiles_json").is_none());
     }
-
+  #[test]
+    fn legacy_archive_privilege_credential_maps_kind_to_current_modes() {
+        for (kind, expected_prompt_type, expected_response_mode) in [
+            (
+                "sudo_password",
+                PrivilegePromptType::Sudo,
+                PrivilegeResponseMode::PasswordOnly,
+            ),
+            (
+                "two_stage_separate_input",
+                PrivilegePromptType::Custom,
+                PrivilegeResponseMode::PasswordThenTotp,
+            ),
+        ] {
+            let credential: crate::oxide_file::EncryptedPrivilegeCredential =
+                serde_json::from_value(serde_json::json!({
+                    "id": "legacy",
+                    "connectionId": "conn-1",
+                    "label": "Legacy sudo",
+                    "kind": kind,
+                    "promptPatterns": ["[sudo]"],
+                    "secret": "archive-secret",
+                    "createdAt": "2026-01-01T00:00:00Z",
+                    "updatedAt": "2026-01-01T00:00:00Z",
+                }))
+                .unwrap();
+            assert_eq!(credential.prompt_type, expected_prompt_type, "{kind}");
+            assert_eq!(
+                credential.response_mode, expected_response_mode,
+                "{kind}"
+            );
+            assert_eq!(credential.prompt_patterns, vec!["[sudo]".to_string()]);
+            assert!(credential.host_patterns.is_empty(), "{kind}");
+            assert!(credential.second_factor_patterns.is_empty(), "{kind}");
+            assert!(credential.totp_credential_id.is_none(), "{kind}");
+            assert_eq!(
+                credential.secret.as_deref().map(String::as_str),
+                Some("archive-secret"),
+                "{kind}"
+            );
+        }
+    }
     #[test]
     fn encrypted_export_import_restores_privilege_credential_secret() {
         let mut source = temp_store("privilege-source");
@@ -1219,12 +1261,17 @@ mod tests {
             .unwrap();
         source
             .save_privilege_credential(SavePrivilegeCredentialRequest {
-                connection_id: "conn-1".to_string(),
+                    connection_id: "conn-1".to_string(),
                 credential_id: Some("sudo-prod".to_string()),
                 label: "sudo".to_string(),
-                kind: PrivilegeCredentialKind::SudoPassword,
+                prompt_type: PrivilegePromptType::Sudo,
+                response_mode: PrivilegeResponseMode::PasswordOnly,
                 username_hint: Some("deploy".to_string()),
                 prompt_patterns: Vec::new(),
+                host_patterns: Vec::new(),
+                second_factor_patterns: Vec::new(),
+                second_factor_user_hint: None,
+                totp_credential_id: None,
                 secret: Some(SecretString::from("sudo-secret")),
                 enabled: true,
                 require_click_to_send: true,
@@ -1235,9 +1282,14 @@ mod tests {
                 connection_id: crate::SSH_COMMON_PRIVILEGE_SCOPE_ID.into(),
                 credential_id: Some("shared-sudo".into()),
                 label: "Shared sudo".into(),
-                kind: PrivilegeCredentialKind::SudoPassword,
+                prompt_type: PrivilegePromptType::Sudo,
+                response_mode: PrivilegeResponseMode::PasswordOnly,
                 username_hint: None,
                 prompt_patterns: Vec::new(),
+                host_patterns: Vec::new(),
+                second_factor_patterns: Vec::new(),
+                second_factor_user_hint: None,
+                totp_credential_id: None,
                 secret: Some(SecretString::from("common-secret")),
                 enabled: false,
                 require_click_to_send: true,
@@ -1310,6 +1362,152 @@ mod tests {
         );
     }
 
+    #[test]
+    fn privilege_export_respects_host_scope_and_only_referenced_totp() {
+        let mut source = temp_store("privilege-host-export");
+        source
+            .upsert_imported_connection(saved_connection("conn-1", "Dev"))
+            .unwrap();
+        let save_totp = |store: &mut ConnectionStore, name: &str| {
+            store
+                .save_totp_credential(
+                    None,
+                    name,
+                    Some(&SecretString::from("JBSWY3DPEHPK3PXP")),
+                    Default::default(),
+                    crate::totp::DEFAULT_TOTP_PROMPT,
+                    true,
+                )
+                .unwrap()
+        };
+        let prod_totp = save_totp(&mut source, "prod otp");
+        let shared_totp = save_totp(&mut source, "shared otp");
+        let save_shared = |store: &mut ConnectionStore,
+                           id: &str,
+                           host_patterns: Vec<String>,
+                           require_click_to_send: bool,
+                           totp_credential_id: String| {
+            store
+                .save_privilege_credential(SavePrivilegeCredentialRequest {
+                    connection_id: crate::SSH_COMMON_PRIVILEGE_SCOPE_ID.into(),
+                    credential_id: Some(id.into()),
+                    label: id.into(),
+                    prompt_type: PrivilegePromptType::Sudo,
+                    response_mode: PrivilegeResponseMode::PasswordThenTotp,
+                    username_hint: None,
+                    prompt_patterns: Vec::new(),
+                    host_patterns,
+                    second_factor_patterns: vec!["Verification code:".into()],
+                    second_factor_user_hint: None,
+                    totp_credential_id: Some(totp_credential_id),
+                    secret: Some(SecretString::from("first-factor")),
+                    enabled: true,
+                    require_click_to_send,
+                })
+                .unwrap();
+        };
+        save_shared(
+            &mut source,
+            "prod-only",
+            vec!["prod-*".into()],
+            false,
+            prod_totp.clone(),
+        );
+        save_shared(
+            &mut source,
+            "shared",
+            vec!["example.*".into()],
+            false,
+            shared_totp.clone(),
+        );
+
+        let bytes = export_connections_to_oxide(
+            &source,
+            &["conn-1".to_string()],
+            "secret!",
+            OxideExportOptions {
+                include_passwords: true,
+                ..OxideExportOptions::default()
+            },
+        )
+        .unwrap();
+        let payload = decrypt_payload(&bytes, "secret!").unwrap();
+        let exported = payload
+            .connections
+            .iter()
+            .flat_map(|connection| &connection.privilege_credentials)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            exported
+                .iter()
+                .map(|credential| credential.id.as_str())
+                .collect::<Vec<_>>(),
+            ["ssh-common:shared"]
+        );
+        assert_eq!(
+            payload
+                .totp_credentials
+                .iter()
+                .map(|credential| credential.id.as_str())
+                .collect::<Vec<_>>(),
+            [shared_totp.as_str()]
+        );
+        assert_eq!(
+            payload
+                .portable_secrets
+                .iter()
+                .filter_map(|secret| {
+                    serde_json::from_str::<crate::CredentialTarget>(&secret.id).ok()
+                })
+                .filter_map(|target| match target.owner {
+                    crate::CredentialOwner::Totp(id) => Some(id),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            [shared_totp.clone()]
+        );
+
+        let mut target = temp_store("privilege-host-export-target");
+        apply_oxide_import_with_options(
+            &mut target,
+            &bytes,
+            "secret!",
+            OxideImportOptions {
+                conflict_strategy: ImportConflictStrategy::Replace,
+                import_portable_secrets: true,
+                ..OxideImportOptions::default()
+            },
+        )
+        .unwrap();
+        let imported = target
+            .connections()
+            .into_iter()
+            .find(|connection| connection.name == "Dev")
+            .unwrap();
+        let shared = imported
+            .privilege_credentials
+            .iter()
+            .find(|credential| credential.id == "ssh-common:shared")
+            .expect("host-compatible shared credential");
+        assert_eq!(
+            shared.totp_credential_id.as_deref(),
+            Some(shared_totp.as_str())
+        );
+        assert!(!shared.require_click_to_send);
+        assert!(
+            target
+                .totp_binding(Some(&shared_totp))
+                .unwrap()
+                .resolve()
+                .is_ok()
+        );
+        assert!(
+            target
+                .totp_credentials()
+                .iter()
+                .all(|credential| credential.id != prod_totp)
+        );
+    }
     #[test]
     fn managed_key_archive_supports_store_restore_and_file_extraction() {
         let mut source = temp_store("managed-source");

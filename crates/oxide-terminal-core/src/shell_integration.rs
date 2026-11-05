@@ -725,10 +725,7 @@ impl TerminalShellIntegration {
         }
         let sequence = data.split(';').next().unwrap_or_default();
         let injected = source == ShellIntegrationSource::Osc133
-            && data
-                .split(';')
-                .skip(1)
-                .any(|field| field == "aid=oxideterm");
+            && data.split(';').skip(1).any(|field| field == "aid=oxide");
         let same_producer =
             self.state.integration_source == Some(source) && self.state.injected == injected;
         let position = cursor_position(term);
