@@ -147,11 +147,7 @@ impl WorkspaceApp {
         } else {
             self.left_sidebar_width
         };
-        let right_offset = if self.right_sidebar_visible() {
-            self.right_sidebar_width
-        } else {
-            0.0
-        };
+        let right_offset = self.context_sidebar_occupied_width();
         let width = (f32::from(window_bounds.size.width) - left_offset - right_offset).max(0.0);
         self.main_window_tabbar_drop_bounds = Some(Bounds::new(
             gpui::point(

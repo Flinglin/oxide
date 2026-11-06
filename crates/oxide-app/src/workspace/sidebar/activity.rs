@@ -14,7 +14,6 @@ impl WorkspaceApp {
             (NavItem::Runtime, LucideIcon::Gauge),
             (NavItem::Extensions, LucideIcon::Puzzle),
             (NavItem::CloudSync, LucideIcon::Cloud),
-            (NavItem::HostTools, LucideIcon::Wrench),
         ];
         let bottom_items = [
             (NavItem::Workspace, LucideIcon::Square),
@@ -123,22 +122,6 @@ impl WorkspaceApp {
             .registry()
             .contributions()
             .runtime_sidebar_panels();
-        // The sessions footer owns the lock action while visible. Keep the rail
-        // entry reachable when that footer is hidden or another panel is selected.
-        if self.settings_store.settings().sidebar_ui.show_app_lock_icon
-            && (self.left_sidebar_collapsed
-                || self.effective_sidebar_panel_section() != NavItem::Sessions)
-        {
-            primary_items =
-                primary_items.child(
-                    div()
-                        .mb(px(self.theme_tokens.metrics.activity_icon_gap))
-                        .child(self.render_app_lock_button(
-                            self.theme_tokens.metrics.activity_icon_size,
-                            cx,
-                        )),
-                );
-        }
 
         // Keep built-in entries stationary as plugins are enabled or disabled.
         if plugin_sidebar_panels
@@ -217,7 +200,121 @@ impl WorkspaceApp {
         )
         .into_any_element()
     }
-
+    pub(in crate::workspace) fn render_context_activity_bar(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = self.theme_tokens.ui;
+        let panel_visible = self.right_sidebar_visible();
+        let toggle_label = self.i18n.t(if panel_visible {
+            "sidebar.actions.collapse"
+        } else {
+            "sidebar.actions.expand"
+        });
+        div()
+            .id("context-activity-bar")
+            .flex_none()
+            .w(px(self.theme_tokens.metrics.activity_bar_width))
+            .h_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .when(self.window_background_preferences().is_none(), |bar| {
+                bar.border_l_1()
+                    .border_color(self.workspace_divider_color(theme.border, 0x40))
+            })
+            .child(
+                div()
+                    .flex_none()
+                    .w_full()
+                    .h(px(self.theme_tokens.metrics.tabbar_height))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(self.workspace_chrome_background(theme.bg))
+                    .border_b_1()
+                    .border_color(self.workspace_chrome_divider())
+                    .child(
+                        oxide_ui::button::icon_button(
+                            &self.theme_tokens,
+                            Self::render_lucide_icon(
+                                if panel_visible {
+                                    LucideIcon::PanelRightClose
+                                } else {
+                                    LucideIcon::PanelRight
+                                },
+                                self.theme_tokens.metrics.sidebar_collapse_icon_size,
+                                rgb(theme.text_muted),
+                            ),
+                            oxide_ui::button::IconButtonOptions {
+                                radius: oxide_ui::button::ButtonRadius::Md,
+                                hover_background: Some(rgb(theme.bg_hover)),
+                                idle_opacity: 1.0,
+                                ..oxide_ui::button::IconButtonOptions::compact(
+                                    self.theme_tokens.metrics.activity_icon_size,
+                                )
+                            },
+                        )
+                        .id("context-sidebar-toggle")
+                        .on_mouse_move(cx.listener(
+                            move |this, event: &MouseMoveEvent, _window, cx| {
+                                this.queue_workspace_tooltip(
+                                    "context-sidebar-toggle",
+                                    toggle_label.clone(),
+                                    f32::from(event.position.x) + 12.0,
+                                    f32::from(event.position.y) + 16.0,
+                                    cx,
+                                );
+                            },
+                        ))
+                        .on_hover(cx.listener(|this, hovered: &bool, _window, cx| {
+                            if !*hovered {
+                                this.clear_workspace_tooltip("context-sidebar-toggle", cx);
+                            }
+                        }))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|this, _event, _window, cx| {
+                                this.clear_workspace_tooltip("context-sidebar-toggle", cx);
+                                let _ = this.toggle_right_sidebar_panel(
+                                    this.active_right_sidebar_panel,
+                                    cx,
+                                );
+                                cx.stop_propagation();
+                            }),
+                        ),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .bg(self.workspace_sidebar_background(theme.bg))
+                    .child(self.render_context_tool_buttons(window, cx))
+                    .when(
+                        self.settings_store.settings().sidebar_ui.show_app_lock_icon,
+                        |body| {
+                            body.child(
+                                div()
+                                    .flex_none()
+                                    .pt(px(self.theme_tokens.spacing.two))
+                                    .pb(px(self.theme_tokens.spacing.two))
+                                    .mb(px(self.theme_tokens.metrics.activity_icon_gap))
+                                    .child(self.render_app_lock_button(
+                                        self.theme_tokens.metrics.activity_icon_size,
+                                        cx,
+                                    )),
+                            )
+                        },
+                    ),
+            )
+            .into_any_element()
+    }
     pub(in crate::workspace) fn render_nav_item(
         &self,
         section: NavItem,

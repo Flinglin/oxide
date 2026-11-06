@@ -1035,9 +1035,7 @@ impl WorkspaceApp {
             if !self.left_sidebar_collapsed {
                 available_width -= self.sidebar_panel_width();
             }
-            if self.right_sidebar_visible() {
-                available_width -= self.right_sidebar_width;
-            }
+            available_width -= self.context_sidebar_occupied_width();
         }
         available_width.max(self.theme_tokens.metrics.min_main_width)
     }

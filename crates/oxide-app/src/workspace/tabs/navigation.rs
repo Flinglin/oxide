@@ -1342,11 +1342,7 @@ impl WorkspaceApp {
         } else {
             self.left_sidebar_width
         };
-        let context_sidebar_width = if self.right_sidebar_visible() {
-            self.right_sidebar_width
-        } else {
-            0.0
-        };
+        let context_sidebar_width = self.context_sidebar_occupied_width();
         (window_width - sidebar_width - context_sidebar_width).max(0.0)
     }
 

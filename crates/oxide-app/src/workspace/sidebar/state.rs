@@ -178,7 +178,17 @@ impl WorkspaceApp {
             self.active_right_sidebar_panel,
         )
     }
-
+    pub(in crate::workspace) fn context_sidebar_occupied_width(&self) -> f32 {
+        if self.settings_store.settings().sidebar_ui.zen_mode {
+            return 0.0;
+        }
+        self.theme_tokens.metrics.activity_bar_width
+            + if self.right_sidebar_visible() {
+                self.right_sidebar_width
+            } else {
+                0.0
+            }
+    }
     pub(in crate::workspace) fn set_sidebar_section(
         &mut self,
         section: NavItem,
@@ -417,14 +427,6 @@ impl WorkspaceApp {
             .sidebar_ui
             .right_sidebar_collapsed = false;
         self.set_right_sidebar_rendered_with_motion(true, cx);
-        if panel == RightSidebarPanel::HostTools {
-            // Non-AI context panels share the old right-sidebar shell, but must
-            // not keep AI-specific focus or floating popovers alive.
-
-            self.host_tools.update(cx, |host_tools, cx| {
-                host_tools.reset_active_tool(cx);
-            });
-        }
         self.sync_host_tools_lifecycle(panel == RightSidebarPanel::HostTools, cx);
 
         self.persist_sidebar_settings_store(cx);

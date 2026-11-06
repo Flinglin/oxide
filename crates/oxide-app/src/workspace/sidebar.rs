@@ -183,6 +183,7 @@ mod region;
 mod sessions;
 mod state;
 mod titlebar;
+mod tools;
 pub(in crate::workspace) use titlebar::{
     client_titlebar_button_layout, handle_window_drag_mouse_down,
 };
