@@ -1,6 +1,7 @@
 use super::*;
 
 // Keep tab responsibilities in real modules while preserving WorkspaceApp's API.
+mod affinity;
 mod create;
 mod detach;
 mod entity;
@@ -12,6 +13,7 @@ mod render;
 pub(super) mod split_drop;
 mod state;
 
+pub(in crate::workspace) use affinity::{TabAffinity, TabContent};
 pub(in crate::workspace) use entity::{
     TabCloseConfirmKeyAction, TabCloseProcessProbe, TabDetachTransition, TabMountCleanupPlan,
     TabMountCloseReason, TabMountId, TabRemovalTransition, TerminalLocation,
