@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import plistlib
@@ -13,13 +14,25 @@ import subprocess
 import sys
 import tarfile
 import time
+import urllib.error
+import urllib.request
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
 from conpty_runtime import stage_runtime as stage_conpty_runtime
+from packaging.specifiers import SpecifierSet
+from packaging.version import Version, parse
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
+GITHUB_API = "https://api.github.com"
+AGENT_REPO = "Flinglin/oxide-agent"
+AGENT_CACHE_DIR = ROOT_DIR / "target" / "agent-cache"
+AGENT_VERSION_COMPATIBILITY: list[tuple[str, str | None]] = [
+    (">=0.1.0", ">=0.1.0"),
+]
+OXIDE_VERSION = ""
+AGENT_TARGET_ASSET = ["oxide-agent-x86_64-linux-gnu", "oxide-agent-aarch64-linux-gnu"]
 APP_MANIFEST = ROOT_DIR / "crates" / "oxide-app" / "Cargo.toml"
 RESOURCE_DIR = ROOT_DIR / "crates" / "oxide-app" / "resources"
 MACOS_INFO_PLIST_EXTENSION_DIR = RESOURCE_DIR / "info"
@@ -400,8 +413,148 @@ def write_package_version(dst: Path, version: str) -> None:
     (dst / PACKAGE_VERSION_FILENAME).write_text(f"{version}\n", encoding="utf-8")
 
 
+def github_request(path: str) -> dict:
+    """带可选 GITHUB_TOKEN 的 GitHub API 请求。"""
+    url = f"{GITHUB_API}{path}"
+    request = make_github_requests(url)
+    request.add_header("Accept", "application/vnd.github+json")
+    with urllib.request.urlopen(request, timeout=60) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def parse_agent_tag(tag_name: str) -> Version | None:
+    """从 oxide-agent-v0.1.0 这样的 tag 中提取语义版本。"""
+    prefix = "oxide-agent-v"
+    if not tag_name.startswith(prefix):
+        return None
+    try:
+        return parse(tag_name[len(prefix) :])
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def agent_constraint_for_oxide(oxide_version: str) -> str:
+    """根据 oxide 版本查到对应的 oxide-agent 版本区间。"""
+    parsed = parse(oxide_version)
+    # 预发布版本（0.2.0-beta.1）按 base version 查矩阵，
+    # 否则 SpecifierSet 默认排除预发布，会匹配不到任何区间。
+    lookup = Version(parsed.base_version) if parsed.is_prerelease else parsed
+
+    for oxide_spec, agent_constraint in AGENT_VERSION_COMPATIBILITY:
+        if lookup in SpecifierSet(oxide_spec):
+            if agent_constraint is None:
+                raise RuntimeError(
+                    f"oxide {oxide_version} has no compatible {AGENT_REPO} release "
+                    f"(matched rule {oxide_spec!r})"
+                )
+            return agent_constraint
+
+    raise RuntimeError(
+        f"oxide {oxide_version} does not match any rule in "
+        f"AGENT_VERSION_COMPATIBILITY; add one before releasing"
+    )
+
+
+def select_agent_release() -> dict:
+    """选择与 oxide 版本区间匹配的最高 oxide-agent release。"""
+    if OXIDE_VERSION == "":
+        raise RuntimeError("oxide version missing")
+    constraint = agent_constraint_for_oxide(OXIDE_VERSION)
+    spec = SpecifierSet(constraint)
+    releases = github_request(f"/repos/{AGENT_REPO}/releases?per_page=100")
+
+    candidates = []
+    for release in releases:
+        if release.get("draft") or release.get("prerelease"):
+            continue
+        version = parse_agent_tag(release.get("tag_name", ""))
+        if version is None:
+            continue
+        if version in spec:
+            candidates.append((version, release))
+
+    if not candidates:
+        raise RuntimeError(
+            f"no {AGENT_REPO} release satisfies {constraint!r} "
+            f"for oxide {OXIDE_VERSION}"
+        )
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates[0][1]
+
+
+def verify_agent_checksum(cache_path: Path, asset_name: str, checksum: str) -> bool:
+    expected = None
+    for line in checksum.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[-1].lstrip("*") == asset_name:
+            expected = parts[0].lower()
+            break
+    if expected is None:
+        print(f"warning: {asset_name} not listed in checksum file", file=sys.stderr)
+        return False
+
+    actual = hashlib.sha256(cache_path.read_bytes()).hexdigest()
+    if actual != expected:
+        cache_path.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"agent binary checksum mismatch for {asset_name}: "
+            f"expected {expected}, got {actual}"
+        )
+    return True
+
+
+def make_github_requests(url: str):
+    request = urllib.request.Request(url)
+    token = os.environ.get("GITHUB_TOKEN")
+    if token is None:
+        env_path = ROOT_DIR / ".env"
+        if env_path.is_file():
+            from dotenv import load_dotenv
+
+            load_dotenv(env_path, override=False)
+            token = os.environ.get("GITHUB_TOKEN")
+    if token:
+        request.add_header("Authorization", f"Bearer {token}")
+    return request
+
+
+def download_agent_asset(release: dict, target_dir: Path):
+
+    # 下载校验文件
+    checksum_url = next(
+        (
+            n
+            for n in release.get("assets", [])
+            if n.get("name", None) == "sha256sums.txt"
+        ),
+        None,
+    )
+    if checksum_url is None:
+        raise RuntimeError("Verification file missing")
+    checksum_request = make_github_requests(checksum_url["browser_download_url"])
+    with urllib.request.urlopen(checksum_request, timeout=60) as response:
+        checksum = response.read().decode("utf-8")
+
+    for asset in AGENT_TARGET_ASSET:
+        cache_path = target_dir / asset
+        if cache_path.is_file() and verify_agent_checksum(cache_path, asset, checksum):
+            continue
+        remote_asset = next(
+            (n for n in release.get("assets", []) if n.get("name", None) == asset), None
+        )
+        if remote_asset is not None:
+            asset_request = make_github_requests(remote_asset["browser_download_url"])
+            with urllib.request.urlopen(asset_request, timeout=300) as response:
+                cache_path.write_bytes(response.read())
+            verify_agent_checksum(cache_path, asset, checksum)
+
+
 def copy_agent_resources(dst: Path, *, encode_binaries: bool) -> None:
+    """从 oxide-agent GitHub Release 获取指定版本的 agent 并写入 resources/agents。"""
     source_dir = RESOURCE_DIR / AGENT_RESOURCE_DIR
+    release = select_agent_release()
+    download_agent_asset(release, source_dir)
+
     if dst.exists():
         shutil.rmtree(dst)
     dst.mkdir(parents=True)
@@ -426,7 +579,9 @@ def copy_runtime_resources(
     dst.mkdir(parents=True, exist_ok=True)
     # Agents and the target-specific CLI retain their resource layout.
     # Remote desktop executables are distributed through the plugin catalog.
-    # copy_agent_resources(dst / AGENT_RESOURCE_DIR, encode_binaries=encode_agent_binaries)
+    copy_agent_resources(
+        dst / AGENT_RESOURCE_DIR, encode_binaries=encode_agent_binaries
+    )
     copy_tree(RESOURCE_DIR / "icons", dst / "icons")
 
     # Do not copy stale CLI binaries for other platforms. The app resolves the
@@ -1947,10 +2102,12 @@ cp -a \"{payload_path}/.\" %{{buildroot}}/
 
 
 def main() -> None:
+    global OXIDE_VERSION
     target_was_explicit = len(sys.argv) > 1 and sys.argv[1] != ""
     target = sys.argv[1] if target_was_explicit else host_triple()
     raw_version = raw_release_version()
     version = normalized_version(raw_version)
+    OXIDE_VERSION = version
     validate_release_version(raw_version, version)
     identity = release_identity(raw_version, version)
     label = target_label(target)
