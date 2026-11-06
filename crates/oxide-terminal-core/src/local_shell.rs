@@ -1,7 +1,12 @@
-use std::{collections::HashMap, env, path::PathBuf, process::Command};
+use std::{
+    collections::HashMap,
+    env,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 #[cfg(unix)]
-use std::{collections::HashSet, fs, path::Path};
+use std::{collections::HashSet, fs};
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -116,7 +121,23 @@ pub fn scan_shells() -> Vec<ShellInfo> {
 
     shells
 }
-
+pub fn is_shell_executable(path: &Path) -> bool {
+    let Ok(metadata) = path.metadata() else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
 pub fn default_shell() -> ShellInfo {
     #[cfg(unix)]
     if let Ok(shell_path) = env::var("SHELL") {

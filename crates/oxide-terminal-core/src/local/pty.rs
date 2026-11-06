@@ -116,7 +116,7 @@ impl LocalPtySession {
         {
             anyhow::bail!("local terminal startup directory is unavailable");
         }
-        if shell.path.is_absolute() && !shell.path.is_file() {
+        if shell.path.is_absolute() && !crate::is_shell_executable(&shell.path) {
             anyhow::bail!("local terminal shell executable is unavailable");
         }
 

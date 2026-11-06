@@ -4,10 +4,10 @@ use anyhow::{Context, Result};
 use tempfile::TempDir;
 
 use crate::{
-    EMACS_FREE_TYPE_INTEGRATION_SOURCE, LocalPtyConfig, ShellInfo, TerminalRelay,
-    VIM_FREE_TYPE_INTEGRATION_SOURCE, local_shell::shell_args_for_profile,
+    EMACS_FREE_TYPE_INTEGRATION_SOURCE, LocalPtyConfig, ShellInfo,
+    VIM_FREE_TYPE_INTEGRATION_SOURCE,
+    local_shell::{TerminalRelay, shell_args_for_profile},
 };
-
 const VIM_FREE_TYPE_INTEGRATION_ENV: &str = "oxide_VIM_INTEGRATION";
 const EMACS_FREE_TYPE_INTEGRATION_ENV: &str = "oxide_EMACS_INTEGRATION";
 
@@ -541,7 +541,6 @@ fn nu_quote(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::TerminalRelay;
 
     use super::*;
 
