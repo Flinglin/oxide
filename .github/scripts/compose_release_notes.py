@@ -102,13 +102,6 @@ def stable_download_table(version: str, tag: str) -> str:
             link("RPM", f"oxide_{version}_linux_aarch64.rpm")
         )
 
-    if "oxide-agent-v" in tag:
-        # Agent 端的 Linux 链接
-        table_data["Linux"]["x64"].append(link("Setup", "oxide-agent-x86_64-linux-gnu"))
-        table_data["Linux"]["ARM64"].append(
-            link("Setup", "oxide-agent-aarch64-linux-gnu")
-        )
-
     # 4. 动态生成表格的行
     table_rows = []
     for os_name, archs in table_data.items():

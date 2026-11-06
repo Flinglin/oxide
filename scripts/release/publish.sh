@@ -5,7 +5,7 @@ set -euo pipefail
 # 发布新版本时只能是
 is_whitelisted() {
     local f="$1"
-    [[ "$f" == "Cargo.toml" || "$f" == "Cargo.lock" || "$f" == "agent/Cargo.toml" || "$f" == "agent/Cargo.lock" || "$f" == ".github/release/stable/oxide_changelog.md" || "$f" == ".github/release/stable/release_log" || "$f" == ".github/release/stable/oxide_agent_changelog.md" ]]
+    [[ "$f" == "Cargo.toml" || "$f" == "Cargo.lock" || "$f" == ".github/release/stable/oxide_changelog.md" || "$f" == ".github/release/stable/release_log" ]]
 }
 
 
@@ -61,8 +61,6 @@ git add ".github/release/stable/release_log" ".github/release/stable/${NAME//-/_
 
 if [ "$NAME" == "oxide" ]; then
     git add Cargo.toml Cargo.lock
-elif [ "$NAME" == "oxide-agent" ]; then
-    git add "agent/Cargo.toml" "agent/Cargo.lock"
 else
     echo "❌ release_log 格式错误" >&2; exit 1;
 fi
