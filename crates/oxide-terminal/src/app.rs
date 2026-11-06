@@ -141,7 +141,7 @@ pub type SharedTerminalSession = Arc<Mutex<TerminalSession>>;
 pub type TerminalInputInterceptor =
     Arc<dyn Fn(&[u8]) -> TerminalInputInterceptorResult + Send + Sync>;
 pub type TerminalInputBroadcaster = Rc<dyn Fn(TerminalBroadcastInputKind, &[u8], &mut App)>;
-const PRIVILEGE_PROMPT_DEBUG_ENV: &str = "oxide_PRIVILEGE_DEBUG";
+const PRIVILEGE_PROMPT_DEBUG_ENV: &str = "OXIDE_PRIVILEGE_DEBUG";
 const TERMINAL_ANIMATION_INTERVAL: Duration = Duration::from_millis(16);
 const SMOOTH_SCROLL_ANIMATION_DURATION: Duration = Duration::from_millis(125);
 const DRAIN_BOOST_POLL_INTERVAL: Duration = Duration::from_millis(8);

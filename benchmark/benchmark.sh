@@ -4,10 +4,10 @@
 set -eu
 
 benchmark_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-fixture_size_mib=${oxide_BENCHMARK_SIZE_MIB:-16}
-warmup_runs=${oxide_BENCHMARK_WARMUPS:-1}
-measured_runs=${oxide_BENCHMARK_RUNS:-3}
-results_root=${oxide_BENCHMARK_RESULTS_DIR:-"$benchmark_root/results"}
+fixture_size_mib=${OXIDE_BENCHMARK_SIZE_MIB:-16}
+warmup_runs=${OXIDE_BENCHMARK_WARMUPS:-1}
+measured_runs=${OXIDE_BENCHMARK_RUNS:-3}
+results_root=${OXIDE_BENCHMARK_RESULTS_DIR:-"$benchmark_root/results"}
 workloads='plain ansi unicode long-csi'
 
 require_nonnegative_integer() {
@@ -21,9 +21,9 @@ require_nonnegative_integer() {
     esac
 }
 
-require_nonnegative_integer oxide_BENCHMARK_SIZE_MIB "$fixture_size_mib"
-require_nonnegative_integer oxide_BENCHMARK_WARMUPS "$warmup_runs"
-require_nonnegative_integer oxide_BENCHMARK_RUNS "$measured_runs"
+require_nonnegative_integer OXIDE_BENCHMARK_SIZE_MIB "$fixture_size_mib"
+require_nonnegative_integer OXIDE_BENCHMARK_WARMUPS "$warmup_runs"
+require_nonnegative_integer OXIDE_BENCHMARK_RUNS "$measured_runs"
 
 if [ "$fixture_size_mib" -eq 0 ] || [ "$measured_runs" -eq 0 ]; then
     printf '%s\n' 'Fixture size and measured run count must be greater than zero.' >&2
@@ -68,7 +68,7 @@ while [ "$measured_iteration" -le "$measured_runs" ]; do
     for workload in $workloads; do
         printf 'Measured run %s/%s: %s\n' "$measured_iteration" "$measured_runs" "$workload" >&2
         if result_line=$("$benchmark_root/measure.sh" "$workload" 2>&1 1>&3); then
-            result_prefix='oxide_BENCHMARK_RESULT '
+            result_prefix='OXIDE_BENCHMARK_RESULT '
             case "$result_line" in
                 "$result_prefix"*)
                     printf '%s\n' "${result_line#"$result_prefix"}" >> "$raw_result_path"

@@ -4,11 +4,11 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUT_ROOT="$ROOT_DIR/crates/oxide-app/resources/cli-bin"
 TARGET_TRIPLE="${1:-}"
-PROFILE="${oxide_CLI_PROFILE:-release}"
+PROFILE="${OXIDE_CLI_PROFILE:-release}"
 BIN_NAME="oxide"
 
 if [[ "$PROFILE" != "release" ]]; then
-  echo "Only release CLI packaging is supported; set oxide_CLI_PROFILE=release." >&2
+  echo "Only release CLI packaging is supported; set OXIDE_CLI_PROFILE=release." >&2
   exit 2
 fi
 

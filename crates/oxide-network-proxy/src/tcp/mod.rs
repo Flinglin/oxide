@@ -214,17 +214,17 @@ pub async fn probe_upstream_proxy_route(
 
 pub fn socks5_proxy_from_env() -> Result<Option<UpstreamProxyConfig>, TcpProxyError> {
     upstream_proxy_from_env_values(
-        env::var("oxide_SOCKS5_PROXY").ok().as_deref(),
+        env::var("OXIDE_SOCKS5_PROXY").ok().as_deref(),
         None,
-        env::var("oxide_NO_PROXY").ok().as_deref(),
+        env::var("OXIDE_NO_PROXY").ok().as_deref(),
     )
 }
 
 pub fn upstream_proxy_from_env() -> Result<Option<UpstreamProxyConfig>, TcpProxyError> {
     upstream_proxy_from_env_values(
-        env::var("oxide_SOCKS5_PROXY").ok().as_deref(),
-        env::var("oxide_HTTP_PROXY").ok().as_deref(),
-        env::var("oxide_NO_PROXY").ok().as_deref(),
+        env::var("OXIDE_SOCKS5_PROXY").ok().as_deref(),
+        env::var("OXIDE_HTTP_PROXY").ok().as_deref(),
+        env::var("OXIDE_NO_PROXY").ok().as_deref(),
     )
 }
 

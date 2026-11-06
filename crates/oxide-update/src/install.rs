@@ -346,7 +346,7 @@ fn execute_windows_installer(
         InstallPackageKind::WindowsExe => {
             launch_windows_installer_via_powershell(
                 &plan.package_path.to_string_lossy(),
-                &["/S".to_string(), "/oxide_UPDATE=1".to_string()],
+                &["/S".to_string(), "/OXIDE_UPDATE=1".to_string()],
                 &plan.package_path,
                 true,
                 false,

@@ -52,7 +52,7 @@ pub struct Cli {
         long,
         global = true,
         value_name = "PATH",
-        env = "oxide_CONFIG_DIR",
+        env = "OXIDE_CONFIG_DIR",
         help = "Use PATH as the oxide config directory"
     )]
     pub config_dir: Option<PathBuf>,

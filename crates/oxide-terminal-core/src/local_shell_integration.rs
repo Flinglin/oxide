@@ -8,8 +8,8 @@ use crate::{
     VIM_FREE_TYPE_INTEGRATION_SOURCE,
     local_shell::{TerminalRelay, shell_args_for_profile},
 };
-const VIM_FREE_TYPE_INTEGRATION_ENV: &str = "oxide_VIM_INTEGRATION";
-const EMACS_FREE_TYPE_INTEGRATION_ENV: &str = "oxide_EMACS_INTEGRATION";
+const VIM_FREE_TYPE_INTEGRATION_ENV: &str = "OXIDE_VIM_INTEGRATION";
+const EMACS_FREE_TYPE_INTEGRATION_ENV: &str = "OXIDE_EMACS_INTEGRATION";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TerminalCwdIntegrationLaunchState {

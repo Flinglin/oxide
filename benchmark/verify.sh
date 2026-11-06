@@ -4,19 +4,19 @@
 set -eu
 
 benchmark_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-fixture_size_mib=${oxide_BENCHMARK_SIZE_MIB:-16}
-fixture_data_root=${oxide_BENCHMARK_DATA_DIR:-"$benchmark_root/.data"}
+fixture_size_mib=${OXIDE_BENCHMARK_SIZE_MIB:-16}
+fixture_data_root=${OXIDE_BENCHMARK_DATA_DIR:-"$benchmark_root/.data"}
 fixture_directory="$fixture_data_root/$fixture_size_mib-mib"
 
 case "$fixture_size_mib" in
     *[!0-9]*|'')
-        printf '%s\n' 'oxide_BENCHMARK_SIZE_MIB must be a positive integer.' >&2
+        printf '%s\n' 'OXIDE_BENCHMARK_SIZE_MIB must be a positive integer.' >&2
         exit 2
         ;;
 esac
 
 if [ "$fixture_size_mib" -eq 0 ]; then
-    printf '%s\n' 'oxide_BENCHMARK_SIZE_MIB must be greater than zero.' >&2
+    printf '%s\n' 'OXIDE_BENCHMARK_SIZE_MIB must be greater than zero.' >&2
     exit 2
 fi
 

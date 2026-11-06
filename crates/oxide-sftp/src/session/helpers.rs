@@ -244,7 +244,7 @@ impl LocalSftpDiagnostics {
 fn sftp_local_diagnostics_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| {
-        std::env::var("oxide_SFTP_LOCAL_DIAGNOSTICS")
+        std::env::var("OXIDE_SFTP_LOCAL_DIAGNOSTICS")
             .map(|value| {
                 let normalized = value.trim().to_ascii_lowercase();
                 matches!(normalized.as_str(), "1" | "true" | "yes" | "on")

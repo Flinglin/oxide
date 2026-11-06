@@ -48,7 +48,7 @@ AGENT_BINARY_PREFIX = "oxide-agent-"
 ENCODED_AGENT_SUFFIX = ".b64"
 UPDATE_HELPER_DIR = "tools"
 WINDOWS_UPDATE_STAGING_DIR = "install"
-WINDOWS_UPDATE_FLAG = "oxide_UPDATE"
+WINDOWS_UPDATE_FLAG = "OXIDE_UPDATE"
 PORTABLE_MARKER_FILENAME = "portable"
 PORTABLE_DATA_DIR = "data"
 PORTABLE_PLUGINS_DIR = "plugins"
@@ -271,7 +271,7 @@ def workspace_version() -> str:
 
 
 def raw_release_version() -> str:
-    return os.environ.get("oxide_VERSION") or workspace_version()
+    return os.environ.get("OXIDE_VERSION") or workspace_version()
 
 
 def normalized_version(raw: str) -> str:

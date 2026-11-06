@@ -1,6 +1,6 @@
 fn oxide_terminal_env(config: &LocalPtyConfig, _shell: &ShellInfo) -> HashMap<String, String> {
     let mut terminal_env = HashMap::from([
-        ("oxide_TERM".to_string(), "true".to_string()),
+        ("OXIDE_TERM".to_string(), "true".to_string()),
         ("TERM".to_string(), "xterm-256color".to_string()),
         ("TERM_PROGRAM".to_string(), "oxide".to_string()),
         (

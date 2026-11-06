@@ -768,7 +768,7 @@ fn ssh_trzsz_transfer_writes_wake_the_parser_without_ui_polling() {
 #[test]
 #[ignore = "manual release-profile SSH throughput and UI-drain benchmark"]
 fn ssh_background_performance() {
-    let mode = std::env::var("oxide_SSH_BENCH_MODE").unwrap_or_else(|_| "worker".into());
+    let mode = std::env::var("OXIDE_SSH_BENCH_MODE").unwrap_or_else(|_| "worker".into());
     match mode.as_str() {
         "worker" => measure_backend("worker", Fixture::new),
         "sync" => measure_backend("sync", || {

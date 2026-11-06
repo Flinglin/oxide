@@ -423,8 +423,8 @@ fn saved_upstream_proxy_policy_overrides_global_proxy_and_hydrates_custom_secret
 
 #[test]
 fn global_upstream_proxy_overrides_environment_and_requires_saved_credentials() {
-    let _socks_env = EnvVarGuard::set("oxide_SOCKS5_PROXY", "env-proxy.local:1080");
-    let _http_env = EnvVarGuard::set("oxide_HTTP_PROXY", "http://env-http.local:8080");
+    let _socks_env = EnvVarGuard::set("OXIDE_SOCKS5_PROXY", "env-proxy.local:1080");
+    let _http_env = EnvVarGuard::set("OXIDE_HTTP_PROXY", "http://env-http.local:8080");
     let (store, path) = temp_connection_store("global-proxy-priority");
     let mut settings = PersistedSettings::default();
     settings.network.upstream_proxy = Some(SettingsUpstreamProxyConfig {

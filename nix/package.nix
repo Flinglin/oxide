@@ -160,7 +160,7 @@ rustPlatform.buildRustPackage {
       --prefix LD_LIBRARY_PATH : "${lib.makeLibraryPath runtimeLibs}"
 
     wrapProgram "$out/bin/oxide" \
-      --set oxide_CLI_BIN "$out/bin/oxide" \
+      --set OXIDE_CLI_BIN "$out/bin/oxide" \
       --set SSL_CERT_FILE "${cacert}/etc/ssl/certs/ca-bundle.crt" \
       --prefix LD_LIBRARY_PATH : "${lib.makeLibraryPath runtimeLibs}" \
       --prefix GST_PLUGIN_SYSTEM_PATH_1_0 : "${lib.makeSearchPathOutput "lib" "lib/gstreamer-1.0" gstPlugins}"

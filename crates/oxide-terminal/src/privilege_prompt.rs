@@ -9,7 +9,7 @@ const MAX_PROMPT_SNAPSHOT_CHARS: usize = 4_096;
 const PRIVILEGE_COMMAND_CONTEXT_TTL: Duration = Duration::from_secs(15);
 const PRIVILEGE_PROMPT_VISIBLE_TTL: Duration = Duration::from_secs(300);
 const PRIVILEGE_PROMPT_FILLED_TTL: Duration = Duration::from_secs(8);
-const PRIVILEGE_PROMPT_DEBUG_ENV: &str = "oxide_PRIVILEGE_DEBUG";
+const PRIVILEGE_PROMPT_DEBUG_ENV: &str = "OXIDE_PRIVILEGE_DEBUG";
 
 fn log_privilege_prompt_tracker(args: std::fmt::Arguments<'_>) {
     if std::env::var_os(PRIVILEGE_PROMPT_DEBUG_ENV).is_some() {

@@ -5,10 +5,10 @@ use oxide_terminal_core::{
 };
 
 #[test]
-#[ignore = "requires oxide_SERIAL_MANUAL_PORT to point at a real or pseudo serial device"]
+#[ignore = "requires OXIDE_SERIAL_MANUAL_PORT to point at a real or pseudo serial device"]
 fn manual_serial_pseudo_device_round_trip_and_reopen() {
-    let port_path = std::env::var("oxide_SERIAL_MANUAL_PORT")
-        .expect("oxide_SERIAL_MANUAL_PORT must point at a serial device");
+    let port_path = std::env::var("OXIDE_SERIAL_MANUAL_PORT")
+        .expect("OXIDE_SERIAL_MANUAL_PORT must point at a serial device");
     let config = SerialSessionConfig {
         port_path: port_path.clone(),
         baud_rate: 115_200,
@@ -32,14 +32,14 @@ fn manual_serial_pseudo_device_round_trip_and_reopen() {
 }
 
 fn manual_serial_expected(loopback_payload: &[u8], responder_payload: &[u8]) -> Vec<u8> {
-    match std::env::var("oxide_SERIAL_MANUAL_MODE")
+    match std::env::var("OXIDE_SERIAL_MANUAL_MODE")
         .unwrap_or_else(|_| "loopback".to_string())
         .as_str()
     {
         "loopback" => loopback_payload.to_vec(),
         "responder" => responder_payload.to_vec(),
         mode => {
-            panic!("unsupported oxide_SERIAL_MANUAL_MODE={mode}; use loopback or responder")
+            panic!("unsupported OXIDE_SERIAL_MANUAL_MODE={mode}; use loopback or responder")
         }
     }
 }

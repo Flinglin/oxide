@@ -3,9 +3,9 @@
 
 use crate::shell::shell_quote;
 
-pub const SHELL_PROBE_SENTINEL: &str = "oxide_GIT_PROBE_V1";
-pub const SHELL_BRANCH_LIST_SENTINEL: &str = "oxide_GIT_BRANCH_LIST_V1";
-pub const SHELL_STAGED_DIFF_SENTINEL: &str = "oxide_GIT_STAGED_DIFF_V1";
+pub const SHELL_PROBE_SENTINEL: &str = "OXIDE_GIT_PROBE_V1";
+pub const SHELL_BRANCH_LIST_SENTINEL: &str = "OXIDE_GIT_BRANCH_LIST_V1";
+pub const SHELL_STAGED_DIFF_SENTINEL: &str = "OXIDE_GIT_STAGED_DIFF_V1";
 
 pub type GitProbeCommandArgs = &'static [&'static str];
 
@@ -105,7 +105,7 @@ fn remote_shell_cd_target(cwd: &str) -> String {
 fn shell_probe_body() -> &'static str {
     concat!(
         "GIT_OPTIONAL_LOCKS=0; export GIT_OPTIONAL_LOCKS\n",
-        "printf 'oxide_GIT_PROBE_V1\\0'\n",
+        "printf 'OXIDE_GIT_PROBE_V1\\0'\n",
         "if ! command -v git >/dev/null 2>&1; then printf 'state\\0git_missing\\0'; exit 0; fi\n",
         "git_probe_status() {\n",
         "  if command -v timeout >/dev/null 2>&1; then\n",
@@ -140,7 +140,7 @@ fn shell_operation_probe_body() -> &'static str {
 fn shell_branch_list_body() -> &'static str {
     concat!(
         "GIT_OPTIONAL_LOCKS=0; export GIT_OPTIONAL_LOCKS\n",
-        "printf 'oxide_GIT_BRANCH_LIST_V1\\0'\n",
+        "printf 'OXIDE_GIT_BRANCH_LIST_V1\\0'\n",
         "if ! command -v git >/dev/null 2>&1; then printf 'state\\0git_missing\\0'; exit 0; fi\n",
         "git rev-parse --show-toplevel >/dev/null 2>&1 || { printf 'state\\0not_repo\\0'; exit 0; }\n",
         "printf 'state\\0ok\\0'\n",
@@ -171,7 +171,7 @@ fn shell_branch_list_body() -> &'static str {
 fn shell_staged_diff_body() -> &'static str {
     concat!(
         "GIT_OPTIONAL_LOCKS=0; export GIT_OPTIONAL_LOCKS\n",
-        "printf 'oxide_GIT_STAGED_DIFF_V1\\0'\n",
+        "printf 'OXIDE_GIT_STAGED_DIFF_V1\\0'\n",
         "if ! command -v git >/dev/null 2>&1; then printf 'state\\0git_missing\\0'; exit 0; fi\n",
         "git rev-parse --show-toplevel >/dev/null 2>&1 || { printf 'state\\0not_repo\\0'; exit 0; }\n",
         "stat=$(git diff --cached --stat -- 2>/dev/null || true)\n",

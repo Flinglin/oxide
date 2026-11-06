@@ -682,7 +682,7 @@ mod tests {
     fn shell_probe_records_preserve_identity_status_and_repository_absence() {
         for (output, root, branch, upstream, ahead, operation, paths) in [
             (
-                "noise\noxide_GIT_PROBE_V1\0state\0repo\0root\0/tmp/Oxide Term\0branch\0feat/git\0status\0# branch.upstream origin/feat\n# branch.ab +1 -0\n? scratch.txt\n\0operation\0merge\0",
+                "noise\nOXIDE_GIT_PROBE_V1\0state\0repo\0root\0/tmp/Oxide Term\0branch\0feat/git\0status\0# branch.upstream origin/feat\n# branch.ab +1 -0\n? scratch.txt\n\0operation\0merge\0",
                 "/tmp/Oxide Term",
                 "feat/git",
                 Some("origin/feat"),
@@ -691,7 +691,7 @@ mod tests {
                 vec!["scratch.txt"],
             ),
             (
-                "oxide_GIT_PROBE_V1\0state\0repo\0root\0/repo\0branch\0main\0operation\0rebase\0",
+                "OXIDE_GIT_PROBE_V1\0state\0repo\0root\0/repo\0branch\0main\0operation\0rebase\0",
                 "/repo",
                 "main",
                 None,
@@ -728,7 +728,7 @@ mod tests {
             assert_eq!(snapshot.status.is_dirty(), !paths.is_empty(), "{output:?}");
         }
         assert_eq!(
-            parse_shell_probe_output("oxide_GIT_PROBE_V1\0state\0not_repo\0"),
+            parse_shell_probe_output("OXIDE_GIT_PROBE_V1\0state\0not_repo\0"),
             GitProbeOutcome::NotRepository,
         );
     }
@@ -785,14 +785,14 @@ mod tests {
     fn shell_branch_records_preserve_current_branch_and_filter_admin_worktrees() {
         for (output, expected) in [
             (
-                "noise\noxide_GIT_BRANCH_LIST_V1\0state\0ok\0branch\0main\0current\x001\0branch\0feature/x\0current\x000\0worktree\0feature/x\0path\0/tmp/feature-x\0",
+                "noise\nOXIDE_GIT_BRANCH_LIST_V1\0state\0ok\0branch\0main\0current\x001\0branch\0feature/x\0current\x000\0worktree\0feature/x\0path\0/tmp/feature-x\0",
                 vec![
                     ("main", true, None),
                     ("feature/x", false, Some("/tmp/feature-x")),
                 ],
             ),
             (
-                "oxide_GIT_BRANCH_LIST_V1\0state\0ok\0branch\0master\0current\x001\0worktree\0master\0path\0/repo/.git/modules/vendor/child\0",
+                "OXIDE_GIT_BRANCH_LIST_V1\0state\0ok\0branch\0master\0current\x001\0worktree\0master\0path\0/repo/.git/modules/vendor/child\0",
                 vec![("master", true, None)],
             ),
         ] {
@@ -825,7 +825,7 @@ mod tests {
             (
                 "shell records",
                 parse_shell_staged_diff_output(
-                    "noise\noxide_GIT_STAGED_DIFF_V1\0state\0ok\0stat\0 src/lib.rs | 1 +\0patch\0diff --git a/src/lib.rs b/src/lib.rs\n+added\n\0",
+                    "noise\nOXIDE_GIT_STAGED_DIFF_V1\0state\0ok\0stat\0 src/lib.rs | 1 +\0patch\0diff --git a/src/lib.rs b/src/lib.rs\n+added\n\0",
                 ),
                 Some((
                     " src/lib.rs | 1 +",
@@ -842,7 +842,7 @@ mod tests {
             ),
             (
                 "empty shell records",
-                parse_shell_staged_diff_output("oxide_GIT_STAGED_DIFF_V1\0state\0empty\0"),
+                parse_shell_staged_diff_output("OXIDE_GIT_STAGED_DIFF_V1\0state\0empty\0"),
                 None,
             ),
         ] {

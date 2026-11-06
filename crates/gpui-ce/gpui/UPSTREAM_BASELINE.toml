@@ -18,7 +18,7 @@ migration_parent_commit = "21424825bc6d767be7003ba6fe78bc3e656ab35f"
 oxide_import_parent_commit = "f462f86a7bcbc5d2803b55b118f6763a3b7c89b6"
 oxide_rust_toolchain = "1.94.1"
 oxide_cargo_resolver = "2"
-local_patch_ledger = "crates/gpui-ce/gpui/oxide_PATCHES.md"
+local_patch_ledger = "crates/gpui-ce/gpui/OXIDE_PATCHES.md"
 
 # Checksums identify pristine crates.io archives, not the locally patched trees.
 

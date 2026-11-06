@@ -3893,9 +3893,9 @@ struct RenderingParameters {
     subpixel_enhanced_contrast: f32,
 }
 
-const FONT_GAMMA_ENV: &str = "oxide_FONTS_GAMMA";
-const FONT_GRAYSCALE_CONTRAST_ENV: &str = "oxide_FONTS_GRAYSCALE_ENHANCED_CONTRAST";
-const FONT_SUBPIXEL_CONTRAST_ENV: &str = "oxide_FONTS_SUBPIXEL_ENHANCED_CONTRAST";
+const FONT_GAMMA_ENV: &str = "OXIDE_FONTS_GAMMA";
+const FONT_GRAYSCALE_CONTRAST_ENV: &str = "OXIDE_FONTS_GRAYSCALE_ENHANCED_CONTRAST";
+const FONT_SUBPIXEL_CONTRAST_ENV: &str = "OXIDE_FONTS_SUBPIXEL_ENHANCED_CONTRAST";
 
 impl RenderingParameters {
     fn new(adapter: &wgpu::Adapter, surface_format: wgpu::TextureFormat) -> Self {

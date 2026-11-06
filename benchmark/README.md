@@ -36,9 +36,9 @@ The Markdown report includes the version, readable UTC time, run configuration, 
 Change fixture size or repetition counts through environment variables:
 
 ```sh
-oxide_BENCHMARK_SIZE_MIB=64 \
-oxide_BENCHMARK_WARMUPS=3 \
-oxide_BENCHMARK_RUNS=5 \
+OXIDE_BENCHMARK_SIZE_MIB=64 \
+OXIDE_BENCHMARK_WARMUPS=3 \
+OXIDE_BENCHMARK_RUNS=5 \
 ./benchmark/benchmark.sh
 ```
 
@@ -64,4 +64,4 @@ Do three warm-up runs and retain the median of five measured runs. Keep vtebench
 
 ## Fixture storage
 
-Fixtures are written to `benchmark/.data/` by default and ignored by Git. Set `oxide_BENCHMARK_DATA_DIR` to place them elsewhere, for example on a RAM disk or a shared benchmarking volume.
+Fixtures are written to `benchmark/.data/` by default and ignored by Git. Set `OXIDE_BENCHMARK_DATA_DIR` to place them elsewhere, for example on a RAM disk or a shared benchmarking volume.

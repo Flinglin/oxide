@@ -9,7 +9,7 @@ const CONNECTIONS_FILE_NAME: &str = "connections.json";
 const FORWARDS_FILE_NAME: &str = "forwards.json";
 const BACKUPS_DIR_NAME: &str = "backups";
 const SETTINGS_FILE_NAME: &str = "settings.json";
-const CONFIG_DIR_ENV: &str = "oxide_CONFIG_DIR";
+const CONFIG_DIR_ENV: &str = "OXIDE_CONFIG_DIR";
 
 static CLI_PATH_CONTEXT: OnceLock<RwLock<CliPathContext>> = OnceLock::new();
 

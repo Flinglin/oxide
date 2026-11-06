@@ -246,7 +246,7 @@ fn main() {
             eprintln!(
                 "oxide could not reopen a native GPUI window: {error:#}\n\
                  Try updating GPU drivers, disabling incompatible graphics layers, \
-                 or relaunching with oxide_RENDER_PROFILE=compatibility."
+                 or relaunching with OXIDE_RENDER_PROFILE=compatibility."
             );
         }
     });
@@ -290,7 +290,7 @@ fn main() {
                     "oxide could not open a native GPUI window: {err:#}\n\
                      GPUI 0.2.2 does not expose a CPU renderer fallback. \
                      Try updating GPU drivers, disabling incompatible graphics layers, \
-                     or relaunching with oxide_RENDER_PROFILE=compatibility."
+                     or relaunching with OXIDE_RENDER_PROFILE=compatibility."
                 );
                 cx.quit();
                 return;
@@ -357,7 +357,7 @@ fn open_main_workspace_window(
                             "failed to initialize oxide workspace: {err:#}\n\
                      oxide native uses GPUI's GPU-backed renderer. \
                      To retry with lightweight visual effects, launch with \
-                     oxide_RENDER_PROFILE=compatibility."
+                     OXIDE_RENDER_PROFILE=compatibility."
                         )
                     })
             });

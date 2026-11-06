@@ -520,9 +520,9 @@ The locally patched WGPU path carries oxide-specific VM and recovery behavior:
 
 - `crates/gpui-ce/gpui_wgpu/src/wgpu_context.rs`
   - recognizes the case-insensitive
-    `oxide_GPU_BACKEND=auto|vulkan|opengl` contract and safely falls back
+    `OXIDE_GPU_BACKEND=auto|vulkan|opengl` contract and safely falls back
     to auto after warning about an invalid value;
-  - recognizes `oxide_GPU_DEVICE_ID` as an optional four-digit hexadecimal
+  - recognizes `OXIDE_GPU_DEVICE_ID` as an optional four-digit hexadecimal
     PCI device override and ignores an invalid value after reporting it;
   - keeps auto mode ordered across Vulkan and GL and permits CPU adapters as
     the final fallback;

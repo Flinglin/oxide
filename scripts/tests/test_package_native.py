@@ -253,7 +253,7 @@ class WindowsInstallerScriptTests(unittest.TestCase):
             icon_path=Path(r"C:\icons\icon.ico"),
         )
 
-        self.assertIn("/oxide_UPDATE=1", script)
+        self.assertIn("/OXIDE_UPDATE=1", script)
         self.assertIn("SetSilent silent", script)
         self.assertIn('RMDir /r "$INSTDIR\\install"', script)
         self.assertIn('SetOutPath "$INSTDIR\\tools"', script)

@@ -147,7 +147,7 @@ pub(in crate::workspace) fn effective_vibrancy_mode(
 }
 
 pub(in crate::workspace) fn render_profile_from_env() -> Option<RenderProfile> {
-    let value = std::env::var("oxide_RENDER_PROFILE").ok()?;
+    let value = std::env::var("OXIDE_RENDER_PROFILE").ok()?;
     let normalized = value.trim().to_ascii_lowercase().replace('_', "-");
     match normalized.as_str() {
         "auto" => Some(RenderProfile::Auto),

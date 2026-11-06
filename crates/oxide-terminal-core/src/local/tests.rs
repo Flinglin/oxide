@@ -398,7 +398,7 @@ mod tests {
             StoredRecordingFrameKind,
         };
         use std::time::{Duration, Instant};
-        let record_output = std::env::var("oxide_BENCH_RECORD_OUTPUT").as_deref() == Ok("1");
+        let record_output = std::env::var("OXIDE_BENCH_RECORD_OUTPUT").as_deref() == Ok("1");
         let audit_directory = tempfile::tempdir().unwrap();
         let audit_service =
             AuditService::with_key_provider(audit_directory.path().join("audit.db"), AuditTestKeys)

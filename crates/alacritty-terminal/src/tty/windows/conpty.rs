@@ -377,8 +377,8 @@ mod tests {
     #[test]
     fn custom_environment_block_is_sorted_and_overrides_parent_path() {
         let custom_env = HashMap::from([
-            ("ZZ_oxide_SORT_PROBE".to_string(), "last".to_string()),
-            ("AA_oxide_SORT_PROBE".to_string(), "first".to_string()),
+            ("ZZ_OXIDE_SORT_PROBE".to_string(), "last".to_string()),
+            ("AA_OXIDE_SORT_PROBE".to_string(), "first".to_string()),
             ("PaTh".to_string(), "oxide-path-probe".to_string()),
         ]);
         let block = convert_custom_env(&custom_env).expect("custom environment block");

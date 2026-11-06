@@ -54,12 +54,12 @@ async fn local_sshd_upstream_proxy_e2e_matrix() {
             .with_upstream_proxy(http.config()),
     )
     .await;
-    let _socks_env = EnvVarGuard::set("oxide_SOCKS5_PROXY", String::new());
+    let _socks_env = EnvVarGuard::set("OXIDE_SOCKS5_PROXY", String::new());
     let _http_env = EnvVarGuard::set(
-        "oxide_HTTP_PROXY",
+        "OXIDE_HTTP_PROXY",
         format!("http://{}:{}", http.addr.ip(), http.addr.port()),
     );
-    let _no_proxy_env = EnvVarGuard::set("oxide_NO_PROXY", String::new());
+    let _no_proxy_env = EnvVarGuard::set("OXIDE_NO_PROXY", String::new());
     connect_shell(
         target_config(&sshd).with_upstream_proxy(
             upstream_proxy_from_env()

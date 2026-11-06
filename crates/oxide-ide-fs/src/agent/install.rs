@@ -80,13 +80,13 @@ fn resolve_agent_binary_in_dirs(
         }
     }
     Err(AgentError::BinaryNotFound(format!(
-        "agents/{file_name}; set oxide_AGENT_DIR or package it in app resources"
+        "agents/{file_name}; set OXIDE_AGENT_DIR or package it in app resources"
     )))
 }
 
 fn agent_resource_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
-    if let Some(dir) = std::env::var_os("oxide_AGENT_DIR") {
+    if let Some(dir) = std::env::var_os("OXIDE_AGENT_DIR") {
         dirs.push(PathBuf::from(dir));
     }
     if let Ok(exe) = std::env::current_exe()

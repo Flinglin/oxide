@@ -6,7 +6,7 @@ use super::parse::{interpret_project_manifest_entries, project_manifest_file_nam
 use crate::cwd::{CurrentDirectorySource, expand_local_home_path};
 use crate::shell::shell_quote;
 
-pub const PROJECT_SHELL_PROBE_SENTINEL: &str = "oxide_PROJECT_PROBE_V1";
+pub const PROJECT_SHELL_PROBE_SENTINEL: &str = "OXIDE_PROJECT_PROBE_V1";
 pub const PROJECT_PROBE_MAX_ANCESTORS: usize = 12;
 pub const PROJECT_PROBE_MAX_FILE_BYTES: usize = 64 * 1024;
 

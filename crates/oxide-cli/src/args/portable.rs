@@ -3,7 +3,7 @@ use clap::{Args, Subcommand};
 #[derive(Debug, Args)]
 #[command(long_about = "Inspect and manage oxide's portable runtime keystore.")]
 #[command(
-    after_help = "Examples:\n  oxide portable status --json\n  printf '%s' \"$PORTABLE_PASSWORD\" | oxide portable setup --password-stdin\n  oxide portable unlock --password-env oxide_PORTABLE_PASSWORD\n  oxide portable change-password --current-password-env OLD --new-password-env NEW"
+    after_help = "Examples:\n  oxide portable status --json\n  printf '%s' \"$PORTABLE_PASSWORD\" | oxide portable setup --password-stdin\n  oxide portable unlock --password-env OXIDE_PORTABLE_PASSWORD\n  oxide portable change-password --current-password-env OLD --new-password-env NEW"
 )]
 pub struct PortableCommand {
     #[command(subcommand)]

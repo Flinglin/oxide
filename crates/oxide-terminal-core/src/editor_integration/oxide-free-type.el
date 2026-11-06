@@ -13,7 +13,7 @@
     (and (= (length (or (getenv "TMUX") "")) 0)
          (= (length (or (getenv "STY") "")) 0)
          (= (length (or (getenv "ZELLIJ") "")) 0)
-         (or (equal (getenv "oxide_PRIVATE_OSC") "1")
+         (or (equal (getenv "OXIDE_PRIVATE_OSC") "1")
              (equal term-program "oxide")
              (equal lc-terminal "oxide")))))
 
