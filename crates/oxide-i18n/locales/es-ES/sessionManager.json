@@ -116,7 +116,7 @@
       "hide_password": "Ocultar contraseña guardada",
       "password_load_failed": "No se pudo leer el almacén de credenciales. Vuelve a intentarlo o introduce de nuevo la contraseña y guárdala.",
       "password_not_found": "La contraseña a la que hace referencia esta conexión no está en el almacén de credenciales. Vuelve a introducirla y guárdala.",
-      "password_store_locked": "La bóveda portátil está bloqueada. Reinicia OxideTerm, desbloquéala con tu contraseña del modo portátil y vuelve a intentarlo.",
+      "password_store_locked": "La bóveda portátil está bloqueada. Reinicia Oxide, desbloquéala con tu contraseña del modo portátil y vuelve a intentarlo.",
       "password_hint": "El botón del ojo muestra la contraseña guardada sin modificarla. Edita el valor para reemplazarla o deja el campo vacío para conservarla.",
       "key_path": "Ruta del archivo de clave",
       "browse": "Examinar",

@@ -72,7 +72,7 @@ use oxide_cloud_sync::{
 use oxide_settings_model::{CloudSyncFormDraft, cloud_sync_form_input_value_ref};
 use oxide_settings_view::SettingsInput;
 use oxide_ui::button::ButtonVariant;
-use oxide_ui::text_input::{TextInputView, text_input, text_input_anchor_probe};
+use oxide_ui::text_input::{TextInputView, text_input_anchor_probe};
 use oxide_ui::{
     StatusPillOptions, StatusTone, SurfaceKind, SurfaceOptions, SurfacePadding, semantic_surface,
     status_pill, status_pill_element,
@@ -129,6 +129,7 @@ pub(super) struct CloudSyncInputRenderProjection {
     pub(super) focused_input: Option<SettingsInput>,
     pub(super) active_value: Option<String>,
     pub(super) selected_range: Option<std::ops::Range<usize>>,
+    pub(super) active_offset: Option<usize>,
     pub(super) marked_text: Option<String>,
     pub(super) caret_visible: bool,
 }
@@ -138,6 +139,7 @@ pub(super) struct CloudSyncInputRenderProjection {
 pub(super) struct CloudSyncPageRenderer {
     pub(super) cloud_sync: Entity<CloudSyncWorkspaceEntity>,
     pub(super) render: std::rc::Rc<CloudSyncListRenderProjection>,
+    pub(super) input_anchors: super::ime::TextInputAnchorStore,
 }
 
 impl std::ops::Deref for CloudSyncPageRenderer {

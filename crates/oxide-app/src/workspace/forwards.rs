@@ -30,7 +30,7 @@ use oxide_ui::{
         color_for_background, color_for_background_or_alpha, color_with_alpha,
         tauri_glass_surface_shadow,
     },
-    text_input::{TextInputView, text_input},
+    text_input::TextInputView,
     typography::tauri_cjk_ui_font_family as forwards_cjk_ui_font_family,
 };
 use oxide_workspace::{Tab, TabId, TabKind, TabTitleSource};

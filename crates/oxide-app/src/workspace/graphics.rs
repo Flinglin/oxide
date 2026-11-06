@@ -1250,8 +1250,8 @@ impl WorkspaceApp {
             .child(
                 self.text_input_with_workspace_ime(
                     target,
-                    oxide_ui::text_input(
-                        &self.theme_tokens,
+                    self.workspace_text_input(
+                        target,
                         TextInputView {
                             value: &graphics.app_command,
                             placeholder: self.i18n.t("graphics.app_command_placeholder"),

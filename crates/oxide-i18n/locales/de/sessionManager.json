@@ -116,7 +116,7 @@
       "hide_password": "Gespeichertes Passwort ausblenden",
       "password_load_failed": "Der Anmeldedatenspeicher konnte nicht gelesen werden. Versuchen Sie es erneut oder geben Sie das Passwort erneut ein und speichern Sie es.",
       "password_not_found": "Das von dieser Verbindung referenzierte Passwort fehlt im Anmeldedatenspeicher. Geben Sie es erneut ein und speichern Sie es.",
-      "password_store_locked": "Der portable Tresor ist gesperrt. Starten Sie OxideTerm neu, entsperren Sie ihn mit Ihrem Passwort für den portablen Modus und versuchen Sie es erneut.",
+      "password_store_locked": "Der portable Tresor ist gesperrt. Starten Sie Oxide neu, entsperren Sie ihn mit Ihrem Passwort für den portablen Modus und versuchen Sie es erneut.",
       "password_hint": "Das Augensymbol zeigt das gespeicherte Passwort, ohne es zu ändern. Bearbeiten Sie den Wert zum Ersetzen oder lassen Sie das Feld leer, um das Passwort beizubehalten.",
       "key_path": "Schlüsseldatei-Pfad",
       "browse": "Durchsuchen",

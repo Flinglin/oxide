@@ -952,8 +952,8 @@ impl WorkspaceApp {
                 _ => false,
             };
             if use_empty {
-                let input = text_input(
-                    &self.theme_tokens,
+                let input = self.workspace_text_input(
+                    target,
                     TextInputView {
                         value: "",
                         placeholder,
@@ -971,8 +971,8 @@ impl WorkspaceApp {
             let secret_visible = connection_secret_field_visible(form, field);
             let focused = form.field_focused && form.focused_field == field;
             let selected_all = connection_field_is_selected(form, field);
-            let input = text_input(
-                &self.theme_tokens,
+            let input = self.workspace_text_input(
+                target,
                 TextInputView {
                     value,
                     placeholder,
@@ -1825,8 +1825,8 @@ impl WorkspaceApp {
             .as_ref()
             .is_some_and(|form| connection_field_is_selected(form, field));
         let target = WorkspaceImeTarget::NewConnection(field);
-        let input = text_input(
-            &self.theme_tokens,
+        let input = self.workspace_text_input(
+            target,
             TextInputView {
                 value,
                 placeholder,

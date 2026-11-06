@@ -19,7 +19,7 @@ use oxide_ui::{
     button::{ButtonOptions, ButtonRadius, ButtonSize, ButtonVariant, ToolbarButtonOptions},
     form_field,
     modal::{dialog_backdrop_color, modal_backdrop, modal_container, rounded_shell_child_radius},
-    text_input, text_input_anchor_probe,
+    text_input_anchor_probe,
 };
 
 const KBI_PROMPT_TIMEOUT_SECS: u64 = 60;
@@ -289,8 +289,8 @@ impl WorkspaceApp {
                 },
                 text_input_anchor_probe(
                     target.anchor_id(),
-                    text_input(
-                        &self.theme_tokens,
+                    self.workspace_text_input(
+                        target,
                         TextInputView {
                             value,
                             placeholder: String::new(),

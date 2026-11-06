@@ -42,7 +42,7 @@ use oxide_ui::{
     surface::{
         color_for_background, color_with_background_scaled_alpha, tauri_glass_surface_shadow,
     },
-    text_input::{TextInputView, text_input},
+    text_input::TextInputView,
 };
 use std::{
     borrow::Cow,
@@ -1383,7 +1383,16 @@ impl SftpWorkspaceEntity {
     pub(in crate::workspace) fn dialog_is_open(&self) -> bool {
         self.dialog.is_some()
     }
-
+    pub(in crate::workspace) fn preview_text_editor_visible(&self) -> bool {
+        self.preview_editor.is_some()
+            && match self.dialog.as_ref() {
+                Some(SftpDialog::Editor { .. }) => true,
+                Some(SftpDialog::Preview { .. }) => matches!(self.preview_content.as_deref(),
+                Some(PreviewContent::Text { language, mime_type, .. })
+                    if self.preview_markdown_source_mode || !sftp_preview_is_markdown(language.as_deref(), mime_type.as_deref())),
+                _ => false,
+            }
+    }
     pub(in crate::workspace) fn dialog_phase(&self) -> oxide_ui::motion::ExitPhase {
         // Root keyboard routing must stop treating a fading editor as an
         // interactive child before its payload is finally retired.

@@ -256,7 +256,7 @@ use oxide_ui::{
     ConfirmDialogAction, ConfirmDialogVariant, ConfirmDialogView, MaterialRole, checkbox,
     material_surface,
     modal::{popover_backdrop, set_tauri_backdrop_blur_allowed},
-    text_input::{TextInputView, text_input},
+    text_input::TextInputView,
     toast::{ToastVariant, ToastView, toast_action, toast_close},
     toaster::toaster,
     tooltip::tooltip_surface,

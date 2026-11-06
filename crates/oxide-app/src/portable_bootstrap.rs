@@ -8,11 +8,13 @@ use gpui::{
     KeyDownEvent, LayoutId, MouseButton, ParentElement, Pixels, Render, SharedString, Styled, Task,
     UTF16Selection, Window, WindowDecorations, div, prelude::FluentBuilder, px, rgb, rgba,
 };
+use oxide_editor_core::utf16::utf16_offset_for_char_index;
 use oxide_i18n::I18n;
 use oxide_portable_runtime::{PortableBootstrapStatus, PortableStatusSnapshot};
 use oxide_settings::{PersistedSettings, WindowUiState};
 use oxide_theme::ThemeTokens;
-use oxide_ui::{ButtonTone, TextInputView, button, text_input, text_input_anchor_probe};
+use oxide_ui::text_input::{TextInputViewport, text_input_visual_range, text_input_with_viewport};
+use oxide_ui::{ButtonTone, TextInputView, button, text_input_anchor_probe};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::single_instance::SingleInstanceReceiver;
@@ -50,6 +52,9 @@ struct PortableBootstrapWindow {
     password: Zeroizing<String>,
     confirm_password: Zeroizing<String>,
     selection: Range<usize>,
+    selection_reversed: bool,
+    input_viewports: [TextInputViewport; 2],
+    drag_anchor: Option<usize>,
     marked_range: Option<Range<usize>>,
     password_bounds: Option<Bounds<Pixels>>,
     confirm_password_bounds: Option<Bounds<Pixels>>,
@@ -132,6 +137,9 @@ impl PortableBootstrapWindow {
             password: Zeroizing::new(String::new()),
             confirm_password: Zeroizing::new(String::new()),
             selection: 0..0,
+            selection_reversed: false,
+            input_viewports: Default::default(),
+            drag_anchor: None,
             marked_range: None,
             password_bounds: None,
             confirm_password_bounds: None,
@@ -159,7 +167,26 @@ impl PortableBootstrapWindow {
             PortableBootstrapInput::ConfirmPassword => &mut self.confirm_password,
         }
     }
+    fn input_viewport(&self, input: PortableBootstrapInput) -> &TextInputViewport {
+        &self.input_viewports[match input {
+            PortableBootstrapInput::Password => 0,
+            PortableBootstrapInput::ConfirmPassword => 1,
+        }]
+    }
 
+    fn input_index_for_position(
+        &self,
+        input: PortableBootstrapInput,
+        position: gpui::Point<Pixels>,
+    ) -> Option<usize> {
+        let byte = self
+            .input_viewport(input)
+            .byte_index_for_position(position)?;
+        Some(utf16_offset_for_char_index(
+            self.input_value(input),
+            byte / '•'.len_utf8(),
+        ))
+    }
     fn focus_input(
         &mut self,
         input: PortableBootstrapInput,
@@ -168,8 +195,10 @@ impl PortableBootstrapWindow {
     ) {
         self.active_input = input;
         self.marked_range = None;
+        self.drag_anchor = None;
         let end = self.input_value(input).encode_utf16().count();
         self.selection = end..end;
+        self.selection_reversed = false;
         window.focus(&self.focus_handle, cx);
         cx.notify();
     }
@@ -194,6 +223,7 @@ impl PortableBootstrapWindow {
         );
         let inserted_range = clamped.start..clamped.start + inserted_len;
         self.selection = inserted_range.end..inserted_range.end;
+        self.selection_reversed = false;
         self.marked_range = mark_inserted_text.then_some(inserted_range);
         cx.notify();
     }
@@ -339,6 +369,7 @@ impl PortableBootstrapWindow {
                 "a" => {
                     let end = self.input_value(self.active_input).encode_utf16().count();
                     self.selection = 0..end;
+                    self.selection_reversed = false;
                     self.marked_range = None;
                     cx.stop_propagation();
                     cx.notify();
@@ -403,7 +434,7 @@ impl PortableBootstrapWindow {
             )
             .child(text_input_anchor_probe(
                 oxide_ui::text_input::TextInputAnchorId(input_id),
-                text_input(
+                text_input_with_viewport(
                     &self.tokens,
                     TextInputView {
                         value: self.input_value(input),
@@ -415,16 +446,43 @@ impl PortableBootstrapWindow {
                         selected_range: focused.then(|| self.selection.clone()),
                         marked_text: None,
                     },
+                    self.input_viewport(input),
+                    focused.then_some(if self.selection_reversed {
+                        self.selection.start
+                    } else {
+                        self.selection.end
+                    }),
                 )
                 .w_full()
                 .cursor(CursorStyle::IBeam)
                 .on_mouse_down(
                     MouseButton::Left,
-                    cx.listener(move |this, _event, window, cx| {
+                    cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
                         this.focus_input(input, window, cx);
+                        let index = this
+                            .input_index_for_position(input, event.position)
+                            .unwrap_or(this.selection.end);
+                        this.selection = index..index;
+                        this.selection_reversed = false;
+                        this.drag_anchor = Some(index);
                         cx.stop_propagation();
                     }),
-                ),
+                )
+                .on_mouse_move(cx.listener(
+                    move |this, event: &gpui::MouseMoveEvent, _window, cx| {
+                        if event.pressed_button == Some(MouseButton::Left)
+                            && this.active_input == input
+                            && let Some(anchor) = this.drag_anchor
+                            && let Some(index) =
+                                this.input_index_for_position(input, event.position)
+                        {
+                            this.selection = anchor.min(index)..anchor.max(index);
+                            this.selection_reversed = index < anchor;
+                            cx.notify();
+                            cx.stop_propagation();
+                        }
+                    },
+                )),
                 move |anchor, _window, cx| {
                     let _ = entity.update(cx, |this, _cx| match input {
                         PortableBootstrapInput::Password => {
@@ -698,7 +756,7 @@ impl InputHandler for PortableBootstrapInputHandler {
     ) -> Option<UTF16Selection> {
         Some(self.entity.update(cx, |this, _cx| UTF16Selection {
             range: this.selection.clone(),
-            reversed: false,
+            reversed: this.selection_reversed,
         }))
     }
 
@@ -753,23 +811,36 @@ impl InputHandler for PortableBootstrapInputHandler {
 
     fn bounds_for_range(
         &mut self,
-        _range_utf16: Range<usize>,
+        range_utf16: Range<usize>,
         _window: &mut Window,
         cx: &mut App,
     ) -> Option<Bounds<Pixels>> {
-        self.entity.update(cx, |this, _cx| match this.active_input {
-            PortableBootstrapInput::Password => this.password_bounds,
-            PortableBootstrapInput::ConfirmPassword => this.confirm_password_bounds,
+        self.entity.update(cx, |this, _cx| {
+            let bounds = match this.active_input {
+                PortableBootstrapInput::Password => this.password_bounds,
+                PortableBootstrapInput::ConfirmPassword => this.confirm_password_bounds,
+            }?;
+            let offset =
+                text_input_visual_range(this.input_value(this.active_input), true, range_utf16).end;
+            this.input_viewport(this.active_input)
+                .caret_bounds_for_byte_index(
+                    offset * '•'.len_utf8(),
+                    px(this.tokens.metrics.form_caret_width),
+                    px(this.tokens.metrics.form_caret_height),
+                )
+                .or(Some(bounds))
         })
     }
 
     fn character_index_for_point(
         &mut self,
-        _point: gpui::Point<Pixels>,
+        point: gpui::Point<Pixels>,
         _window: &mut Window,
         cx: &mut App,
     ) -> Option<usize> {
-        Some(self.entity.update(cx, |this, _cx| this.selection.end))
+        self.entity.update(cx, |this, _cx| {
+            this.input_index_for_position(this.active_input, point)
+        })
     }
 
     fn prefers_ime_for_printable_keys(&mut self, _window: &mut Window, _cx: &mut App) -> bool {

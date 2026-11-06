@@ -544,8 +544,8 @@ impl WorkspaceApp {
         let terminal = self.terminal.read(cx);
         self.text_input_with_workspace_ime(
             target,
-            text_input(
-                &self.theme_tokens,
+            self.workspace_text_input(
+                target,
                 TextInputView {
                     value: terminal.git_commit_message(),
                     placeholder: self.i18n.t("terminal.git.commit_message_placeholder"),
@@ -1385,8 +1385,8 @@ impl WorkspaceApp {
         let terminal = self.terminal.read(cx);
         self.text_input_with_workspace_ime(
             target,
-            text_input(
-                &self.theme_tokens,
+            self.workspace_text_input(
+                target,
                 TextInputView {
                     value: terminal.git_panel_query(),
                     placeholder: self.i18n.t("terminal.git.search_branches"),

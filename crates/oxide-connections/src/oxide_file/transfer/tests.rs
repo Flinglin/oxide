@@ -4,12 +4,11 @@ mod tests {
     use std::fs;
 
     use crate::{
-            ConnectionTerminalOptions, ConnectionTerminalSessionLogPolicy, MoshIpFamily,
+        ConnectionTerminalOptions, ConnectionTerminalSessionLogPolicy, MoshIpFamily,
         MoshPredictionMode, MoshUdpPortSelection, PrivilegePromptType, PrivilegeResponseMode,
-        SaveMoshProfileRequest,
-        SavePrivilegeCredentialRequest,
-        SaveRemoteDesktopProfileRequest, SaveSerialProfileRequest, SaveTelnetProfileRequest,
-        SavedUpstreamProxyProtocol, SerialFlowControl, SerialProfile, SerialProfilesSyncSnapshot,
+        SaveMoshProfileRequest, SavePrivilegeCredentialRequest, SaveRemoteDesktopProfileRequest,
+        SaveSerialProfileRequest, SaveTelnetProfileRequest, SavedUpstreamProxyProtocol,
+        SerialFlowControl, SerialProfile, SerialProfilesSyncSnapshot,
     };
     use oxide_remote_desktop_core::RemoteDesktopProtocol;
     use rand::{rand_core::UnwrapErr, rngs::SysRng};
@@ -137,7 +136,6 @@ mod tests {
                 } else {
                     assert!(credentials.is_empty());
                 }
-
             }
         }
     }
@@ -549,9 +547,15 @@ mod tests {
         assert_eq!(result.imported_forwards, 1);
         assert_eq!(result.forward_records.len(), 1);
         assert_eq!(result.forward_records[0].forward_type, "local");
-                let tunnel = result.forward_records[0].tunnel.as_ref().unwrap();
-        assert_eq!((&*tunnel.name, tunnel.group.as_deref(), tunnel.connect_on_startup),
-            ("Web tunnel", Some("Services"), true));
+        let tunnel = result.forward_records[0].tunnel.as_ref().unwrap();
+        assert_eq!(
+            (
+                &*tunnel.name,
+                tunnel.group.as_deref(),
+                tunnel.connect_on_startup
+            ),
+            ("Web tunnel", Some("Services"), true)
+        );
         assert!(result.quick_commands_json.is_some());
 
         let imported = target.connections().first().unwrap();
@@ -1211,7 +1215,7 @@ mod tests {
         assert!(serialized.get("raw_tcp_profiles_json").is_none());
         assert!(serialized.get("raw_udp_profiles_json").is_none());
     }
-  #[test]
+    #[test]
     fn legacy_archive_privilege_credential_maps_kind_to_current_modes() {
         for (kind, expected_prompt_type, expected_response_mode) in [
             (
@@ -1238,10 +1242,7 @@ mod tests {
                 }))
                 .unwrap();
             assert_eq!(credential.prompt_type, expected_prompt_type, "{kind}");
-            assert_eq!(
-                credential.response_mode, expected_response_mode,
-                "{kind}"
-            );
+            assert_eq!(credential.response_mode, expected_response_mode, "{kind}");
             assert_eq!(credential.prompt_patterns, vec!["[sudo]".to_string()]);
             assert!(credential.host_patterns.is_empty(), "{kind}");
             assert!(credential.second_factor_patterns.is_empty(), "{kind}");
@@ -1261,7 +1262,7 @@ mod tests {
             .unwrap();
         source
             .save_privilege_credential(SavePrivilegeCredentialRequest {
-                    connection_id: "conn-1".to_string(),
+                connection_id: "conn-1".to_string(),
                 credential_id: Some("sudo-prod".to_string()),
                 label: "sudo".to_string(),
                 prompt_type: PrivilegePromptType::Sudo,
@@ -1431,41 +1432,6 @@ mod tests {
             },
         )
         .unwrap();
-        let payload = decrypt_payload(&bytes, "secret!").unwrap();
-        let exported = payload
-            .connections
-            .iter()
-            .flat_map(|connection| &connection.privilege_credentials)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            exported
-                .iter()
-                .map(|credential| credential.id.as_str())
-                .collect::<Vec<_>>(),
-            ["ssh-common:shared"]
-        );
-        assert_eq!(
-            payload
-                .totp_credentials
-                .iter()
-                .map(|credential| credential.id.as_str())
-                .collect::<Vec<_>>(),
-            [shared_totp.as_str()]
-        );
-        assert_eq!(
-            payload
-                .portable_secrets
-                .iter()
-                .filter_map(|secret| {
-                    serde_json::from_str::<crate::CredentialTarget>(&secret.id).ok()
-                })
-                .filter_map(|target| match target.owner {
-                    crate::CredentialOwner::Totp(id) => Some(id),
-                    _ => None,
-                })
-                .collect::<Vec<_>>(),
-            [shared_totp.clone()]
-        );
 
         let mut target = temp_store("privilege-host-export-target");
         apply_oxide_import_with_options(
@@ -1506,6 +1472,42 @@ mod tests {
                 .totp_credentials()
                 .iter()
                 .all(|credential| credential.id != prod_totp)
+        );
+
+        let payload = decrypt_payload(&bytes, "secret!").unwrap();
+        let exported = payload
+            .connections
+            .iter()
+            .flat_map(|connection| &connection.privilege_credentials)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            exported
+                .iter()
+                .map(|credential| credential.id.as_str())
+                .collect::<Vec<_>>(),
+            ["ssh-common:shared"]
+        );
+        assert_eq!(
+            payload
+                .totp_credentials
+                .iter()
+                .map(|credential| credential.id.as_str())
+                .collect::<Vec<_>>(),
+            [shared_totp.as_str()]
+        );
+        assert_eq!(
+            payload
+                .portable_secrets
+                .iter()
+                .filter_map(|secret| {
+                    serde_json::from_str::<crate::CredentialTarget>(&secret.id).ok()
+                })
+                .filter_map(|target| match target.owner {
+                    crate::CredentialOwner::Totp(id) => Some(id),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            [shared_totp]
         );
     }
     #[test]
@@ -1928,7 +1930,7 @@ mod tests {
                         target_port: 80,
                         description: Some("prod".to_string()),
                         auto_start: true,
-                         tunnel: None,
+                        tunnel: None,
                     },
                     OxideForwardRecord {
                         id: Some("forward-staging".to_string()),
@@ -1940,7 +1942,7 @@ mod tests {
                         target_port: 90,
                         description: Some("staging".to_string()),
                         auto_start: false,
-                         tunnel: None,
+                        tunnel: None,
                     },
                 ],
                 ..OxideExportOptions::default()
@@ -1994,7 +1996,7 @@ mod tests {
                     target_port: 80,
                     description: None,
                     auto_start: true,
-                     tunnel: None,
+                    tunnel: None,
                 }],
                 ..OxideExportOptions::default()
             },

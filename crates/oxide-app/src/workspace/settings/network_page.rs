@@ -875,8 +875,8 @@ impl WorkspaceApp {
         let target = WorkspaceImeTarget::Settings(input);
         self.text_input_with_workspace_ime(
             target,
-            text_input(
-                &self.theme_tokens,
+            self.workspace_text_input(
+                target,
                 TextInputView {
                     value: display_value,
                     placeholder,

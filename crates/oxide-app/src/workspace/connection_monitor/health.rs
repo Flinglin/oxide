@@ -2,7 +2,7 @@ use super::*;
 
 use gpui::Div;
 use oxide_ui::select::{select_event_boundary, select_option_action, select_option_highlighted};
-use oxide_ui::text_input::{TextInputView, text_input, text_input_anchor_probe};
+use oxide_ui::text_input::{TextInputView, text_input_anchor_probe};
 
 use crate::workspace::selectable_text::{SelectableTextRenderState, selectable_document_group_id};
 

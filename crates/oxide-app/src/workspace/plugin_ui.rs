@@ -1200,27 +1200,28 @@ impl WorkspaceApp {
             key,
             secret: control.kind == "password",
         };
-        let marked = self.marked_text_for_target(target, cx).map(str::to_string);
+        let marked = self.marked_text_for_target(target, cx);
         let selected_range = self.ime_selected_range_for_target(target, cx);
-        let input = oxide_ui::input::input(
-            &self.theme_tokens,
-            oxide_ui::input::InputView {
-                value: value.as_str(),
-                placeholder: control.placeholder.clone().unwrap_or_default(),
-                focused,
-                caret_visible: self.input_caret.visible(),
-                input_type: if control.kind == "password" {
-                    oxide_ui::input::InputType::Password
-                } else {
-                    oxide_ui::input::InputType::Text
+        let input = self
+            .workspace_text_input(
+                target,
+                oxide_ui::text_input::TextInputView {
+                    value: value.as_str(),
+                    placeholder: control.placeholder.clone().unwrap_or_default(),
+                    focused: focused && !control.disabled,
+                    caret_visible: self.input_caret.visible(),
+                    secret: control.kind == "password",
+                    selected_all: self.selected_ime_target == Some(target),
+                    selected_range,
+                    marked_text: marked,
                 },
-                selected_all: self.selected_ime_target == Some(target),
-                selected_range,
-                marked_text: marked.as_deref(),
-                disabled: control.disabled,
-            },
-        )
-        .id(("native-plugin-input", key));
+            )
+            .when(control.disabled, |input| {
+                input
+                    .opacity(0.5)
+                    .cursor(gpui::CursorStyle::OperationNotAllowed)
+            })
+            .id(("native-plugin-input", key));
         let input = if control.disabled {
             input
         } else {

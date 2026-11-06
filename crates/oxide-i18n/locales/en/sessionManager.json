@@ -116,7 +116,7 @@
       "hide_password": "Hide saved password",
       "password_load_failed": "Could not read the credential store. Retry, or enter the password again and save it.",
       "password_not_found": "The password referenced by this connection is missing from the credential store. Enter it again and save it.",
-      "password_store_locked": "The portable vault is locked. Restart OxideTerm and unlock it with your portable-mode password, then retry.",
+      "password_store_locked": "The portable vault is locked. Restart Oxide and unlock it with your portable-mode password, then retry.",
       "password_hint": "Use the eye button to view the saved password. Viewing it does not change it; edit the value to replace it, or leave the field blank to keep it.",
       "key_path": "Key File Path",
       "browse": "Browse",

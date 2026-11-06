@@ -1009,23 +1009,24 @@ impl WorkspaceApp {
                             ))
                             .child({
                                 let target = WorkspaceImeTarget::AuditSearch;
-                                let input = oxide_ui::text_input::text_input(
-                                    &self.theme_tokens,
-                                    oxide_ui::text_input::TextInputView {
-                                        value: &self.audit.search,
-                                        placeholder: self.i18n.t("event_log.audit.search"),
-                                        focused: self.active_ime_target(cx) == Some(target),
-                                        caret_visible: self.input_caret.visible(),
-                                        secret: false,
-                                        selected_all: false,
-                                        selected_range: self
-                                            .ime_selected_range_for_target(target, cx),
-                                        marked_text: self.marked_text_for_target(target, cx),
-                                    },
-                                )
-                                .flex_1()
-                                .min_w_0()
-                                .h(px(28.0));
+                                let input = self
+                                    .workspace_text_input(
+                                        target,
+                                        oxide_ui::text_input::TextInputView {
+                                            value: &self.audit.search,
+                                            placeholder: self.i18n.t("event_log.audit.search"),
+                                            focused: self.active_ime_target(cx) == Some(target),
+                                            caret_visible: self.input_caret.visible(),
+                                            secret: false,
+                                            selected_all: false,
+                                            selected_range: self
+                                                .ime_selected_range_for_target(target, cx),
+                                            marked_text: self.marked_text_for_target(target, cx),
+                                        },
+                                    )
+                                    .flex_1()
+                                    .min_w_0()
+                                    .h(px(28.0));
                                 self.text_input_with_workspace_ime(
                                     target,
                                     input,

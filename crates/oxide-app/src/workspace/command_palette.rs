@@ -8,14 +8,11 @@ use oxide_remote_desktop_core::{RemoteDesktopConnectionProfile, RemoteDesktopPro
 use oxide_settings_view::{OXIDE_THEME_IDS, built_in_theme_exists, is_oxide_theme};
 use oxide_ssh_launch::{format_user_host_port_target, parse_explicit_user_host_port_target};
 use oxide_theme::BUILT_IN_THEMES;
-use oxide_ui::motion::{ExitPhase, MotionDuration};
-use oxide_ui::{
-    modal::{
-        dialog_content, dismissible_command_palette_backdrop, dismissible_dialog_backdrop,
-        overlay_content_boundary, rounded_shell_child_radius,
-    },
-    text_input::text_input_value_segments,
+use oxide_ui::modal::{
+    dialog_content, dismissible_command_palette_backdrop, dismissible_dialog_backdrop,
+    overlay_content_boundary, rounded_shell_child_radius,
 };
+use oxide_ui::motion::{ExitPhase, MotionDuration};
 use oxide_workspace::{
     CommandPaletteMode as PaletteMode, command_palette_match, parse_command_palette_query,
 };
@@ -374,49 +371,28 @@ impl WorkspaceApp {
         line_height: f32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let visually_empty = value.is_empty();
-        let display = if visually_empty { placeholder } else { value };
-        let selected_range = self.ime_selected_range_for_target(target, cx);
-        let selection_range = selected_range
-            .as_ref()
-            .filter(|range| range.start < range.end)
-            .cloned();
-        let caret_offset = selected_range
-            .as_ref()
-            .filter(|range| range.start == range.end)
-            .map(|range| range.start);
-        let marked_text = self.marked_text_for_target(target, cx).unwrap_or_default();
         self.text_input_with_workspace_ime(
             target,
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex()
-                .items_center()
-                .text_size(px(text_size))
-                .line_height(px(line_height))
-                .text_color(if visually_empty {
-                    rgb(self.theme_tokens.ui.text_muted)
-                } else {
-                    rgb(self.theme_tokens.ui.text)
-                })
-                .overflow_hidden()
-                .child(text_input_value_segments(
-                    &self.theme_tokens,
-                    &display,
-                    visually_empty,
-                    selection_range,
-                    caret_offset,
-                    self.input_caret.visible(),
-                ))
-                .when(!marked_text.is_empty(), |input| {
-                    input.child(
-                        div()
-                            .underline()
-                            .text_color(rgb(self.theme_tokens.ui.text))
-                            .child(marked_text.to_string()),
-                    )
-                }),
+            self.workspace_text_input(
+                target,
+                oxide_ui::text_input::TextInputView {
+                    value: &value,
+                    placeholder,
+                    focused: true,
+                    caret_visible: self.input_caret.visible(),
+                    secret: false,
+                    selected_all: false,
+                    selected_range: self.ime_selected_range_for_target(target, cx),
+                    marked_text: self.marked_text_for_target(target, cx),
+                },
+            )
+            .flex_1()
+            .min_w_0()
+            .border_0()
+            .bg(gpui::rgba(0x00000000))
+            .px(px(0.0))
+            .text_size(px(text_size))
+            .line_height(px(line_height)),
             |_this, _cx| {},
             cx,
         )

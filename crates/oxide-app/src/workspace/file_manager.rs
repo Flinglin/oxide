@@ -34,7 +34,7 @@ use oxide_ui::{
     },
     scroll::ScrollableElement,
     surface::{color_for_background, color_with_background_scaled_alpha},
-    text_input::{TextInputView, text_input},
+    text_input::TextInputView,
 };
 
 mod actions;
