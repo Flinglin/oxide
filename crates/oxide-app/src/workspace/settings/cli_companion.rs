@@ -2,7 +2,7 @@ use super::*;
 
 use sha2::{Digest, Sha256};
 
-pub(in crate::workspace) const CLI_COMPANION_COMMAND_NAME: &str = "oxide";
+pub(in crate::workspace) const CLI_COMPANION_COMMAND_NAME: &str = "oxide-cli";
 pub(in crate::workspace) const LEGACY_CLI_COMPANION_COMMAND_NAME: &str = "oxt";
 pub(in crate::workspace) const CLI_COMPANION_RESOURCE_DIR: &str = "cli-bin";
 
@@ -302,7 +302,7 @@ pub(in crate::workspace) fn file_sha256(path: &std::path::Path) -> Result<[u8; 3
 }
 
 pub(in crate::workspace) fn find_bundled_cli() -> Option<std::path::PathBuf> {
-    if let Some(path) = std::env::var_os("oxide_CLI_BIN").map(std::path::PathBuf::from) {
+    if let Some(path) = std::env::var_os("OXIDE_CLI_BIN").map(std::path::PathBuf::from) {
         if path.exists() {
             return Some(path);
         }
