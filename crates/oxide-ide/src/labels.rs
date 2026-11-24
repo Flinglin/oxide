@@ -62,6 +62,7 @@ pub struct IdeLabels {
     pub save: String,
     pub discard: String,
     pub cancel: String,
+    pub confirm: String,
     pub editor_search: oxide_editor::EditorSearchLabels,
     pub editor_copy: String,
     pub editor_cut: String,
@@ -177,7 +178,8 @@ impl Default for IdeLabels {
             save: "Save".into(),
             discard: "Discard".into(),
             cancel: "Cancel".into(),
-         editor_search: oxide_editor::EditorSearchLabels {
+            confirm: "Confirm".into(),
+            editor_search: oxide_editor::EditorSearchLabels {
             find_placeholder: "Find".into(),
             replace_placeholder: "Replace".into(),
             find_next: "Next match (Enter)".into(),
