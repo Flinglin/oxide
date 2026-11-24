@@ -6,6 +6,9 @@ const RECORDING_ELAPSED_TICK_INTERVAL: Duration = Duration::from_millis(530);
 /// Owns workspace-wide tab identity, terminal mounts, navigation, and close lifecycle.
 pub(in crate::workspace) struct WorkspaceTabHostEntity {
     tabs: Vec<Tab>,
+    scope: TabScope,
+    affinities: HashMap<TabId, Vec<TabAffinity>>,
+    scope_selections: HashMap<TabScope, TabId>,
     // Utility descriptors retain their IDs while only their container appears in the tab strip.
     embedded_pages: HashMap<TabId, TabId>,
     active_tab_id: Option<TabId>,
@@ -150,6 +153,9 @@ impl WorkspaceTabHostEntity {
             tabs: Vec::new(),
             embedded_pages: HashMap::new(),
             active_tab_id: None,
+            scope: TabScope::All,
+            affinities: HashMap::new(),
+            scope_selections: HashMap::new(),
             active_tab_index_cache: Cell::new(None),
             next_tab_id: 1,
             next_pane_id: 1,
@@ -192,12 +198,67 @@ impl WorkspaceTabHostEntity {
     /// The strip, navigation, and batch actions share this ordered window-local list.
     /// Indices still address the canonical collection used by tab lifecycle operations.
     pub(in crate::workspace) fn main_tabs(&self) -> impl DoubleEndedIterator<Item = (usize, &Tab)> {
+        self.unfiltered_main_tabs()
+            .filter(|(_, tab)| self.matches_scope(tab.id))
+    }
+
+    pub(in crate::workspace) fn unfiltered_main_tabs(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = (usize, &Tab)> {
         self.tabs
             .iter()
             .enumerate()
             .filter(|(_, tab)| !self.is_outside_main_window(tab.id))
     }
+    pub(in crate::workspace) fn scope(&self) -> &TabScope {
+        &self.scope
+    }
 
+    fn matches_scope(&self, tab: TabId) -> bool {
+        match &self.scope {
+            TabScope::All => true,
+            TabScope::Affinity(affinity) => self
+                .affinities
+                .get(&tab)
+                .is_some_and(|values| values.contains(affinity)),
+        }
+    }
+
+    pub(in crate::workspace) fn update_affinities(
+        &mut self,
+        affinities: HashMap<TabId, Vec<TabAffinity>>,
+    ) {
+        self.affinities = affinities;
+        self.scope_selections
+            .retain(|_, id| self.tabs.iter().any(|tab| tab.id == *id));
+    }
+
+    pub(in crate::workspace) fn prepare_scope(&mut self, scope: TabScope) {
+        if let Some(active) = self.active_tab_id.filter(|id| self.matches_scope(*id)) {
+            self.scope_selections.insert(self.scope.clone(), active);
+        }
+        self.scope = scope;
+    }
+
+    pub(in crate::workspace) fn switch_scope(&mut self, scope: TabScope) -> Option<TabId> {
+        self.prepare_scope(scope);
+        let remembered = self.scope_selections.get(&self.scope).copied();
+        let next = remembered
+            .filter(|id| self.main_tabs().any(|(_, tab)| tab.id == *id))
+            .or_else(|| self.main_tabs().next().map(|(_, tab)| tab.id));
+        self.select_main_tab(next)
+    }
+
+    pub(in crate::workspace) fn reconcile_scope_selection(&mut self) -> Option<TabId> {
+        if self
+            .active_tab_id
+            .is_some_and(|id| self.main_tabs().any(|(_, tab)| tab.id == id))
+        {
+            return self.active_tab_id;
+        }
+        let next = self.main_tabs().next().map(|(_, tab)| tab.id);
+        self.select_main_tab(next)
+    }
     pub(in crate::workspace) fn other_main_tab_ids(&self, tab_id: TabId) -> Vec<TabId> {
         self.main_tabs()
             .filter(|(_, tab)| tab.id != tab_id)
@@ -346,11 +407,28 @@ impl WorkspaceTabHostEntity {
         else {
             return false;
         };
-        let visible_tab_ids = self
-            .main_tabs()
-            .filter(|(_, tab)| tab.id != tab_id)
-            .map(|(_, tab)| tab.id)
-            .collect::<Vec<_>>();
+        let visible_slots = self.main_tabs().map(|(index, _)| index).collect::<Vec<_>>();
+        let mut visible_tab_ids = self.main_tabs().map(|(_, tab)| tab.id).collect::<Vec<_>>();
+        if self.scope != TabScope::All {
+            let source = visible_slots
+                .iter()
+                .position(|index| *index == source_index)
+                .unwrap();
+            let target = target_visible_index.min(visible_slots.len().saturating_sub(1));
+            if source == target {
+                return false;
+            }
+            let moved = visible_tab_ids.remove(source);
+            visible_tab_ids.insert(target, moved);
+            // Rotate only visible slots: hidden and detached tabs keep their positions.
+            for (slot, id) in visible_slots.into_iter().zip(visible_tab_ids) {
+                let index = self.tab_index_by_id(id).unwrap();
+                self.tabs.swap(slot, index);
+            }
+            self.active_tab_index_cache.set(None);
+            return true;
+        }
+        visible_tab_ids.retain(|id| *id != tab_id);
         let target_visible_index = target_visible_index.min(visible_tab_ids.len());
         let anchor_tab_id = visible_tab_ids.get(target_visible_index).copied();
         let trailing_tab_id = target_visible_index
@@ -750,6 +828,9 @@ impl WorkspaceTabHostEntity {
         }
         self.active_tab_index_cache.set(None);
         self.observe_active_tab(active_tab_id);
+        if let Some(id) = active_tab_id.filter(|id| self.matches_scope(*id)) {
+            self.scope_selections.insert(self.scope.clone(), id);
+        }
         previous_active_tab_id
     }
 

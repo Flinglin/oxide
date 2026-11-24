@@ -18,11 +18,13 @@ pub(super) struct CommandPaletteView {
     pub(super) mode: PaletteMode,
     pub(super) scroll_handle: UniformListScrollHandle,
     pub(super) error: Option<String>,
+    pub(super) tab_scopes: bool,
 }
 
 /// Owns command-palette interaction state and SSH-config discovery lifetime.
 pub(in crate::workspace) struct CommandPaletteEntity {
     open: bool,
+    tab_scopes: bool,
     presence: ExitPresence,
     exit_task: Option<Task<()>>,
     motion_generation: usize,
@@ -42,6 +44,7 @@ impl CommandPaletteEntity {
     pub(in crate::workspace) fn new(runtime: Arc<tokio::runtime::Runtime>) -> Self {
         Self {
             open: false,
+            tab_scopes: false,
             presence: ExitPresence::visible(),
             exit_task: None,
             motion_generation: 0,
@@ -66,6 +69,7 @@ impl CommandPaletteEntity {
             mode: self.mode,
             scroll_handle: self.scroll_handle.clone(),
             error: self.error.clone(),
+            tab_scopes: self.tab_scopes,
         }
     }
 
@@ -73,6 +77,14 @@ impl CommandPaletteEntity {
         self.open
     }
 
+    pub(super) fn is_tab_scope_picker(&self) -> bool {
+        self.tab_scopes
+    }
+
+    pub(super) fn open_tab_scopes(&mut self, cx: &mut Context<Self>) {
+        self.open(false, HashSet::new(), cx);
+        self.tab_scopes = true;
+    }
     pub(in crate::workspace) fn query(&self) -> &str {
         &self.raw_query
     }
@@ -290,6 +302,7 @@ impl CommandPaletteEntity {
     }
 
     fn reset_interaction(&mut self) {
+        self.tab_scopes = false;
         self.raw_query.clear();
         self.mode = PaletteMode::All;
         self.selected_index = 0;
@@ -299,7 +312,11 @@ impl CommandPaletteEntity {
 
     fn finish_query_change(&mut self) {
         let (mode, _) = parse_command_palette_query(&self.raw_query);
-        self.mode = mode;
+        self.mode = if self.tab_scopes {
+            PaletteMode::All
+        } else {
+            mode
+        };
         self.selected_index = 0;
         self.scroll_handle = UniformListScrollHandle::new();
         self.error = None;
