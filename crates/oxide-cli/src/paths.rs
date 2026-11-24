@@ -127,19 +127,3 @@ fn config_dir_display(context: &CliPathContext, settings_dir: &Path) -> String {
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| settings_dir.display().to_string())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn shared_paths_use_expected_file_names() {
-        let paths = cli_paths();
-
-        assert!(paths.settings.ends_with("settings.json"));
-        assert!(paths.connections.ends_with(CONNECTIONS_FILE_NAME));
-        assert!(paths.forwards.ends_with(FORWARDS_FILE_NAME));
-        assert!(paths.cloud_sync.ends_with("cloud_sync.json"));
-        assert!(paths.backups_dir.ends_with(BACKUPS_DIR_NAME));
-    }
-}

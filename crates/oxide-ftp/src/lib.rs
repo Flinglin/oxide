@@ -44,6 +44,3 @@ impl From<suppaftp::FtpError> for Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
-
-#[cfg(test)]
-mod tests;

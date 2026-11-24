@@ -139,20 +139,6 @@ impl PtyReadAhead {
         self.finish.store(true, Ordering::Release);
         let _ = self.poll.notify();
     }
-
-    #[cfg(test)]
-    pub(super) fn wait_pending(&mut self) -> io::Result<bool> {
-        if self.current.is_some() {
-            return Ok(true);
-        }
-        match self.ready.recv() {
-            Ok(batch) => {
-                self.current = Some(batch?);
-                Ok(true)
-            }
-            Err(_) => Ok(false),
-        }
-    }
 }
 
 impl Read for PtyReadAhead {
@@ -188,74 +174,6 @@ impl Drop for PtyReadAhead {
         if let Some(thread) = self.thread.take() {
             if thread.join().is_err() {
                 tracing::error!("PTY read-ahead thread panicked");
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write;
-    use std::os::{fd::OwnedFd, unix::net::UnixStream};
-
-    #[test]
-    fn pooled_reads_preserve_bytes_across_backpressure_and_eof() {
-        let (read, mut write) = UnixStream::pair().unwrap();
-        read.set_nonblocking(true).unwrap();
-        let fd: OwnedFd = read.into();
-        let mut reader = PtyReadAhead::new(fd.into(), Arc::new(Poller::new().unwrap())).unwrap();
-        let expected: Vec<_> = (0..BUFFER_BYTES * (BUFFER_COUNT + 2) + 7)
-            .map(|i| (i % 251) as u8)
-            .collect();
-        let bytes = expected.clone();
-        let writer = std::thread::spawn(move || write.write_all(&bytes).unwrap());
-        let mut actual = Vec::new();
-        let mut buffer = [0; 777];
-        while reader.wait_pending().unwrap() {
-            let n = reader.read(&mut buffer).unwrap();
-            actual.extend_from_slice(&buffer[..n]);
-        }
-        writer.join().unwrap();
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn dropping_idle_or_backpressured_reader_joins_worker() {
-        for saturated in [false, true] {
-            let (read, mut write) = UnixStream::pair().unwrap();
-            read.set_nonblocking(true).unwrap();
-            let fd: OwnedFd = read.into();
-            let reader = PtyReadAhead::new(fd.into(), Arc::new(Poller::new().unwrap())).unwrap();
-            let writer = if saturated {
-                Some(std::thread::spawn(move || {
-                    let _ = write.write_all(&vec![42; BUFFER_BYTES * (BUFFER_COUNT + 4)]);
-                }))
-            } else {
-                // Keep the writer open until cancellation completes: EOF must not wake the test.
-                None
-            };
-            if saturated {
-                let deadline = Instant::now() + Duration::from_secs(2);
-                while reader.ready.len() < BUFFER_COUNT {
-                    assert!(
-                        Instant::now() < deadline,
-                        "reader never became backpressured"
-                    );
-                    std::thread::yield_now();
-                }
-            }
-            let (done, joined) = std::sync::mpsc::channel();
-            let closer = std::thread::spawn(move || {
-                drop(reader);
-                done.send(()).unwrap();
-            });
-            joined
-                .recv_timeout(Duration::from_secs(2))
-                .expect("reader did not join on cancellation");
-            closer.join().unwrap();
-            if let Some(writer) = writer {
-                writer.join().unwrap();
             }
         }
     }

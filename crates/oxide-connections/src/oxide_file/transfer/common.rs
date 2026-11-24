@@ -23,12 +23,6 @@ fn validate_password(password: &str) -> Result<(), OxideFileError> {
     }
 }
 
-#[cfg(test)]
-fn decrypt_payload(bytes: &[u8], password: &str) -> Result<EncryptedPayload, OxideFileError> {
-    let file = OxideFile::from_bytes(bytes)?;
-    decrypt_oxide_file_with_progress(&file, password, |_| {})
-}
-
 fn count_quick_commands(snapshot_json: Option<&str>) -> (bool, usize, usize) {
     let Some(json) = snapshot_json else {
         return (false, 0, 0);

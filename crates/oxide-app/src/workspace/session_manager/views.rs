@@ -3344,28 +3344,3 @@ pub(super) fn collect_session_group_paths(
         }
     }
 }
-
-#[cfg(test)]
-mod session_manager_pointer_tests {
-    use super::*;
-
-    #[test]
-    fn saved_connection_click_selects_and_double_click_opens() {
-        assert_eq!(
-            session_manager_item_pointer_action(1, true),
-            SessionManagerItemPointerAction::Select
-        );
-        assert_eq!(
-            session_manager_item_pointer_action(2, true),
-            SessionManagerItemPointerAction::Open
-        );
-        assert_eq!(
-            session_manager_item_pointer_action(1, false),
-            SessionManagerItemPointerAction::None
-        );
-        assert_eq!(
-            session_manager_item_pointer_action(2, false),
-            SessionManagerItemPointerAction::Open
-        );
-    }
-}

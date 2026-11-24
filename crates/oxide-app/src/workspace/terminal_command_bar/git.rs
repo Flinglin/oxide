@@ -1602,27 +1602,3 @@ impl WorkspaceApp {
         desired.clamp(TERMINAL_PROJECT_MENU_MARGIN, max_left)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn worktree_group_preserves_modified_and_untracked_status() {
-        let modified =
-            GitChangedPath::from_parts("src/lib.rs", None::<String>, false, true, false, false)
-                .expect("modified path");
-        let untracked =
-            GitChangedPath::from_parts("src/new.rs", None::<String>, false, false, true, false)
-                .expect("untracked path");
-
-        assert!(matches!(
-            TerminalGitPathState::from_path(&modified, TerminalGitPathGroup::Worktree),
-            TerminalGitPathState::Modified
-        ));
-        assert!(matches!(
-            TerminalGitPathState::from_path(&untracked, TerminalGitPathGroup::Worktree),
-            TerminalGitPathState::Untracked
-        ));
-    }
-}

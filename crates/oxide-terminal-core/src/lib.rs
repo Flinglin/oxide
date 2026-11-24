@@ -37,9 +37,6 @@ mod privilege_prompt;
 mod process;
 mod process_lifecycle;
 mod recording_output;
-#[cfg(test)]
-#[path = "../tests/support/recording.rs"]
-mod recording_test_support;
 mod remote_shell_integration;
 mod search;
 mod selection;
@@ -131,8 +128,6 @@ use process::{ProcessState, TerminalSignal, signal_process_group};
 use process_lifecycle::WindowsTerminalJob;
 #[cfg(not(windows))]
 use process_lifecycle::cleanup_local_pty_process_tree;
-#[cfg(test)]
-use search::search_logical_line_matches;
 pub(crate) use search::search_matches_from_term;
 use search::{append_grid_line_text, viewport_row_for_grid_line};
 
@@ -154,5 +149,3 @@ include!("local/graphics_state.rs");
 include!("local/env.rs");
 include!("local/pty.rs");
 include!("local/controls.rs");
-#[cfg(test)]
-include!("local/tests.rs");

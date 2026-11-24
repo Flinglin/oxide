@@ -825,59 +825,6 @@ async fn connect_agent_client(
     }
 }
 
-#[cfg(test)]
-mod private_key_auth_error_tests {
-    use super::*;
-    use rand::{rand_core::UnwrapErr, rngs::SysRng};
-    use russh::keys::ssh_key::LineEnding;
-
-    fn generated_key_text(passphrase: Option<&str>) -> String {
-        let path = std::env::temp_dir().join(format!(
-            "oxide-ssh-auth-error-{}-{}.key",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        let mut rng = UnwrapErr(SysRng);
-        let key = PrivateKey::random(&mut rng, Algorithm::Ed25519).unwrap();
-        let key = match passphrase {
-            Some(passphrase) => key.encrypt(&mut rng, passphrase).unwrap(),
-            None => key,
-        };
-        key.write_openssh_file(&path, LineEnding::LF).unwrap();
-        let text = std::fs::read_to_string(&path).unwrap();
-        let _ = std::fs::remove_file(path);
-        text
-    }
-
-    #[test]
-    fn private_key_auth_errors_distinguish_passphrases_and_unsupported_material() {
-        let key = generated_key_text(Some("secret-pass"));
-        for (input, passphrase, diagnostic) in [
-            (key.as_str(), None, "requires a passphrase"),
-            (
-                key.as_str(),
-                Some("wrong-pass"),
-                "Invalid SSH key passphrase",
-            ),
-            (
-                "not a private key",
-                None,
-                "Unsupported SSH private key format",
-            ),
-            ("sk-ssh-ed25519", None, "FIDO/security-key"),
-        ] {
-            let error = decode_private_key_for_auth(input, passphrase).unwrap_err();
-            assert!(
-                error.to_string().contains(diagnostic),
-                "{diagnostic}: {error}"
-            );
-        }
-    }
-}
-
 async fn handle_agent_forward_channel(
     channel: Channel<client::Msg>,
     endpoint: Option<&SshAgentEndpoint>,

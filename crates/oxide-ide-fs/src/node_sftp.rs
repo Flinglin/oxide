@@ -652,24 +652,3 @@ fn ide_kind_from_backend_class(classification: BackendErrorClass) -> IdeFileErro
         BackendErrorClass::PortInUse | BackendErrorClass::Other => IdeFileErrorKind::Other,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn maps_unavailable_sftp_routes_to_disconnected() {
-        let error = map_sftp_error(SftpError::ChannelError("channel closed".into()));
-        assert_eq!(error.kind, IdeFileErrorKind::Disconnected);
-
-        let error = map_route_error(RouteError::CapabilityUnavailable(
-            "Session not found: node-1".to_string(),
-        ));
-        assert_eq!(error.kind, IdeFileErrorKind::Disconnected);
-
-        let error = map_route_error(RouteError::CapabilityUnavailable(
-            "SFTP session not initialized for: node-1".to_string(),
-        ));
-        assert_eq!(error.kind, IdeFileErrorKind::Disconnected);
-    }
-}

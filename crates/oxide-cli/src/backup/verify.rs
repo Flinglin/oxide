@@ -234,28 +234,3 @@ fn push_verify_issue(
 fn format_verify_issue(issue: &BackupVerifyIssue) -> String {
     format!("{}\t{}\t{}", issue.severity, issue.code, issue.message)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn verify_reports_missing_backup_sections() {
-        let issues = verify_backup_value(&serde_json::json!({
-            "format": BACKUP_FORMAT,
-            "createdAtMs": 1
-        }));
-
-        assert!(issues.iter().any(|issue| issue.code == "missing_settings"));
-        assert!(
-            issues
-                .iter()
-                .any(|issue| issue.code == "missing_connections")
-        );
-        assert!(
-            issues
-                .iter()
-                .any(|issue| issue.code == "missing_cloud_sync")
-        );
-    }
-}

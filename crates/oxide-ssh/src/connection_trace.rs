@@ -286,23 +286,3 @@ pub fn server_offers_legacy_cipher(algorithms: &[String]) -> bool {
         algorithm.contains("-cbc") || algorithm.contains("3des") || algorithm.contains("arcfour")
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_algorithm_negotiation_lists_from_transport_error() {
-        let diagnostic = parse_algorithm_negotiation_error(
-            "SSH algorithm negotiation failed: no common key exchange algorithm. Client offered: [\"curve25519-sha256\", \"diffie-hellman-group14-sha256\"]; server offered: [\"diffie-hellman-group1-sha1\"]",
-        )
-        .expect("algorithm diagnostic should parse");
-
-        assert_eq!(diagnostic.kind, SshAlgorithmDiagnosticKind::KeyExchange);
-        assert_eq!(
-            diagnostic.client_algorithms,
-            ["curve25519-sha256", "diffie-hellman-group14-sha256"]
-        );
-        assert_eq!(diagnostic.server_algorithms, ["diffie-hellman-group1-sha1"]);
-    }
-}

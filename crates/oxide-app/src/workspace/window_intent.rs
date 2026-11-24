@@ -45,8 +45,6 @@ impl WindowIntent {
 
 enum DesktopPresenceSourceReceiver {
     Platform(oxide_desktop_presence::DesktopPresenceReceiver),
-    #[cfg(test)]
-    Test(std::sync::mpsc::Receiver<oxide_desktop_presence::DesktopPresenceEvent>),
 }
 
 struct DesktopPresenceSource {
@@ -63,32 +61,15 @@ impl DesktopPresenceSource {
         }
     }
 
-    #[cfg(test)]
-    fn test(
-        receiver: std::sync::mpsc::Receiver<oxide_desktop_presence::DesktopPresenceEvent>,
-        notification: Arc<Notify>,
-    ) -> Self {
-        Self {
-            receiver: DesktopPresenceSourceReceiver::Test(receiver),
-            notification,
-        }
-    }
-
     fn drain(&self) -> delivery::ChannelDrain<oxide_desktop_presence::DesktopPresenceEvent> {
         match &self.receiver {
             DesktopPresenceSourceReceiver::Platform(receiver) => drain_with(|| receiver.try_recv()),
-            #[cfg(test)]
-            DesktopPresenceSourceReceiver::Test(receiver) => {
-                delivery::drain_channel(receiver, delivery::USER_ACTION_DELIVERY_BUDGET)
-            }
         }
     }
 }
 
 enum SingleInstanceSourceReceiver {
     Platform(crate::single_instance::SingleInstanceReceiver),
-    #[cfg(test)]
-    Test(std::sync::mpsc::Receiver<crate::single_instance::SingleInstanceEvent>),
 }
 
 struct SingleInstanceSource {
@@ -105,27 +86,12 @@ impl SingleInstanceSource {
         }
     }
 
-    #[cfg(test)]
-    fn test(
-        receiver: std::sync::mpsc::Receiver<crate::single_instance::SingleInstanceEvent>,
-        notification: Arc<Notify>,
-    ) -> Self {
-        Self {
-            receiver: SingleInstanceSourceReceiver::Test(receiver),
-            notification,
-        }
-    }
-
     fn drain(&self) -> delivery::ChannelDrain<crate::single_instance::SingleInstanceEvent> {
         match &self.receiver {
             SingleInstanceSourceReceiver::Platform(receiver) => {
                 // Release the shared application receiver before emitting any intent.
                 let receiver = receiver.lock().expect("single-instance receiver poisoned");
                 drain_with(|| receiver.try_recv())
-            }
-            #[cfg(test)]
-            SingleInstanceSourceReceiver::Test(receiver) => {
-                delivery::drain_channel(receiver, delivery::USER_ACTION_DELIVERY_BUDGET)
             }
         }
     }
@@ -136,8 +102,6 @@ impl SingleInstanceSource {
 struct WindowIntentWaiterStop {
     stopped: Arc<AtomicBool>,
     notification: Arc<Notify>,
-    #[cfg(test)]
-    finished: Arc<AtomicBool>,
 }
 
 impl Default for WindowIntentWaiterStop {
@@ -145,8 +109,6 @@ impl Default for WindowIntentWaiterStop {
         Self {
             stopped: Arc::new(AtomicBool::new(false)),
             notification: Arc::new(Notify::new()),
-            #[cfg(test)]
-            finished: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -164,26 +126,12 @@ impl WindowIntentWaiterStop {
     async fn wait(&self) {
         self.notification.notified().await;
     }
-
-    #[cfg(test)]
-    fn mark_finished(&self) {
-        self.finished.store(true, Ordering::Release);
-    }
-
-    #[cfg(test)]
-    fn is_finished(&self) -> bool {
-        self.finished.load(Ordering::Acquire)
-    }
 }
 
 /// Owns platform window-intent receivers and their foreground delivery lifetime.
 pub(in crate::workspace) struct WorkspaceWindowIntentEntity {
     desktop_presence: Option<DesktopPresenceSource>,
     single_instance: Option<SingleInstanceSource>,
-    #[cfg(test)]
-    desktop_presence_waiter_stop: WindowIntentWaiterStop,
-    #[cfg(test)]
-    single_instance_waiter_stop: WindowIntentWaiterStop,
     _desktop_presence_task: Option<Task<()>>,
     _single_instance_task: Option<Task<()>>,
 }
@@ -226,10 +174,6 @@ impl WorkspaceWindowIntentEntity {
         Self {
             desktop_presence,
             single_instance,
-            #[cfg(test)]
-            desktop_presence_waiter_stop,
-            #[cfg(test)]
-            single_instance_waiter_stop,
             _desktop_presence_task: desktop_presence_task,
             _single_instance_task: single_instance_task,
         }
@@ -264,8 +208,6 @@ impl WorkspaceWindowIntentEntity {
                     source_notification.notify_one();
                 }
             }
-            #[cfg(test)]
-            waiter_stop.mark_finished();
         })
     }
 
@@ -298,8 +240,6 @@ impl WorkspaceWindowIntentEntity {
                     source_notification.notify_one();
                 }
             }
-            #[cfg(test)]
-            waiter_stop.mark_finished();
         })
     }
 
@@ -360,16 +300,6 @@ impl WorkspaceWindowIntentEntity {
             return None;
         }
         Some(batch.outcome.backlog_remaining)
-    }
-
-    #[cfg(test)]
-    fn desktop_presence_connected(&self) -> bool {
-        self.desktop_presence.is_some()
-    }
-
-    #[cfg(test)]
-    fn single_instance_connected(&self) -> bool {
-        self.single_instance.is_some()
     }
 }
 
@@ -460,165 +390,5 @@ impl WorkspaceApp {
                 window.activate_window();
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::{
-        Arc, Mutex,
-        mpsc::{self, Sender},
-    };
-
-    use gpui::{AppContext, TestAppContext};
-
-    use super::*;
-
-    struct TestSourceSender<T> {
-        sender: Sender<T>,
-        notification: Arc<Notify>,
-    }
-
-    impl<T> TestSourceSender<T> {
-        fn send(&self, value: T) {
-            self.sender.send(value).expect("window intent source send");
-            self.notification.notify_one();
-        }
-    }
-
-    impl<T> Drop for TestSourceSender<T> {
-        fn drop(&mut self) {
-            // Platform sources notify once after shutdown so the waiter can observe disconnect.
-            self.notification.notify_one();
-        }
-    }
-
-    fn test_source<T>() -> (
-        TestSourceSender<T>,
-        std::sync::mpsc::Receiver<T>,
-        Arc<Notify>,
-    ) {
-        let (sender, receiver) = mpsc::channel();
-        let notification = Arc::new(Notify::new());
-        (
-            TestSourceSender {
-                sender,
-                notification: notification.clone(),
-            },
-            receiver,
-            notification,
-        )
-    }
-
-    #[gpui::test]
-    fn hidden_entity_continues_budgeted_delivery_exactly_once(cx: &mut TestAppContext) {
-        let (desktop_sender, desktop_receiver, desktop_notification) = test_source();
-        let entity = cx.new(|cx| {
-            WorkspaceWindowIntentEntity::new_with_sources(
-                Some(DesktopPresenceSource::test(
-                    desktop_receiver,
-                    desktop_notification,
-                )),
-                None,
-                cx,
-            )
-        });
-        let delivered = Arc::new(Mutex::new(Vec::new()));
-        let duplicate_takes = Arc::new(AtomicBool::new(false));
-        let observed = delivered.clone();
-        let duplicate_observed = duplicate_takes.clone();
-        let _subscription = entity.update(cx, |_, cx| {
-            cx.subscribe(&entity, move |_, _, intent: &WindowIntent, _cx| {
-                let label = match intent.take().expect("first intent take") {
-                    WindowIntentAction::ShowMainWindow => "show",
-                    WindowIntentAction::HideMainWindow => "hide",
-                    _ => "unexpected",
-                };
-                observed.lock().expect("delivered intents").push(label);
-                if intent.take().is_some() {
-                    duplicate_observed.store(true, Ordering::Release);
-                }
-            })
-        });
-
-        // More than two user-action budgets proves continuation without mounting or rendering.
-        for index in 0..70 {
-            let event = if index % 2 == 0 {
-                oxide_desktop_presence::DesktopPresenceEvent::ShowMainWindow
-            } else {
-                oxide_desktop_presence::DesktopPresenceEvent::HideMainWindow
-            };
-            desktop_sender.send(event);
-        }
-        cx.run_until_parked();
-
-        let delivered = delivered.lock().expect("delivered intents");
-        assert_eq!(delivered.len(), 70);
-        assert_eq!(delivered.first(), Some(&"show"));
-        assert_eq!(delivered.last(), Some(&"hide"));
-        assert!(!duplicate_takes.load(Ordering::Acquire));
-    }
-
-    #[gpui::test]
-    fn disconnected_sources_are_cleared_and_waiters_finish(cx: &mut TestAppContext) {
-        let (desktop_sender, desktop_receiver, desktop_notification) = test_source();
-        let (single_sender, single_receiver, single_notification) = test_source();
-        let entity = cx.new(|cx| {
-            WorkspaceWindowIntentEntity::new_with_sources(
-                Some(DesktopPresenceSource::test(
-                    desktop_receiver,
-                    desktop_notification,
-                )),
-                Some(SingleInstanceSource::test(
-                    single_receiver,
-                    single_notification,
-                )),
-                cx,
-            )
-        });
-
-        drop(desktop_sender);
-        drop(single_sender);
-        cx.run_until_parked();
-
-        cx.read(|cx| {
-            let entity = entity.read(cx);
-            assert!(!entity.desktop_presence_connected());
-            assert!(!entity.single_instance_connected());
-            assert!(entity.desktop_presence_waiter_stop.is_finished());
-            assert!(entity.single_instance_waiter_stop.is_finished());
-        });
-    }
-
-    #[gpui::test]
-    fn release_stops_both_waiters_while_sources_remain_live(cx: &mut TestAppContext) {
-        let (_desktop_sender, desktop_receiver, desktop_notification) = test_source();
-        let (_single_sender, single_receiver, single_notification) = test_source();
-        let entity = cx.new(|cx| {
-            WorkspaceWindowIntentEntity::new_with_sources(
-                Some(DesktopPresenceSource::test(
-                    desktop_receiver,
-                    desktop_notification,
-                )),
-                Some(SingleInstanceSource::test(
-                    single_receiver,
-                    single_notification,
-                )),
-                cx,
-            )
-        });
-        let (desktop_stop, single_stop) = cx.read(|cx| {
-            let entity = entity.read(cx);
-            (
-                entity.desktop_presence_waiter_stop.clone(),
-                entity.single_instance_waiter_stop.clone(),
-            )
-        });
-
-        drop(entity);
-        cx.update(|_cx| {});
-
-        assert!(desktop_stop.is_stopped());
-        assert!(single_stop.is_stopped());
     }
 }

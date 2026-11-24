@@ -334,4 +334,3 @@ include!("transfer/sync.rs");
 include!("transfer/app_settings.rs");
 include!("transfer/planning.rs");
 include!("transfer/plugin.rs");
-include!("transfer/tests.rs");

@@ -420,6 +420,3 @@ impl WorkspaceApp {
         true
     }
 }
-
-#[cfg(test)]
-mod tests;

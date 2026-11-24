@@ -564,21 +564,6 @@ impl TerminalShellIntegration {
         ));
     }
 
-    #[cfg(test)]
-    pub(crate) fn status(&self) -> ShellIntegrationStatus {
-        ShellIntegrationStatus {
-            detected: self.state.integration_source.is_some() && self.state.last_seen_at.is_some(),
-            state: self.state.lifecycle,
-            integration_source: self.state.integration_source,
-            last_seen_at: self.state.last_seen_at,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn command_marks(&self) -> Vec<TerminalCommandMark> {
-        self.marks.clone()
-    }
-
     fn continue_osc_capture<T: EventListener>(
         &mut self,
         term: &mut Term<T>,

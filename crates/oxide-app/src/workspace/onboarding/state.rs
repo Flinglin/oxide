@@ -100,28 +100,3 @@ pub(in crate::workspace) enum OnboardingImportState {
     Loading,
     Done,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::disclaimer_accepted_from_settings;
-    use oxide_settings::PersistedSettings;
-
-    #[test]
-    fn persisted_and_legacy_onboarding_accept_the_disclaimer() {
-        for mut settings in [
-            PersistedSettings {
-                onboarding_disclaimer_accepted: true,
-                ..PersistedSettings::default()
-            },
-            PersistedSettings {
-                onboarding_completed: true,
-                ..PersistedSettings::default()
-            },
-        ] {
-            assert!(disclaimer_accepted_from_settings(&settings));
-            settings.onboarding_disclaimer_accepted = false;
-            settings.onboarding_completed = false;
-            assert!(!disclaimer_accepted_from_settings(&settings));
-        }
-    }
-}

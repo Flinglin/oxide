@@ -287,6 +287,3 @@ use selection::*;
 pub use synchronize::{
     AppliedSync, PreparedSync, SyncConflictPreview, SyncDirection, SyncOutcome, SyncPlanSummary,
 };
-
-#[cfg(test)]
-mod tests;

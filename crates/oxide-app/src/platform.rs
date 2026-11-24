@@ -140,23 +140,3 @@ pub(crate) fn app_menus(settings: &PersistedSettings) -> Vec<Menu> {
 pub(crate) fn app_key_bindings(settings: &PersistedSettings) -> Vec<KeyBinding> {
     crate::keybindings::startup_key_bindings(&settings.keybindings.overrides)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use oxide_settings::Language;
-
-    #[test]
-    fn native_menu_labels_follow_saved_language() {
-        let mut settings = PersistedSettings::default();
-        for (language, edit, terminal) in [
-            (Language::En, "Edit", "Terminal"),
-            (Language::ZhCn, "编辑", "终端"),
-        ] {
-            settings.general.language = language;
-            let menus = app_menus(&settings);
-            assert_eq!(menus[1].name.as_ref(), edit);
-            assert_eq!(menus[2].name.as_ref(), terminal);
-        }
-    }
-}

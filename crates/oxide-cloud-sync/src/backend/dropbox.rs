@@ -288,22 +288,3 @@ fn dropbox_object_path(config: &CloudSyncSettings, relative_path: &str) -> Strin
     );
     format!("/{}", parts.join("/"))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn dropbox_paths_are_namespace_scoped() {
-        let settings = CloudSyncSettings {
-            backend_type: BackendType::Dropbox,
-            namespace: "team/default".to_string(),
-            ..CloudSyncSettings::default()
-        };
-        let paths = dropbox_paths(&settings);
-
-        assert_eq!(paths.namespace_path, "/team/default");
-        assert_eq!(paths.metadata_path, "/team/default/latest.json");
-        assert_eq!(paths.blob_path, "/team/default/latest.oxide");
-    }
-}

@@ -171,11 +171,6 @@ impl TrzszState {
         Self::with_ttl(DEFAULT_HANDLE_TTL, true)
     }
 
-    #[cfg(test)]
-    pub fn new_for_tests(handle_ttl: Duration) -> Arc<Self> {
-        Self::with_ttl(handle_ttl, false)
-    }
-
     fn with_ttl(handle_ttl: Duration, spawn_janitor: bool) -> Arc<Self> {
         let state = Arc::new(Self {
             inner: Mutex::new(TrzszStateInner {

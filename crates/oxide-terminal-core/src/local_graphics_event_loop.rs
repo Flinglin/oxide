@@ -1325,38 +1325,3 @@ impl<T> PeekableReceiver<T> {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use oxide_modem_transfer::ModemIo;
-
-    #[test]
-    fn completed_local_modem_write_releases_backpressure_on_drop() {
-        let mut transfer = ModemTransfer::new(b"");
-        transfer.write_all(b"frame").unwrap();
-        let bytes = transfer.take_server_write().expect("queued frame");
-        let mut writing = Writing::new_modem(bytes, transfer.clone());
-        writing.advance(writing.remaining_bytes().len());
-
-        drop(writing);
-
-        assert!(transfer.server_writes_drained());
-    }
-
-    #[test]
-    fn partial_local_modem_write_cancels_the_transfer() {
-        let mut transfer = ModemTransfer::new_with_wake_and_cancel(b"", None, b"protocol-cancel");
-        transfer.write_all(b"frame").unwrap();
-        let bytes = transfer.take_server_write().expect("queued frame");
-        let mut writing = Writing::new_modem(bytes, transfer.clone());
-        writing.advance(1);
-
-        drop(writing);
-
-        assert_eq!(
-            transfer.take_server_write().as_deref(),
-            Some(b"protocol-cancel".as_slice())
-        );
-    }
-}

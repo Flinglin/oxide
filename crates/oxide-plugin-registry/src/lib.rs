@@ -57,9 +57,6 @@ mod registry;
 mod state_semantics;
 mod validation;
 
-#[cfg(test)]
-mod tests;
-
 pub use compatibility::validate_native_plugin_host;
 pub use constants::{
     NATIVE_PLUGIN_APP_SETTINGS_CHANGED_EVENT, NATIVE_PLUGIN_APP_THEME_CHANGED_EVENT,

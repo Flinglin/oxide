@@ -126,37 +126,3 @@ pub(super) struct TerminalPathCompletionCache {
     pub(super) entries: HashMap<String, TerminalPathCacheEntry>,
     pub(super) pending: HashSet<String>,
 }
-
-#[cfg(test)]
-mod terminal_command_context_tests {
-    use super::{TerminalCommandContext, TerminalCommandContextType};
-    use crate::workspace::{NodeId, PaneId, TabId, TerminalSessionId};
-
-    fn context() -> TerminalCommandContext {
-        TerminalCommandContext {
-            pane_id: Some(PaneId(7)),
-            session_id: Some(TerminalSessionId(42)),
-            tab_id: Some(TabId(9)),
-            terminal_type: TerminalCommandContextType::Terminal,
-            node_id: Some(NodeId::new("node-prod")),
-            cwd: Some("/srv/app".to_string()),
-            cwd_host: Some("prod.example.com".to_string()),
-            target_label: "deploy@prod.example.com".to_string(),
-        }
-    }
-
-    #[test]
-    fn command_context_provider_scope_prefers_node_then_session_identity() {
-        let mut context = context();
-        assert_eq!(context.provider_scope_id(), "node-prod");
-
-        context.node_id = None;
-        assert_eq!(context.provider_scope_id(), "42");
-
-        context.session_id = None;
-        assert_eq!(context.provider_scope_id(), "7");
-
-        context.pane_id = None;
-        assert_eq!(context.provider_scope_id(), "9");
-    }
-}

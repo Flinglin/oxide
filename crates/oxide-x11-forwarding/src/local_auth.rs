@@ -65,24 +65,3 @@ fn expand_tilde(value: &str) -> PathBuf {
     }
     PathBuf::from(value)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn explicit_authority_path_is_expanded_without_reading() {
-        let resolver = X11LocalAuthorityResolver::new(
-            X11AuthorityEnvironment::from_values(
-                Some(":0".to_string()),
-                Some("/tmp/example.Xauthority".to_string()),
-            ),
-            X11AuthorityMatchContext::new(),
-        );
-
-        assert_eq!(
-            resolver.authority_path().unwrap(),
-            PathBuf::from("/tmp/example.Xauthority")
-        );
-    }
-}

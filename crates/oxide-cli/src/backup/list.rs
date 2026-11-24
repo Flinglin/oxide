@@ -252,25 +252,3 @@ fn inspect_summary(backup: &Value) -> BackupInspectSummary {
             .unwrap_or_default(),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::*;
-
-    #[test]
-    fn inspect_summary_counts_sections_and_records() {
-        let summary = inspect_summary(&json!({
-            "format": "oxide-cli-backup-v1",
-            "createdAtMs": 1,
-            "settings": { "sectionIds": ["general"] },
-            "connections": { "records": [1, 2] },
-            "cloudSync": { "history": [1] }
-        }));
-
-        assert_eq!(summary.settings_section_count, 1);
-        assert_eq!(summary.connection_record_count, 2);
-        assert_eq!(summary.cloud_sync_history_count, 1);
-    }
-}

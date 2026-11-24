@@ -39,7 +39,7 @@ mod shader_compilation {
             "subpixel_sprite",
             "polychrome_sprite",
             "surface",
-            // oxide retains CE blur passes in the release renderer as well as debug builds.
+            // OxideTerm retains CE blur passes in the release renderer as well as debug builds.
             "blur_downsample",
             "blur",
             "blur_composite",

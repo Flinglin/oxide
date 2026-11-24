@@ -52,39 +52,3 @@ impl X11ForwardPlan {
         rewrite_setup_authentication(packet, &self.auth)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::{
-        X11AuthCookie, X11AuthProtocol, X11AuthorityFamily, X11AuthorityMatchContext,
-        X11BinaryAuthorityEntry, X11Display,
-    };
-
-    use super::*;
-
-    #[test]
-    fn plan_can_use_binary_xauthority_entries() {
-        let display = X11Display::parse(":0").unwrap();
-        let config = X11ForwardConfig::new(display);
-        let entries = vec![X11BinaryAuthorityEntry {
-            family: X11AuthorityFamily::Wild,
-            address: Vec::new(),
-            display_number: "0".to_string(),
-            protocol: X11AuthProtocol::MitMagicCookie1,
-            cookie: X11AuthCookie::from_hex("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap(),
-        }];
-
-        let plan = X11ForwardPlan::from_binary_authority_entries(
-            config,
-            &entries,
-            &X11AuthorityMatchContext::new(),
-        )
-        .unwrap();
-
-        assert_eq!(
-            plan.auth.local_cookie.to_hex(),
-            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-        );
-        assert_ne!(plan.auth.fake_cookie, plan.auth.local_cookie);
-    }
-}

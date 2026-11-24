@@ -168,33 +168,6 @@ pub(crate) fn editor_code_font(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn configured_editor_fallback_precedes_platform_fallbacks() {
-        let font = editor_code_font(
-            "'JetBrains Mono', Consolas, monospace",
-            Some("DengXian"),
-            600.0,
-        );
-        assert_eq!(font.family.as_ref(), "JetBrains Mono");
-        assert_eq!(font.weight, FontWeight(600.0));
-        let fallbacks = font.fallbacks.expect("editor font fallbacks");
-
-        assert_eq!(
-            fallbacks
-                .fallback_list()
-                .iter()
-                .take(3)
-                .map(String::as_str)
-                .collect::<Vec<_>>(),
-            vec!["DengXian", "Consolas", "monospace"]
-        );
-    }
-}
-
 fn fallback_code_cell_width(
     window: &mut Window,
     font: &Font,

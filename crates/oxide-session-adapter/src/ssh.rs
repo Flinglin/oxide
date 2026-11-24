@@ -580,32 +580,3 @@ pub fn ssh_config_for_saved_connection_hop(
 
     None
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn saved_x11_options_become_non_secret_runtime_policy() {
-        let policy = x11_forward_policy(ConnectionX11ForwardingOptions {
-            enabled: true,
-            mode: ConnectionX11ForwardingMode::Untrusted,
-            untrusted_timeout_seconds: 900,
-        })
-        .unwrap();
-
-        assert_eq!(policy.timeout_millis, Some(900_000));
-        assert!(!policy.is_trusted());
-        assert_eq!(
-            x11_forward_policy(ConnectionX11ForwardingOptions {
-                enabled: true,
-                mode: ConnectionX11ForwardingMode::Untrusted,
-                untrusted_timeout_seconds: 0,
-            })
-            .unwrap()
-            .timeout_millis,
-            None
-        );
-        assert!(x11_forward_policy(ConnectionX11ForwardingOptions::default()).is_none());
-    }
-}

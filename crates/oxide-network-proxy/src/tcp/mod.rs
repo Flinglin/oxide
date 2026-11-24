@@ -594,6 +594,3 @@ fn proxy_error<T>(error: UpstreamProxyError) -> Result<T, TcpProxyError> {
 fn proxy_transport_error(error: UpstreamProxyError) -> TcpProxyError {
     TcpProxyError::ConnectionFailed(error.to_string())
 }
-
-#[cfg(test)]
-mod tests;

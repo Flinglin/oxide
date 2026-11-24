@@ -44,11 +44,3 @@ windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_JobO
 russh.workspace = true
 rand.workspace = true
 criterion.workspace = true
-
-[[bench]]
-name = "terminal_pipeline"
-harness = false
-
-[[bench]]
-name = "privilege_prompt_stream"
-harness = false

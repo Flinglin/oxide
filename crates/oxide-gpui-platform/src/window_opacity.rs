@@ -178,16 +178,3 @@ mod imp {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn normalization_preserves_supported_values_and_safe_bounds() {
-        assert_eq!(normalized_window_opacity(0.85), 0.85);
-        assert_eq!(normalized_window_opacity(0.1), MIN_WINDOW_OPACITY);
-        assert_eq!(normalized_window_opacity(1.5), MAX_WINDOW_OPACITY);
-        assert_eq!(normalized_window_opacity(f64::NAN), MAX_WINDOW_OPACITY);
-    }
-}

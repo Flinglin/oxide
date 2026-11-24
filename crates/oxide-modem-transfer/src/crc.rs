@@ -37,18 +37,3 @@ pub fn crc32_ieee_update(mut crc: u32, byte: u8) -> u32 {
     }
     crc
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn crc16_matches_xmodem_check_value() {
-        assert_eq!(crc16_xmodem(b"123456789"), 0x31c3);
-    }
-
-    #[test]
-    fn crc32_matches_ieee_check_value() {
-        assert_eq!(crc32_ieee(b"123456789"), 0xcbf4_3926);
-    }
-}

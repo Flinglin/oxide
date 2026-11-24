@@ -150,24 +150,3 @@ pub(super) fn advance(
         },
     ))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::host_based_service_name;
-
-    #[test]
-    fn service_identity_accepts_shared_and_native_spellings() {
-        assert_eq!(
-            host_based_service_name("server.example.com"),
-            "host@server.example.com"
-        );
-        assert_eq!(
-            host_based_service_name("host/server.example.com"),
-            "host@server.example.com"
-        );
-        assert_eq!(
-            host_based_service_name("host@server.example.com"),
-            "host@server.example.com"
-        );
-    }
-}

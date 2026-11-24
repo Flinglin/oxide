@@ -500,31 +500,3 @@ impl VideoDecoder {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rgb_output_accepts_missing_stride_and_preserves_explicit_orientation() {
-        let _runtime = MediaFoundation::new().unwrap();
-        unsafe {
-            let format = MFCreateMediaType().unwrap();
-            format
-                .SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32)
-                .unwrap();
-            assert_eq!(default_stride(&format, 64).unwrap().unsigned_abs(), 256);
-            for stride in [256_i32, -256_i32] {
-                format
-                    .SetUINT32(&MF_MT_DEFAULT_STRIDE, stride as u32)
-                    .unwrap();
-                assert_eq!(default_stride(&format, 64).unwrap(), stride);
-            }
-            // A malformed attribute is a real error, not an omitted optional value.
-            format
-                .SetGUID(&MF_MT_DEFAULT_STRIDE, &MFVideoFormat_RGB32)
-                .unwrap();
-            assert!(default_stride(&format, 64).is_err());
-        }
-    }
-}

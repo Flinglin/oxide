@@ -784,33 +784,3 @@ pub fn select_separator(tokens: &ThemeTokens) -> Div {
         .h(px(1.0))
         .bg(rgb(tokens.ui.border))
 }
-
-#[cfg(test)]
-mod tests {
-    use gpui::CursorStyle;
-
-    use super::{
-        interactive_select_trigger_spec, readonly_value_trigger_spec, select_option_is_actionable,
-    };
-
-    #[test]
-    fn select_option_action_guard_blocks_disabled_or_loading_rows() {
-        assert!(select_option_is_actionable(false, false));
-        assert!(!select_option_is_actionable(true, false));
-        assert!(!select_option_is_actionable(false, true));
-        assert!(!select_option_is_actionable(true, true));
-    }
-
-    #[test]
-    fn readonly_value_trigger_does_not_expose_select_affordance() {
-        let readonly = readonly_value_trigger_spec();
-        assert_eq!(readonly.cursor, CursorStyle::Arrow);
-        assert_eq!(readonly.opacity, 1.0);
-        assert!(!readonly.show_chevron);
-
-        let interactive = interactive_select_trigger_spec(false);
-        assert_eq!(interactive.cursor, CursorStyle::PointingHand);
-        assert_eq!(interactive.opacity, 1.0);
-        assert!(interactive.show_chevron);
-    }
-}

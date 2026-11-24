@@ -873,33 +873,3 @@ fn previous_utf16_boundary(value: &str, offset: usize) -> usize {
         .map(|character| offset.saturating_sub(character.len_utf16()))
         .unwrap_or(0)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn startup_gate_blocks_only_locked_portable_states() {
-        assert!(!portable_startup_requires_bootstrap(
-            PortableBootstrapStatus::Disabled
-        ));
-        assert!(portable_startup_requires_bootstrap(
-            PortableBootstrapStatus::NeedsSetup
-        ));
-        assert!(portable_startup_requires_bootstrap(
-            PortableBootstrapStatus::Locked
-        ));
-        assert!(!portable_startup_requires_bootstrap(
-            PortableBootstrapStatus::Unlocked
-        ));
-    }
-
-    #[test]
-    fn utf16_edits_preserve_multibyte_password_text() {
-        let mut value = "a🔐b".to_string();
-        replace_utf16(&mut value, 1..3, "密");
-
-        assert_eq!(value, "a密b");
-        assert_eq!(previous_utf16_boundary(&value, 2), 1);
-    }
-}

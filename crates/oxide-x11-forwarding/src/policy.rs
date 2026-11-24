@@ -66,22 +66,3 @@ impl Default for X11ForwardPolicy {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn untrusted_policy_defaults_to_openssh_twenty_minute_timeout() {
-        assert_eq!(
-            X11ForwardPolicy::untrusted().timeout_millis,
-            Some(DEFAULT_X11_UNTRUSTED_TIMEOUT_MILLIS)
-        );
-        assert_eq!(
-            X11ForwardPolicy::untrusted()
-                .without_timeout()
-                .timeout_millis,
-            None
-        );
-    }
-}

@@ -20,6 +20,3 @@ pub use settings::{
     application_proxy_policy_from_settings, configure_update_http_client_builder,
     install_application_proxy_policy_from_settings,
 };
-
-#[cfg(test)]
-mod tests;

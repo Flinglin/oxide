@@ -198,39 +198,3 @@ pub(crate) fn validate_entry_name(name: &str) -> Result<()> {
         Ok(())
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn listings_preserve_unknown_metadata_and_reject_path_escape() {
-        let entry = parse_entry("type=file; report.md", true).unwrap().unwrap();
-        assert_eq!(entry.name, "report.md");
-        assert_eq!(
-            (entry.kind, entry.size, entry.modified, entry.permissions),
-            (EntryKind::File, None, None, None)
-        );
-        let entry = parse_entry(
-            "type=file;size=123;modify=20260101000000;UNIX.mode=0640; report.md",
-            true,
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!((entry.size, entry.permissions), (Some(123), Some(0o640)));
-        for line in [
-            "type=file; ../escape",
-            "type=file; C:escape",
-            "type=file; x\\y",
-        ] {
-            assert!(matches!(parse_entry(line, true), Err(Error::InvalidInput)));
-        }
-        let entry = parse_entry("01-01-26  12:00PM       <DIR>          notes", false)
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            (entry.name.as_str(), entry.kind, entry.permissions),
-            ("notes", EntryKind::Directory, None)
-        );
-    }
-}

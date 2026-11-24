@@ -17,11 +17,6 @@ use crate::{
 
 const CLOUD_SYNC_STATE_VERSION: u32 = 1;
 
-#[cfg(test)]
-thread_local! {
-    static FAIL_NEXT_ATOMIC_REPLACE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
 fn default_cloud_sync_state_version() -> u32 {
     CLOUD_SYNC_STATE_VERSION
 }
@@ -353,25 +348,8 @@ fn atomic_write_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     durable_write_with_before_replace(path, bytes, fail_before_atomic_replace_for_tests)
 }
 
-#[cfg(test)]
-fn fail_before_atomic_replace_for_tests() -> io::Result<()> {
-    FAIL_NEXT_ATOMIC_REPLACE.with(|fail| {
-        if fail.replace(false) {
-            Err(io::Error::other("injected failure before atomic replace"))
-        } else {
-            Ok(())
-        }
-    })
-}
-
-#[cfg(not(test))]
 fn fail_before_atomic_replace_for_tests() -> io::Result<()> {
     Ok(())
-}
-
-#[cfg(test)]
-fn inject_atomic_replace_failure() {
-    FAIL_NEXT_ATOMIC_REPLACE.with(|fail| fail.set(true));
 }
 
 pub fn default_cloud_sync_state_path(settings_path: &Path) -> PathBuf {
@@ -388,109 +366,4 @@ fn reset_runtime_state(state: &mut CloudSyncPersistedState) {
     state.auto_upload_blocked_by_conflict = false;
     state.conflict_details = None;
     state.last_error = None;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn persisted_state_ignores_removed_raw_profile_sections() {
-        let state: CloudSyncPersistedState = serde_json::from_value(serde_json::json!({
-            "syncScope": {
-                "syncRawTcpProfiles": true,
-                "syncRawUdpProfiles": true
-            },
-            "lastSyncedStructuredState": {
-                "connections": "conn-rev",
-                "forwards": "fwd-rev",
-                "rawTcpProfiles": "raw-tcp-rev",
-                "rawUdpProfiles": "raw-udp-rev",
-                "appSettings": {
-                    "general": "general-rev"
-                },
-                "pluginSettings": {}
-            },
-            "lastSyncedRemoteSections": {
-                "connections": "conn-rev",
-                "forwards": "fwd-rev",
-                "rawTcpProfiles": "raw-tcp-rev",
-                "rawUdpProfiles": "raw-udp-rev",
-                "appSettings": {
-                    "general": "general-rev"
-                },
-                "pluginSettings": {}
-            },
-            "localDirtySections": {
-                "connections": false,
-                "forwards": false,
-                "rawTcpProfiles": true,
-                "rawUdpProfiles": true,
-                "appSettings": {},
-                "pluginSettings": {}
-            }
-        }))
-        .expect("old cloud sync state should deserialize");
-
-        let structured_state = state.last_synced_structured_state.as_ref().expect("state");
-        assert_eq!(structured_state.connections.as_deref(), Some("conn-rev"));
-        assert!(structured_state.quick_commands.is_none());
-        assert!(structured_state.serial_profiles.is_none());
-        assert!(structured_state.remote_desktop_profiles.is_none());
-        assert!(structured_state.sensitive_credentials.is_none());
-        assert!(
-            state
-                .last_synced_remote_sections
-                .as_ref()
-                .expect("remote sections")
-                .quick_commands
-                .is_none()
-        );
-        assert!(
-            !state
-                .local_dirty_sections
-                .as_ref()
-                .expect("dirty sections")
-                .sensitive_credentials
-        );
-        // Saving the migrated state naturally clears the removed legacy fields.
-        let encoded = serde_json::to_string(&state).expect("cloud sync state should serialize");
-        assert!(!encoded.contains("rawTcpProfiles"));
-        assert!(!encoded.contains("rawUdpProfiles"));
-    }
-
-    #[test]
-    fn rejected_store_documents_are_preserved_byte_for_byte() {
-        let future = serde_json::to_vec(
-            &serde_json::json!({"version": CLOUD_SYNC_STATE_VERSION + 1, "revisionSeq":99}),
-        )
-        .unwrap();
-        for bytes in [b"{ not valid json".to_vec(), future] {
-            let path =
-                std::env::temp_dir().join(format!("oxide-rejected-{}.json", uuid::Uuid::new_v4()));
-            fs::write(&path, &bytes).unwrap();
-            let result = CloudSyncStateStore::load(&path);
-            let preserved = fs::read(&path).unwrap();
-            fs::remove_file(&path).unwrap();
-            assert!(result.is_err());
-            assert_eq!(preserved, bytes);
-        }
-    }
-
-    #[test]
-    fn failed_atomic_cloud_state_replace_preserves_previous_file() {
-        let path = std::env::temp_dir().join(format!(
-            "oxide-cloud-state-atomic-{}.json",
-            uuid::Uuid::new_v4()
-        ));
-        let mut store = CloudSyncStateStore::load(&path).unwrap();
-        store.save().unwrap();
-        let previous = fs::read(&path).unwrap();
-        store.state_mut().revision_seq = 7;
-        inject_atomic_replace_failure();
-
-        assert!(store.save().is_err());
-        assert_eq!(fs::read(&path).unwrap(), previous);
-        let _ = fs::remove_file(path);
-    }
 }

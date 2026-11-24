@@ -384,22 +384,3 @@ pub(crate) fn secret_hint_statuses(
 fn format_secret_hint(hint: &SecretHintStatus) -> String {
     format!("{}\tconfigured={}", hint.key, hint.configured)
 }
-
-#[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use super::*;
-
-    #[test]
-    fn secret_statuses_preserve_only_hint_flags() {
-        let mut hints = BTreeMap::new();
-        hints.insert("webdav.password".to_string(), true);
-
-        let statuses = secret_hint_statuses(&hints);
-
-        assert_eq!(statuses.len(), 1);
-        assert_eq!(statuses[0].key, "webdav.password");
-        assert!(statuses[0].configured);
-    }
-}

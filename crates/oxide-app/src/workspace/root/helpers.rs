@@ -1226,20 +1226,6 @@ pub(in crate::workspace) fn write_session_tree_snapshot(
     Ok(())
 }
 
-#[cfg(test)]
-pub(in crate::workspace) fn fail_before_session_tree_replace_for_tests() -> io::Result<()> {
-    FAIL_NEXT_SESSION_TREE_REPLACE.with(|fail| {
-        if fail.replace(false) {
-            Err(io::Error::other(
-                "injected failure before session tree replace",
-            ))
-        } else {
-            Ok(())
-        }
-    })
-}
-
-#[cfg(not(test))]
 pub(in crate::workspace) fn fail_before_session_tree_replace_for_tests() -> io::Result<()> {
     Ok(())
 }

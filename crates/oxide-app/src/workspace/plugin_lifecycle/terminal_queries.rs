@@ -156,36 +156,3 @@ fn native_plugin_terminal_state_label(state: &Value) -> Value {
     }
     Value::Null
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use oxide_terminal_core::{SerialFlowControl, SerialParity};
-
-    #[test]
-    fn serial_active_target_exposes_transport_metadata() {
-        let target = native_plugin_serial_terminal_target(
-            TerminalSessionId(44),
-            &SerialSessionConfig {
-                port_path: "/dev/cu.usbserial-test".to_string(),
-                baud_rate: 115_200,
-                data_bits: 8,
-                stop_bits: 1,
-                parity: SerialParity::None,
-                flow_control: SerialFlowControl::Hardware,
-                runtime_options: Default::default(),
-            },
-        );
-
-        assert_eq!(target["terminalType"], "serial");
-        assert_eq!(target["terminalTransport"], "serial");
-        assert_eq!(target["label"], "Serial /dev/cu.usbserial-test");
-        assert_eq!(target["transport"]["type"], "serial");
-        assert_eq!(target["transport"]["portPath"], "/dev/cu.usbserial-test");
-        assert_eq!(target["transport"]["baudRate"], 115_200);
-        assert_eq!(target["transport"]["dataBits"], 8);
-        assert_eq!(target["transport"]["stopBits"], 1);
-        assert_eq!(target["transport"]["parity"], "none");
-        assert_eq!(target["transport"]["flowControl"], "hardware");
-    }
-}

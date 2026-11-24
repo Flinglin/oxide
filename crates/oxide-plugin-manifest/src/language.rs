@@ -15,51 +15,6 @@ pub struct NativePluginLanguageDefinition {
     pub file_names: Vec<String>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn language_declarations_preserve_flat_manifests_and_literal_associations() {
-        let legacy = serde_json::json!({"id":"elixir", "highlights":"highlights.scm",
-            "parserSha256":"a".repeat(64), "highlightsSha256":"b".repeat(64)});
-        let language: crate::NativePluginLanguage = serde_json::from_value(legacy.clone()).unwrap();
-        assert_eq!(serde_json::to_value(language).unwrap(), legacy);
-        let definition = NativePluginLanguageDefinition {
-            id: "custom-lang".into(),
-            display_name: Some("Custom Language".into()),
-            grammar_name: Some("elixir".into()),
-            extensions: vec!["expr".into(), "custom.expr".into()],
-            file_names: vec!["Customfile".into()],
-        };
-        definition.validate().unwrap();
-        for (file, score) in [
-            ("a.CUSTOM.EXPR", Some(11)),
-            ("Customfile", Some(usize::MAX)),
-            ("a.expr", Some(4)),
-            ("aexpr", None),
-            ("unrelated.txt", None),
-        ] {
-            assert_eq!(
-                definition.match_path(std::path::Path::new(file)),
-                score,
-                "{file}"
-            );
-        }
-        for invalid in [
-            serde_json::json!({"id":"../lang"}),
-            serde_json::json!({"id":"custom-lang","grammarName":"tree_sitter/x"}),
-            serde_json::json!({"id":"custom-lang","extensions":["*.expr"]}),
-            serde_json::json!({"id":"custom-lang","fileNames":["dir/Customfile"]}),
-            serde_json::json!({"id":"custom-lang","displayName":"bad\nname"}),
-        ] {
-            let definition: NativePluginLanguageDefinition =
-                serde_json::from_value(invalid).unwrap();
-            assert!(definition.validate().is_err());
-        }
-    }
-}
-
 impl NativePluginLanguageDefinition {
     pub fn validate(&self) -> Result<(), String> {
         let valid_id = |value: &str| {

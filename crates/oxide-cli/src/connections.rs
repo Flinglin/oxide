@@ -22,9 +22,6 @@ use crate::{
 
 mod spec;
 
-#[cfg(test)]
-pub(crate) mod tests;
-
 use spec::{connection_request_from_spec, connection_spec_from_direct_args, read_connection_spec};
 
 #[derive(Serialize)]

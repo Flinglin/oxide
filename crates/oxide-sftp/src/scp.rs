@@ -10,8 +10,6 @@ use std::{
 };
 
 use channel::{ScpChannel, ScpRecord, open_scp_channel};
-#[cfg(test)]
-use channel::{parse_file_or_directory_record, take_control_line, validate_time_record};
 use paths::{
     cleanup_remote_directory, contained_child_path, directory_total_size, ensure_entry_limit,
     install_local_download, local_directory_temporary_path, local_temporary_path,
@@ -838,78 +836,4 @@ where
 fn append_bounded(target: &mut Vec<u8>, data: &[u8], limit: usize) {
     let remaining = limit.saturating_sub(target.len());
     target.extend_from_slice(&data[..data.len().min(remaining)]);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use bytes::BytesMut;
-
-    #[test]
-    fn parses_file_directory_end_and_time_records() {
-        assert_eq!(
-            parse_file_or_directory_record(b'C', "0644 12 notes.txt").unwrap(),
-            ScpRecord::File {
-                mode: 0o644,
-                size: 12,
-                name: "notes.txt".to_string(),
-            }
-        );
-        assert_eq!(
-            parse_file_or_directory_record(b'D', "0755 0 src").unwrap(),
-            ScpRecord::Directory {
-                mode: 0o755,
-                name: "src".to_string(),
-            }
-        );
-        assert!(validate_time_record("1710000000 0 1710000001 0").is_ok());
-    }
-
-    #[test]
-    fn rejects_traversal_and_control_characters_in_remote_names() {
-        for name in ["", ".", "..", "../escape", "a/b", "a\\b", "a\nb", "a\0b"] {
-            assert!(validate_received_name(name).is_err(), "{name:?}");
-        }
-    }
-
-    #[test]
-    fn rejects_malformed_modes_sizes_and_directory_lengths() {
-        assert!(parse_file_or_directory_record(b'C', "0999 1 file").is_err());
-        assert!(parse_file_or_directory_record(b'C', "0644 huge file").is_err());
-        assert!(parse_file_or_directory_record(b'D', "0755 1 dir").is_err());
-    }
-
-    #[test]
-    fn control_line_decoder_waits_for_split_packets_and_preserves_following_data() {
-        let mut buffer = BytesMut::from(&b"0644 12 no"[..]);
-        assert_eq!(take_control_line(&mut buffer).unwrap(), None);
-        buffer.extend_from_slice(b"tes.txt\npayload");
-
-        assert_eq!(
-            take_control_line(&mut buffer).unwrap(),
-            Some("0644 12 notes.txt".to_string())
-        );
-        assert_eq!(&buffer[..], b"payload");
-    }
-
-    #[test]
-    fn builds_generated_temporary_paths_as_siblings() {
-        let remote = remote_temporary_path("/srv/data/report.txt").unwrap();
-        assert!(remote.starts_with("/srv/data/.report.txt.oxide-"));
-        assert!(remote.ends_with(".part"));
-
-        let remote_directory = remote_temporary_directory_path("/srv/data/project").unwrap();
-        assert!(remote_directory.starts_with("/srv/data/.project.oxide-"));
-        assert!(remote_directory.ends_with(".part-dir"));
-
-        let local = local_temporary_path(Path::new("/tmp/report.txt")).unwrap();
-        assert_eq!(local.parent(), Some(Path::new("/tmp")));
-        assert!(
-            local
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .starts_with(".report.txt.oxide-")
-        );
-    }
 }

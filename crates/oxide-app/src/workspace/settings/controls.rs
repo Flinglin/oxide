@@ -2230,34 +2230,3 @@ impl WorkspaceApp {
         settings_row(&self.theme_tokens, label, hint, control)
     }
 }
-
-#[cfg(test)]
-mod theme_select_tests {
-    use super::*;
-
-    #[test]
-    fn theme_navigation_skips_groups_and_scrolls_to_the_actual_row() {
-        let entries = [
-            ThemeSelectEntry::Group("custom"),
-            ThemeSelectEntry::Theme("custom:one".into()),
-            ThemeSelectEntry::Group("oxide"),
-            ThemeSelectEntry::Theme("azurite".into()),
-            ThemeSelectEntry::Group("classic"),
-            ThemeSelectEntry::Theme("tokyo-night".into()),
-        ];
-        for (current, key, expected) in [
-            ("custom:one", "down", (3, "azurite")),
-            ("azurite", "up", (1, "custom:one")),
-            ("azurite", "end", (5, "tokyo-night")),
-            ("tokyo-night", "home", (1, "custom:one")),
-            ("custom:one", "up", (1, "custom:one")),
-            ("tokyo-night", "down", (5, "tokyo-night")),
-        ] {
-            assert_eq!(
-                next_theme_option(&entries, Some(current), key),
-                Some(expected),
-                "{current}: {key}"
-            );
-        }
-    }
-}

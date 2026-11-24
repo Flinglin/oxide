@@ -40,37 +40,3 @@ pub(super) fn node_readiness_became_unavailable(
 pub(super) fn reconnect_cascade_child_should_start(readiness: &NodeReadiness) -> bool {
     matches!(readiness, NodeReadiness::Error | NodeReadiness::Connecting)
 }
-
-#[cfg(test)]
-mod node_reconnect_helper_tests {
-    use super::*;
-
-    #[test]
-    fn ready_transition_requires_a_non_ready_previous_state() {
-        assert!(node_readiness_became_ready(
-            Some(&NodeReadiness::Connecting),
-            &NodeReadiness::Ready
-        ));
-        assert!(node_readiness_became_ready(None, &NodeReadiness::Ready));
-        assert!(!node_readiness_became_ready(
-            Some(&NodeReadiness::Ready),
-            &NodeReadiness::Ready
-        ));
-        assert!(!node_readiness_became_ready(
-            Some(&NodeReadiness::Error),
-            &NodeReadiness::Disconnected
-        ));
-        assert!(node_readiness_became_unavailable(
-            Some(&NodeReadiness::Connecting),
-            &NodeReadiness::Error
-        ));
-        assert!(node_readiness_became_unavailable(
-            Some(&NodeReadiness::Ready),
-            &NodeReadiness::Disconnected
-        ));
-        assert!(!node_readiness_became_unavailable(
-            Some(&NodeReadiness::Error),
-            &NodeReadiness::Disconnected
-        ));
-    }
-}

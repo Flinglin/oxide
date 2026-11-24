@@ -1,6 +1,4 @@
 use gpui::Context;
-#[cfg(test)]
-pub(super) use oxide_plugin_host_api::settings::native_syncable_settings_revision;
 pub(super) use oxide_plugin_host_api::settings::{
     native_normalize_syncable_settings_payload, native_syncable_settings_apply_plan,
     native_syncable_settings_payload_arg,

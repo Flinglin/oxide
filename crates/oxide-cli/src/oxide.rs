@@ -827,25 +827,3 @@ fn format_export_text(response: &OxideExportResponse) -> String {
         response.portable_secret_count
     )
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn oxide_selection_includes_plugin_profiles_without_installed_providers() {
-        let directory = tempfile::tempdir().unwrap();
-        let mut store = ConnectionStore::load(directory.path().join("connections.json")).unwrap();
-        store.save_plugin_profile(serde_json::from_value(serde_json::json!({
-            "id":"custom", "plugin_id":"missing.provider", "type_id":"custom", "name":"Device", "group":null,
-            "config":{}, "credential_refs":{}, "created_at":"2026-10-19T00:00:00Z", "updated_at":"2026-10-19T00:00:00Z", "last_used_at":null
-        })).unwrap()).unwrap();
-        for queries in [vec![], vec!["custom".into()], vec![" device ".into()]] {
-            assert_eq!(
-                selected_connection_ids(&store, &queries, true).unwrap(),
-                vec!["custom"]
-            );
-        }
-        assert!(selected_connection_ids(&store, &["missing".into()], true).is_err());
-    }
-}

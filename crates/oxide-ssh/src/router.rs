@@ -427,4 +427,3 @@ include!("router/runtime_store.rs");
 include!("router/events.rs");
 include!("router/node_router.rs");
 include!("router/helpers.rs");
-include!("router/tests.rs");

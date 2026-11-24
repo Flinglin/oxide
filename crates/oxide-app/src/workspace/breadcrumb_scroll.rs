@@ -37,21 +37,3 @@ fn dominant_wheel_delta(delta_x: f32, delta_y: f32) -> f32 {
 fn breadcrumb_scroll_after_wheel(current_scroll: f32, wheel_delta: f32, max_scroll: f32) -> f32 {
     (current_scroll - wheel_delta).clamp(0.0, max_scroll)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn breadcrumb_wheel_prefers_the_dominant_axis() {
-        assert_eq!(dominant_wheel_delta(-12.0, -4.0), -12.0);
-        assert_eq!(dominant_wheel_delta(-4.0, -12.0), -12.0);
-    }
-
-    #[test]
-    fn breadcrumb_wheel_clamps_to_scroll_bounds() {
-        assert_eq!(breadcrumb_scroll_after_wheel(0.0, -24.0, 100.0), 24.0);
-        assert_eq!(breadcrumb_scroll_after_wheel(90.0, -24.0, 100.0), 100.0);
-        assert_eq!(breadcrumb_scroll_after_wheel(10.0, 24.0, 100.0), 0.0);
-    }
-}

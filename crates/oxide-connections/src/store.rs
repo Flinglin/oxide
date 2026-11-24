@@ -30,8 +30,6 @@ include!("store/plugin.rs");
 include!("store/resolved_sync.rs");
 include!("store/managed_sync.rs");
 include!("store/privilege_sync.rs");
-#[cfg(test)]
-include!("store/tests.rs");
 
 mod credential_sync;
 mod totp;

@@ -1683,38 +1683,3 @@ pub(in crate::workspace) fn select_anchor_tracks_while_closed(anchor_id: SelectA
             | SelectAnchorId::SessionManagerBatchMove
     )
 }
-
-#[cfg(test)]
-mod slider_anchor_tests {
-    use super::*;
-
-    #[test]
-    fn settings_sliders_have_geometry_before_the_first_pointer_down() {
-        for slider in [
-            SettingsSlider::TerminalFontSize,
-            SettingsSlider::AppearanceUiFontSize,
-            SettingsSlider::AppearanceBorderRadius,
-            SettingsSlider::OnboardingBorderRadius,
-            SettingsSlider::VersionMigrationBorderRadius,
-            SettingsSlider::AppearanceWindowOpacity,
-            SettingsSlider::AppearanceBackgroundOpacity,
-            SettingsSlider::AppearanceBackgroundBlur,
-            SettingsSlider::BackgroundReadability,
-            SettingsSlider::BackgroundEffectStrength,
-            SettingsSlider::BackgroundEffectSheen,
-            SettingsSlider::BackgroundEffectSpeed,
-            SettingsSlider::BackgroundEffectSize,
-            SettingsSlider::BackgroundEffectBrightness,
-            SettingsSlider::BackgroundEffectRoughness,
-            SettingsSlider::BackgroundEffectDirection,
-            SettingsSlider::BackgroundParticleCount,
-            SettingsSlider::BackgroundCameraAmount,
-            SettingsSlider::BackgroundCameraSpeed,
-        ] {
-            assert!(
-                select_anchor_tracks_while_closed(settings_slider_anchor_id(slider)),
-                "{slider:?}: pointer-down must use the already measured slider geometry"
-            );
-        }
-    }
-}

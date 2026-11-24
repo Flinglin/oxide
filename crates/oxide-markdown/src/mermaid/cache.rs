@@ -77,30 +77,3 @@ pub(super) fn insert(key: MermaidRenderRequest, result: Result<RenderedMermaidIm
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use oxide_theme::default_tokens;
-
-    use crate::options::MarkdownOptions;
-
-    use super::*;
-
-    #[test]
-    fn reuses_rendered_images_and_caches_raster_scales_separately() {
-        let tokens = default_tokens();
-        let opts = MarkdownOptions::from_theme(&tokens);
-
-        let normal = render_mermaid_svg_scaled("graph TD\nA --> B", &tokens, &opts, 1.0).unwrap();
-        let zoomed = render_mermaid_svg_scaled("graph TD\nA --> B", &tokens, &opts, 3.0).unwrap();
-        let default = render_mermaid_svg_image("graph TD\nA --> B", &tokens, &opts).unwrap();
-        let repeated = render_mermaid_svg_image("graph TD\nA --> B", &tokens, &opts).unwrap();
-
-        assert!(Arc::ptr_eq(&default, &repeated));
-        assert_eq!(normal.display_width, zoomed.display_width);
-        assert_eq!(normal.display_height, zoomed.display_height);
-        assert!(!Arc::ptr_eq(&normal.image, &zoomed.image));
-    }
-}

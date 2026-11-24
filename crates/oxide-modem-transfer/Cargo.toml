@@ -12,7 +12,3 @@ thiserror.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true
-
-[[bench]]
-name = "modem_consumer"
-harness = false

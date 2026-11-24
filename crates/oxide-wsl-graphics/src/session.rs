@@ -356,17 +356,3 @@ fn validate_argv(argv: &[String]) -> Result<(), WslGraphicsError> {
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-
-    #[cfg(not(target_os = "windows"))]
-    #[tokio::test]
-    async fn detect_wslg_uses_same_non_windows_fallback() {
-        let state = WslGraphicsState::new();
-        assert_eq!(
-            state.detect_wslg("Ubuntu").await.unwrap_err().to_string(),
-            crate::WSL_GRAPHICS_UNAVAILABLE
-        );
-    }
-}

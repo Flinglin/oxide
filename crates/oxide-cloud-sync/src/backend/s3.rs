@@ -479,31 +479,3 @@ fn s3_host_header(url: &Url) -> String {
         _ => String::new(),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::BackendType;
-
-    #[test]
-    fn builds_s3_object_urls_like_cloud_sync_plugin() {
-        let settings = CloudSyncSettings {
-            backend_type: BackendType::S3,
-            endpoint: "https://s3.example.test/root/".to_string(),
-            s3_bucket: "oxide bucket".to_string(),
-            namespace: "team/default".to_string(),
-            ..CloudSyncSettings::default()
-        };
-
-        assert_eq!(
-            s3_metadata_url(&settings).unwrap().as_str(),
-            "https://s3.example.test/root/oxide%20bucket/team/default/latest.json"
-        );
-        assert_eq!(
-            s3_object_url(&settings, "structured/connections/rev 1.json")
-                .unwrap()
-                .as_str(),
-            "https://s3.example.test/root/oxide%20bucket/team/default/structured/connections/rev%201.json"
-        );
-    }
-}

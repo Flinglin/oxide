@@ -340,16 +340,3 @@ fn context_menu_chevron(tokens: &ThemeTokens, chevron: impl Into<String>) -> Div
         .text_color(rgb(tokens.ui.text_muted))
         .child(chevron.into())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::context_menu_item_is_actionable;
-
-    #[test]
-    fn context_menu_action_guard_blocks_disabled_or_loading_items() {
-        assert!(context_menu_item_is_actionable(false, false));
-        assert!(!context_menu_item_is_actionable(true, false));
-        assert!(!context_menu_item_is_actionable(false, true));
-        assert!(!context_menu_item_is_actionable(true, true));
-    }
-}

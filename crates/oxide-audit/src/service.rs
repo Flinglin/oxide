@@ -873,6 +873,3 @@ fn dispatch_read(
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

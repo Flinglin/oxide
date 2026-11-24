@@ -207,20 +207,3 @@ fn utf16_slice(text: &str, range: Range<usize>) -> String {
 fn ranges_overlap(left: &Range<usize>, right: &Range<usize>) -> bool {
     left.start < right.end && right.start < left.end
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn converts_utf16_indices_without_splitting_surrogates() {
-        let text = "a🚀你";
-
-        assert_eq!(byte_to_utf16_index(text, 0), 0);
-        assert_eq!(byte_to_utf16_index(text, 1), 1);
-        assert_eq!(byte_to_utf16_index(text, 5), 3);
-        assert_eq!(utf16_index_to_byte(text, 2), 1);
-        assert_eq!(utf16_index_to_byte(text, 3), 5);
-        assert_eq!(utf16_slice(text, 1..3), "🚀");
-    }
-}

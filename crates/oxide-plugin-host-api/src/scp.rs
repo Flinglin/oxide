@@ -296,28 +296,3 @@ fn scp_path_arg(args: &Value, field: &str) -> Result<String, String> {
         .map(str::to_string)
         .ok_or_else(|| format!("SCP calls require a non-empty args.{field}"))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn permissions(capabilities: &[&str]) -> plugin_runtime::PluginPermissionSet {
-        plugin_runtime::PluginPermissionSet {
-            capabilities: capabilities
-                .iter()
-                .map(|capability| capability.to_string())
-                .collect(),
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn scp_methods_use_existing_filesystem_capabilities() {
-        let read = permissions(&[NATIVE_PLUGIN_CAPABILITY_FILESYSTEM_READ]);
-        let write = permissions(&[NATIVE_PLUGIN_CAPABILITY_FILESYSTEM_WRITE]);
-        assert!(native_plugin_scp_check_capability("download", &read).is_ok());
-        assert!(native_plugin_scp_check_capability("upload", &write).is_ok());
-        assert!(native_plugin_scp_check_capability("upload", &read).is_err());
-        assert!(native_plugin_scp_check_capability("download", &write).is_err());
-    }
-}

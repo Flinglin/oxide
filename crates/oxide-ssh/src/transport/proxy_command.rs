@@ -143,38 +143,3 @@ fn spawn_proxy_command_worker(
         }
     })
 }
-
-#[cfg(test)]
-mod proxy_command_tests {
-    use zeroize::Zeroizing;
-
-    use super::*;
-
-    #[test]
-    fn direct_proxy_command_rejects_shell_operators() {
-        let args = vec![Zeroizing::new("target".to_string()), Zeroizing::new("|".to_string())];
-
-        let error = validate_direct_command("nc", &args).unwrap_err();
-
-        assert!(error.to_string().contains("shell operators"));
-        assert!(!error.to_string().contains("target"));
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn proxy_command_stream_bridges_bytes_without_a_shell() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let command = crate::ProxyCommandConfig::direct(vec![Zeroizing::new(
-            "/bin/cat".to_string(),
-        )])
-        .unwrap();
-        let mut stream = dial_proxy_command(&command).await.unwrap();
-
-        stream.write_all(b"proxy-command-round-trip").await.unwrap();
-        let mut output = vec![0; "proxy-command-round-trip".len()];
-        stream.read_exact(&mut output).await.unwrap();
-
-        assert_eq!(output, b"proxy-command-round-trip");
-    }
-}

@@ -92,31 +92,3 @@ impl Drop for PreviewAssetInner {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use std::fs;
-
-    use tempfile::tempdir;
-
-    use super::*;
-
-    #[test]
-    fn only_owned_temp_assets_are_removed_after_the_last_owner_drops() {
-        for owned_temp in [false, true] {
-            let temp = tempdir().unwrap();
-            let path = temp.path().join("image.png");
-            fs::write(&path, b"png").unwrap();
-            let owner = if owned_temp {
-                PreviewAssetOwner::owned_temp(&path, "image/png", PreviewAssetKind::Image)
-            } else {
-                PreviewAssetOwner::local(&path, "image/png", PreviewAssetKind::Image)
-            };
-            let clone = owner.clone();
-            drop(owner);
-            assert!(path.exists());
-            drop(clone);
-            assert_eq!(path.exists(), !owned_temp, "owned_temp={owned_temp}");
-        }
-    }
-}

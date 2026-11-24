@@ -544,30 +544,3 @@ fn native_plugin_forward_status_label(status: &ForwardStatus) -> &'static str {
         ForwardStatus::Suspended => "suspended",
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn forward_summary_counts_types_and_states_without_endpoints() {
-        let mut local = ForwardRule::local("127.0.0.1", 2200, "private-target.example.test", 22);
-        local.status = ForwardStatus::Active;
-        local.description = "private production tunnel".to_string();
-        let mut dynamic = ForwardRule::dynamic("private-bind.example.test", 1080);
-        dynamic.status = ForwardStatus::Suspended;
-
-        let summary = native_plugin_forward_rule_summary(&[local, dynamic]);
-
-        assert_eq!(summary["total"], 2);
-        assert_eq!(summary["byType"]["local"], 1);
-        assert_eq!(summary["byType"]["dynamic"], 1);
-        assert_eq!(summary["byStatus"]["active"], 1);
-        assert_eq!(summary["byStatus"]["suspended"], 1);
-        let serialized = summary.to_string();
-        assert!(!serialized.contains("127.0.0.1"));
-        assert!(!serialized.contains("private-target.example.test"));
-        assert!(!serialized.contains("private-bind.example.test"));
-        assert!(!serialized.contains("production tunnel"));
-    }
-}

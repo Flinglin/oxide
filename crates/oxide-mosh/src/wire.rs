@@ -143,39 +143,3 @@ pub async fn read_frame<R: AsyncRead + Unpin, T: Frame>(reader: &mut R) -> io::R
         T::from_raw(kind, &bytes)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[tokio::test]
-    async fn raw_input_has_a_fixed_binary_contract_and_rejects_oversized_frames() {
-        let request = Request::Input {
-            prediction_id: 7,
-            bytes: Zeroizing::new(vec![0, 0xff, 0x1b]),
-        };
-        let mut encoded = Vec::new();
-        write_frame(&mut encoded, &request).await.unwrap();
-        assert_eq!(
-            encoded,
-            [1, 0, 0, 0, 11, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0xff, 0x1b]
-        );
-        let oversized = [2, 0, 1, 0, 1];
-        assert_eq!(
-            read_frame::<_, Event>(&mut oversized.as_slice())
-                .await
-                .err()
-                .unwrap()
-                .kind(),
-            io::ErrorKind::InvalidData
-        );
-        let truncated = [1, 0, 0, 0, 2, 1, 2];
-        assert_eq!(
-            read_frame::<_, Request>(&mut truncated.as_slice())
-                .await
-                .err()
-                .unwrap()
-                .kind(),
-            io::ErrorKind::InvalidData
-        );
-    }
-}

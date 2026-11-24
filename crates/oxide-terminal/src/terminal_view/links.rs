@@ -59,21 +59,6 @@ pub(crate) fn is_link_interactive_cell(cell: &TerminalCell) -> bool {
     !cell.style_origin.background_explicit()
 }
 
-#[cfg(test)]
-pub(crate) fn display_link_ranges_with_path_detection(
-    snapshot: &TerminalSnapshot,
-    detect_file_paths: bool,
-) -> Vec<TerminalLinkRange> {
-    filter_display_link_ranges(
-        snapshot,
-        detect_link_ranges_for_rows_with_path_detection(
-            snapshot,
-            0..snapshot.lines.len(),
-            detect_file_paths,
-        ),
-    )
-}
-
 pub(crate) fn display_link_ranges_for_rows_with_path_detection(
     snapshot: &TerminalSnapshot,
     rows: Range<usize>,

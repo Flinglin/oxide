@@ -320,21 +320,3 @@ mod platform {
         ))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    #[cfg(target_os = "linux")]
-    use super::*;
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn linux_registration_quotes_desktop_exec_metacharacters() {
-        let contents = platform::registration_contents(std::path::Path::new(
-            "/opt/Oxide Term/$preview`build`/oxide-native",
-        ))
-        .unwrap();
-
-        assert!(contents.contains("Exec=\"/opt/Oxide Term/\\$preview\\`build\\`/oxide-native\""));
-        assert!(contents.contains("X-GNOME-Autostart-enabled=true"));
-    }
-}

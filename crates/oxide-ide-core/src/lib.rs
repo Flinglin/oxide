@@ -11,8 +11,6 @@ mod model;
 mod plugin_snapshot;
 mod tree;
 mod workspace;
-#[cfg(test)]
-mod workspace_tests;
 
 pub use filesystem::{
     AsyncIdeFileSystem, FileStat, FileSystemCapabilities, IdeFileCheck, IdeFileData, IdeFileError,

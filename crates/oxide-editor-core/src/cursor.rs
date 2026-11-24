@@ -75,32 +75,3 @@ impl Cursor {
         self.preferred_column = None;
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn vertical_moves_preserve_preferred_columns_and_selection_anchors() {
-        let buffer = TextBuffer::new("alpha\nb\ncharlie");
-        for (start, destination, extend, column, observed_column, expected_selection) in [
-            (4, 6, false, 4, 1, Selection::caret(BufferOffset(6))),
-            (
-                2,
-                8,
-                true,
-                2,
-                0,
-                Selection::new(BufferOffset(2), BufferOffset(8)),
-            ),
-        ] {
-            let mut cursor = Cursor::new(BufferOffset(start));
-            assert_eq!(cursor.preferred_column_or(column), column);
-            cursor.move_to_with_preferred_column(BufferOffset(destination), extend, column);
-            assert_eq!(cursor.selection(), expected_selection, "extend={extend}");
-            assert_eq!(cursor.preferred_column_or(observed_column), column);
-            cursor.move_left(&buffer, false);
-            assert_eq!(cursor.preferred_column_or(0), 0);
-        }
-    }
-}

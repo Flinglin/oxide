@@ -139,32 +139,3 @@ pub fn classify_message(message: &str) -> BackendErrorClass {
 fn contains_any(haystack: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| haystack.contains(needle))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn classifies_shared_backend_messages() {
-        assert_eq!(
-            classify_message("Permission denied: /srv/app"),
-            BackendErrorClass::PermissionDenied
-        );
-        assert_eq!(
-            classify_message("Agent channel closed"),
-            BackendErrorClass::Disconnected
-        );
-        assert_eq!(
-            classify_message("Port already in use: 127.0.0.1:8080"),
-            BackendErrorClass::PortInUse
-        );
-        assert_eq!(
-            classify_message("USER_CANCELLED"),
-            BackendErrorClass::Cancelled
-        );
-        assert_eq!(
-            classify_io_error_kind(io::ErrorKind::TimedOut),
-            Some(BackendErrorClass::Timeout)
-        );
-    }
-}

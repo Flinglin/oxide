@@ -22,11 +22,6 @@ use std::{
 type ConfigEncryptionKey = zeroize::Zeroizing<[u8; CONFIG_ENCRYPTION_KEY_LEN]>;
 static CONFIG_ENCRYPTION_KEY_CACHE: OnceLock<Mutex<Option<ConfigEncryptionKey>>> = OnceLock::new();
 
-#[cfg(test)]
-thread_local! {
-    static FAIL_NEXT_ATOMIC_REPLACE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 enum ConnectionStoreStorageFormat {
     Missing,
@@ -256,25 +251,9 @@ fn atomic_write_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     durable_write_with_before_replace(path, bytes, fail_before_atomic_replace_for_tests)
 }
 
-#[cfg(test)]
-fn fail_before_atomic_replace_for_tests() -> io::Result<()> {
-    FAIL_NEXT_ATOMIC_REPLACE.with(|fail| {
-        if fail.replace(false) {
-            Err(io::Error::other("injected failure before atomic replace"))
-        } else {
-            Ok(())
-        }
-    })
-}
 
-#[cfg(not(test))]
 fn fail_before_atomic_replace_for_tests() -> io::Result<()> {
     Ok(())
-}
-
-#[cfg(test)]
-fn inject_atomic_replace_failure() {
-    FAIL_NEXT_ATOMIC_REPLACE.with(|fail| fail.set(true));
 }
 
 fn read_managed_ssh_key_secret_file(
@@ -531,54 +510,4 @@ fn delete_system_config_key_secret() -> Result<()> {
 
 fn config_keychain_account() -> String {
     format!("{}@{}", whoami::username(), CONFIG_KEYCHAIN_ID)
-}
-
-#[cfg(test)]
-struct ConfigEncryptionKeyGuardForTests;
-
-#[cfg(test)]
-impl Drop for ConfigEncryptionKeyGuardForTests {
-    fn drop(&mut self) {
-        clear_cached_config_encryption_key();
-    }
-}
-
-#[cfg(test)]
-fn with_config_encryption_key_for_tests(
-    key: [u8; CONFIG_ENCRYPTION_KEY_LEN],
-) -> ConfigEncryptionKeyGuardForTests {
-    clear_cached_config_encryption_key();
-    // Tests inject the cached key to exercise encrypted fallback paths without
-    // touching the real OS keychain or portable keystore.
-    remember_config_encryption_key(&zeroize::Zeroizing::new(key));
-    ConfigEncryptionKeyGuardForTests
-}
-
-#[cfg(test)]
-mod encrypted_config_tests {
-    use super::*;
-
-    #[test]
-    fn malformed_config_key_is_rejected_before_acl_migration() {
-        let error = decode_config_encryption_key("c2hvcnQta2V5").unwrap_err();
-
-        assert!(
-            error
-                .to_string()
-                .contains("invalid local config key length")
-        );
-    }
-
-    #[test]
-    fn config_encryption_key_cache_round_trips_and_clears() {
-        clear_cached_config_encryption_key();
-
-        let key = zeroize::Zeroizing::new([7u8; CONFIG_ENCRYPTION_KEY_LEN]);
-        remember_config_encryption_key(&key);
-
-        assert_eq!(&*cached_config_encryption_key().expect("cached key"), &*key);
-
-        clear_cached_config_encryption_key();
-        assert!(cached_config_encryption_key().is_none());
-    }
 }

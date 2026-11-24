@@ -1,4 +1,4 @@
-// oxide modification: recover pointer state, complete hit testing, and pace draw wakeups.
+// OxideTerm modification: recover pointer state, complete hit testing, and pace draw wakeups.
 
 use std::{cell::Cell, rc::Rc, sync::atomic::Ordering};
 

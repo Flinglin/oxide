@@ -711,14 +711,6 @@ pub(super) fn default_upstream_proxy_form_fields(
     }
 }
 
-#[cfg(test)]
-pub(in crate::workspace) fn save_request_from_form(
-    form: &mut NewConnectionForm,
-    id: Option<String>,
-) -> anyhow::Result<SaveConnectionRequest> {
-    save_request_from_form_with_proxy_hop_prefix(form, &mut [], id)
-}
-
 pub(in crate::workspace) fn save_request_from_form_with_proxy_hop_prefix(
     form: &mut NewConnectionForm,
     proxy_hop_prefix: &mut [NewConnectionProxyHop],

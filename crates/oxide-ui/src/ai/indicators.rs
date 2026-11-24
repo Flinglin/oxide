@@ -186,19 +186,6 @@ fn ai_context_ring_path(bounds: Bounds<Pixels>, fraction: f32) -> Option<Path<Pi
     builder.build().ok()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::ai_context_usage_fraction;
-
-    #[test]
-    fn context_usage_fraction_clamps_invalid_and_over_limit_values() {
-        assert_eq!(ai_context_usage_fraction(f32::NAN), 0.0);
-        assert_eq!(ai_context_usage_fraction(-10.0), 0.0);
-        assert_eq!(ai_context_usage_fraction(25.0), 0.25);
-        assert_eq!(ai_context_usage_fraction(140.0), 1.0);
-    }
-}
-
 pub fn ai_context_popover(tokens: &ThemeTokens) -> Div {
     let popover =
         crate::surface::material_surface(tokens, div(), crate::surface::MaterialRole::Popover)

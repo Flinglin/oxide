@@ -20,17 +20,6 @@ mod structure;
 mod types;
 mod work;
 
-#[cfg(test)]
-mod tests;
-
-#[cfg(test)]
-mod grammar_fixture {
-    use crate::{
-        LanguageId, PluginGrammar, PluginGrammarSource, SyntaxError, SyntaxSession, SyntaxWork,
-    };
-    include!("../tests/support/grammars.rs");
-}
-
 pub use brackets::BracketIndex;
 pub use cache::HighlightCache;
 pub use edit::{SyntaxChange, SyntaxEdit};

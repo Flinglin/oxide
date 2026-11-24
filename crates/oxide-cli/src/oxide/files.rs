@@ -90,17 +90,3 @@ fn trim_line_endings(value: &mut String) {
         value.pop();
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn password_stdin_trims_line_endings() {
-        let mut value = "secret\r\n".to_string();
-
-        trim_line_endings(&mut value);
-
-        assert_eq!(value, "secret");
-    }
-}

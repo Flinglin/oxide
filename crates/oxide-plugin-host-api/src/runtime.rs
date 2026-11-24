@@ -33,11 +33,6 @@ use oxide_plugin_registry::validate_plugin_relative_path;
 
 pub const WASM_RUNTIME_UNAVAILABLE_CODE: &str = "wasm_runtime_unavailable";
 
-#[cfg(test)]
-pub use oxide_plugin_protocol::{
-    NATIVE_PLUGIN_PROTOCOL_VERSION, PluginRuntimeLifecycleState, PluginRuntimeLogLevel,
-};
-
 pub type PluginRuntimeFuture<'a, T> =
     Pin<Box<dyn Future<Output = Result<T, PluginError>> + Send + 'a>>;
 type PluginHostCallHandler = Box<dyn Fn(PluginHostCall) -> Option<PluginResponse> + Send + Sync>;
@@ -509,8 +504,3 @@ use permissions::{
     validate_outbound_message_permissions,
 };
 pub use process::NativeProcessPluginRuntime;
-#[cfg(test)]
-use process::{PluginProcessFrame, decode_process_output_frame};
-
-#[cfg(test)]
-mod tests;

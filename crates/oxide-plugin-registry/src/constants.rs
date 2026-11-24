@@ -4,8 +4,6 @@ pub(crate) const PLUGINS_DIR_NAME: &str = "plugins";
 pub(crate) const PLUGIN_CONFIG_FILENAME: &str = "plugin-config.json";
 pub(crate) const PLUGIN_CONFIG_CORRUPT_MARKER: &str = "corrupt";
 pub(crate) const PLUGIN_MANIFEST_FILENAME: &str = "plugin.json";
-#[cfg(test)]
-pub(crate) const PLUGIN_CONFIG_SCHEMA_VERSION: u32 = 1;
 pub(crate) const PLUGIN_STORAGE_MAX_KEY_BYTES: usize = 256;
 pub(crate) const PLUGIN_STORAGE_MAX_PLUGIN_BYTES: usize = 256 * 1024;
 #[allow(dead_code)]

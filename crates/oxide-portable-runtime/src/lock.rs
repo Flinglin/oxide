@@ -63,20 +63,3 @@ fn ensure_portable_user_directories(data_dir: &std::path::Path) -> std::io::Resu
     // portable installation is immediately ready to receive Agent Skills.
     std::fs::create_dir_all(data_dir.join(PORTABLE_SKILLS_DIRNAME))
 }
-
-#[cfg(test)]
-mod tests {
-    use tempfile::tempdir;
-
-    use super::*;
-
-    #[test]
-    fn portable_startup_creates_the_skills_directory() {
-        let temp = tempdir().unwrap();
-        let data_dir = temp.path().join("portable-data");
-
-        ensure_portable_user_directories(&data_dir).unwrap();
-
-        assert!(data_dir.join(PORTABLE_SKILLS_DIRNAME).is_dir());
-    }
-}

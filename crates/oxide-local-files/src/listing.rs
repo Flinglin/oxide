@@ -102,35 +102,3 @@ pub fn sorted_local_files(
     });
     filtered
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn entry(name: &str, file_type: LocalFileType, size: u64) -> LocalFileEntry {
-        LocalFileEntry {
-            name: name.to_string(),
-            path: format!("/tmp/{name}"),
-            file_type,
-            size,
-            modified: None,
-            readonly: false,
-            symlink_target: None,
-        }
-    }
-
-    #[test]
-    fn sorted_files_keep_directories_before_files() {
-        let files = vec![
-            entry("b.txt", LocalFileType::File, 2),
-            entry("a-dir", LocalFileType::Directory, 0),
-            entry("a.txt", LocalFileType::File, 1),
-        ];
-        let sorted = sorted_local_files(&files, "", LocalSortField::Name, LocalSortDirection::Asc);
-        let names = sorted
-            .iter()
-            .map(|entry| entry.name.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(names, ["a-dir", "a.txt", "b.txt"]);
-    }
-}

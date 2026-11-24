@@ -1,5 +1,5 @@
 #![deny(unsafe_op_in_unsafe_fn)]
-// oxide modification: complete native move, resize, owner, and modal-failure handling.
+// OxideTerm modification: complete native move, resize, owner, and modal-failure handling.
 
 use std::{
     cell::{Cell, RefCell},

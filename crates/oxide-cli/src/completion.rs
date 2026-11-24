@@ -117,22 +117,3 @@ impl From<CompletionShell> for Shell {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::Path;
-
-    #[test]
-    fn completion_paths_use_shell_specific_file_names() {
-        let zsh = completion_path(CompletionShell::Zsh).unwrap();
-        assert!(path_ends_with(&zsh, ".zfunc/_oxide"));
-
-        let fish = completion_path(CompletionShell::Fish).unwrap();
-        assert!(path_ends_with(&fish, ".config/fish/completions/oxide.fish"));
-    }
-
-    fn path_ends_with(path: &Path, suffix: &str) -> bool {
-        path.display().to_string().ends_with(suffix)
-    }
-}

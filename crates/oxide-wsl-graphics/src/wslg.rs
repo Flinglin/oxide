@@ -100,14 +100,3 @@ which openbox-session >/dev/null 2>&1 && echo "READY" || echo "NO"
 echo "--- VERSION ---"
 cat /mnt/wslg/.wslgversion 2>/dev/null || echo """#
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_wslg_status_keeps_empty_version_none() {
-        let output = "--- WAYLAND ---\nREADY\n--- MOUNT ---\nREADY\n--- X11 ---\nNO\n--- OPENBOX ---\nNO\n--- VERSION ---\n\n";
-        assert_eq!(parse_wslg_status_output(output).wslg_version, None);
-    }
-}

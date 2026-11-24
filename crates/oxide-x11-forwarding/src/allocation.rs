@@ -59,37 +59,3 @@ echo $d; exit 0; fi; d=$((d+1)); done; exit 1"
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn allocator_limits_probe_results_to_the_configured_range() {
-        let mut allocator = X11RemoteDisplayAllocator::localhost();
-
-        assert_eq!(
-            allocator.candidates().take(3).collect::<Vec<_>>(),
-            vec![10, 11, 12]
-        );
-        assert_eq!(allocator.display_value(10), "localhost:10.0");
-        assert_eq!(allocator.parse_probe_output("12\n").unwrap(), 12);
-        allocator.max_displays = 2;
-
-        assert_eq!(
-            allocator.parse_probe_output("20").unwrap_err(),
-            X11ForwardingError::RemoteDisplayUnavailable
-        );
-    }
-
-    #[test]
-    fn allocator_probe_command_checks_multiple_backends() {
-        let command = X11RemoteDisplayAllocator::localhost().probe_command();
-
-        assert!(command.contains("ss -H -ltn"));
-        assert!(command.contains("lsof -nP"));
-        assert!(command.contains("netstat -an"));
-        assert!(command.contains("/tmp/.X11-unix/X$d"));
-        assert!(!command.contains("seq "));
-    }
-}

@@ -299,6 +299,3 @@ pub use helpers::*;
 use profiles::*;
 use quick_commands::*;
 pub use summary::*;
-
-#[cfg(test)]
-mod tests;

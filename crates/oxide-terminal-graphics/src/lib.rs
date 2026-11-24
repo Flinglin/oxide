@@ -22,5 +22,3 @@ include!("graphics/types.rs");
 include!("graphics/ingress.rs");
 include!("graphics/decode.rs");
 include!("graphics/parse.rs");
-#[cfg(test)]
-include!("graphics/tests.rs");

@@ -3,7 +3,7 @@ use crate::syntax;
 use crate::{
     CompiledSemanticScheme, SemanticClass, SemanticLineRole, SemanticScheme, SemanticShellDialect,
     SemanticSpan, command::ParsedCommand, compiler, container, filesystem, git, network,
-    permissions, ps, resources, scheme, systemd, test_runner,
+    permissions, ps, resources, scheme, systemd,
 };
 
 // Severity metadata belongs in the log envelope; bounding it prevents payload text from promotion.
@@ -51,8 +51,7 @@ pub fn semantic_output_role_for_command(command: &str) -> SemanticLineRole {
     let Some(command) = ParsedCommand::parse(command) else {
         return SemanticLineRole::Output;
     };
-    test_runner::output_role_for_command(&command)
-        .or_else(|| compiler::output_role_for_command(&command))
+    compiler::output_role_for_command(&command)
         .or_else(|| git::output_role_for_command(&command))
         .or_else(|| systemd::output_role_for_command(&command))
         .or_else(|| container::output_role_for_command(&command))
@@ -277,9 +276,6 @@ pub fn classify_line_with_scheme(
     candidates.extend(systemd::line_candidates(text, role, |class| {
         semantic_scheme.includes(class)
     }));
-    candidates.extend(test_runner::line_candidates(text, role, |class| {
-        semantic_scheme.includes(class)
-    }));
     candidates.extend(container::line_candidates(text, role, |class| {
         semantic_scheme.includes(class)
     }));
@@ -328,9 +324,6 @@ pub fn classify_line_with_compiled_scheme_and_shell(
         semantic_scheme.contains_rule_class(class)
     }));
     candidates.extend(systemd::line_candidates(text, role, |class| {
-        semantic_scheme.contains_rule_class(class)
-    }));
-    candidates.extend(test_runner::line_candidates(text, role, |class| {
         semantic_scheme.contains_rule_class(class)
     }));
     candidates.extend(container::line_candidates(text, role, |class| {

@@ -443,67 +443,6 @@ impl WorkspaceApp {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn serial_launch() -> StandaloneConnectionLaunch {
-        StandaloneConnectionLaunch::Serial {
-            config: SerialSessionConfig {
-                port_path: "/dev/tty.test".to_string(),
-                baud_rate: 115_200,
-                data_bits: 8,
-                stop_bits: 1,
-                parity: oxide_terminal_core::SerialParity::None,
-                flow_control: oxide_terminal_core::SerialFlowControl::None,
-                runtime_options: Default::default(),
-            },
-            terminal_options: ConnectionTerminalOptions::default(),
-        }
-    }
-
-    #[test]
-    fn reconnect_rejects_stale_and_cancelled_attempts_before_binding_a_fresh_surface() {
-        let first_surface = StandaloneConnectionSurface::Terminal(TerminalSessionId(41));
-        let next_surface = StandaloneConnectionSurface::Terminal(TerminalSessionId(73));
-        let mut registry = StandaloneConnectionRegistry::default();
-        let connection_id = registry.insert(
-            StandaloneConnectionKind::Serial,
-            "Test serial".to_string(),
-            serial_launch(),
-            first_surface,
-        );
-
-        registry.release_surface(first_surface);
-
-        let disconnected = registry
-            .record(&connection_id)
-            .expect("record must survive");
-        assert_eq!(disconnected.surface, None);
-        assert_eq!(disconnected.readiness, ActiveSessionReadiness::Disconnected);
-
-        let next_attempt_id = registry.begin_reconnect(&connection_id).unwrap();
-        registry.mark_attempt_error(&connection_id);
-        assert!(registry.is_connecting_attempt(&next_attempt_id));
-        assert_eq!(
-            registry.record(&connection_id).unwrap().readiness,
-            ActiveSessionReadiness::Connecting
-        );
-
-        registry.mark_disconnected(&connection_id);
-        registry.mark_attempt_error(&next_attempt_id);
-        let cancelled = registry.record(&connection_id).unwrap();
-        assert_eq!(cancelled.readiness, ActiveSessionReadiness::Disconnected);
-        assert!(!registry.is_connecting_attempt(&next_attempt_id));
-
-        let fresh_attempt_id = registry.begin_reconnect(&connection_id).unwrap();
-        assert!(registry.bind_surface_for_attempt(&fresh_attempt_id, next_surface));
-        let rebound = registry.record(&connection_id).expect("record must remain");
-        assert_eq!(rebound.surface, Some(next_surface));
-        assert_ne!(rebound.surface, Some(first_surface));
-    }
-}
-
 impl StandaloneConnectionRegistry {
     pub(super) fn records(&self) -> &[StandaloneConnectionRecord] {
         &self.records

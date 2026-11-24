@@ -361,7 +361,7 @@ pub struct Term<T> {
 
     /// Information about damaged cells.
     damage: TermDamageState,
-      resize_generation: u64,
+    resize_generation: u64,
 
     /// Config directly for the terminal.
     config: Config,
@@ -465,7 +465,7 @@ impl<T> Term<T> {
             scroll_region,
             event_proxy,
             damage,
-             resize_generation: 0,
+            resize_generation: 0,
             config,
             grid,
             tabs,
@@ -690,7 +690,8 @@ impl<T> Term<T> {
     pub fn grid(&self) -> &Grid<Cell> {
         &self.grid
     }
- /// Primary-screen annotations survive a resize while an alternate screen is active.
+
+    /// Primary-screen annotations survive a resize while an alternate screen is active.
     pub fn primary_grid(&self) -> &Grid<Cell> {
         if self.mode.contains(TermMode::ALT_SCREEN) {
             &self.inactive_grid
@@ -702,6 +703,7 @@ impl<T> Term<T> {
     pub fn resize_generation(&self) -> u64 {
         self.resize_generation
     }
+
     /// Alternate-screen scrolling must not move primary-screen annotations.
     pub fn primary_scrolled_out_lines(&self) -> usize {
         if self.mode.contains(TermMode::ALT_SCREEN) {
@@ -753,7 +755,8 @@ impl<T> Term<T> {
         }
 
         debug!("New num_cols is {num_cols} and num_lines is {num_lines}");
-  self.resize_generation = self.resize_generation.wrapping_add(1);
+        self.resize_generation = self.resize_generation.wrapping_add(1);
+
         // Move vi mode cursor with the content.
         let history_size = self.history_size();
         let mut delta = num_lines as i32 - old_lines as i32;
@@ -1976,11 +1979,11 @@ impl<T: EventListener> Handler for Term<T> {
             _ => return,
         };
 
-        if let Ok(bytes) = Base64.decode(base64) {
-            if let Ok(text) = String::from_utf8(bytes) {
+        if let Ok(bytes) = Base64.decode(base64)
+            && let Ok(text) = String::from_utf8(bytes) {
                 self.event_proxy.send_event(Event::ClipboardStore(clipboard_type, text));
             }
-        }
+
     }
 
     /// Load data from clipboard.
@@ -2609,7 +2612,7 @@ impl TabStops {
     fn resize(&mut self, columns: usize) {
         let mut index = self.tabs.len();
         self.tabs.resize_with(columns, || {
-            let is_tabstop = index % INITIAL_TABSTOPS == 0;
+            let is_tabstop = index.is_multiple_of(INITIAL_TABSTOPS);
             index += 1;
             is_tabstop
         });

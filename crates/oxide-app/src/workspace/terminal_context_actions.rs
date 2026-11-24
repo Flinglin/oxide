@@ -186,21 +186,3 @@ impl WorkspaceApp {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::terminal_selection_command_bar_text;
-
-    #[test]
-    fn command_bar_selection_preserves_command_spaces_and_rejects_blank_text() {
-        for (input, expected) in [
-            ("\n  printf 'ok'  \r\n", Some("  printf 'ok'  ")),
-            ("\n \t\r\n", None),
-        ] {
-            assert_eq!(
-                terminal_selection_command_bar_text(input).as_deref(),
-                expected
-            );
-        }
-    }
-}

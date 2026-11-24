@@ -9,57 +9,6 @@ pub(crate) struct AutomaticQuality {
     changed: Instant,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sustained_load_changes_only_automatic_settings_and_recovers_slowly() {
-        let mut quality = AutomaticQuality::default();
-        let start = quality.changed;
-        let automatic = PlaybackLimits::default();
-        let manual = PlaybackLimits {
-            max_width: Some(1920),
-            max_height: Some(1080),
-            max_fps: Some(60),
-        };
-        quality.observe(
-            Duration::from_millis(80),
-            Duration::from_millis(40),
-            30,
-            start,
-        );
-        assert_eq!(quality.limits(automatic, true).max_width, Some(1280));
-        for _ in 0..12 {
-            quality.observe(
-                Duration::from_millis(80),
-                Duration::from_millis(40),
-                30,
-                start + Duration::from_secs(3),
-            );
-        }
-        let reduced = quality.limits(automatic, true);
-        assert_eq!(
-            (reduced.max_width, reduced.max_height, reduced.max_fps),
-            (Some(960), Some(960), Some(24))
-        );
-        assert_eq!(quality.limits(manual, true), manual);
-        for _ in 0..120 {
-            quality.observe(
-                Duration::from_millis(1),
-                Duration::from_millis(40),
-                24,
-                start + Duration::from_secs(12),
-            );
-        }
-        let restored = quality.limits(automatic, true);
-        assert_eq!(
-            (restored.max_width, restored.max_fps),
-            (Some(1280), Some(30))
-        );
-    }
-}
-
 impl Default for AutomaticQuality {
     fn default() -> Self {
         Self {

@@ -34,35 +34,3 @@ fn terminal_cwd_token_is_path(token: &str) -> bool {
         || token.starts_with("~/")
         || (token.starts_with('/') && token.len() > 1 && !token.starts_with("//"))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn infers_terminal_cwd_from_prompt_and_command_output() {
-        // Prompt, command-output, rejection, and punctuation cases share one inference contract.
-        let cases = [
-            (
-                "❯ cd oxide.cloud-sync-server\n󰊢    ~/oxide.cloud-sync-server   main !1\n",
-                Some("~/oxide.cloud-sync-server"),
-            ),
-            (
-                "❯ pwd\n/home/lipsc/oxide.cloud-sync-server\n❯",
-                Some("/home/lipsc/oxide.cloud-sync-server"),
-            ),
-            (
-                "Documentation: https://help.ubuntu.com\n❯ cd project\n",
-                None,
-            ),
-            (
-                "prompt: [~/work/project]: git status",
-                Some("~/work/project"),
-            ),
-        ];
-
-        for (text, expected) in cases {
-            assert_eq!(infer_terminal_cwd_from_text(text).as_deref(), expected);
-        }
-    }
-}

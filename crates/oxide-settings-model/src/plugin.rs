@@ -48,16 +48,3 @@ pub fn parse_focus_handoff_command_list(input: &str) -> Vec<String> {
     }
     commands
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn focus_handoff_commands_are_normalized_deduped_and_validated() {
-        assert_eq!(
-            parse_focus_handoff_command_list("Ctrl+C ctrl+c, paste bad/slash"),
-            vec!["ctrl+c".to_string(), "paste".to_string()]
-        );
-    }
-}

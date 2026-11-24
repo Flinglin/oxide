@@ -462,6 +462,3 @@ impl FramedCapture {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

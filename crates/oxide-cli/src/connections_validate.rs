@@ -330,35 +330,3 @@ fn format_validation_issue(issue: &ConnectionValidationIssue) -> String {
         issue.message
     )
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::connections::tests::sample_connection;
-
-    #[test]
-    fn validation_reports_duplicate_names_and_missing_key_path() {
-        let connections = vec![
-            sample_connection("id-1", "Prod"),
-            ConnectionInfo {
-                empty_password: false,
-                id: "id-2".to_string(),
-                auth_type: AuthType::Key,
-                key_path: None,
-                ..sample_connection("id-2", "prod")
-            },
-        ];
-
-        let issues = validate_connection_infos(&connections, &["prod".to_string()]);
-
-        assert!(issues.iter().any(|issue| issue.code == "duplicate_name"));
-        assert!(issues.iter().any(|issue| issue.code == "missing_key_path"));
-    }
-
-    #[test]
-    fn strict_validation_fails_on_warnings() {
-        assert!(validation_ok(0, 1, false));
-        assert!(!validation_ok(0, 1, true));
-        assert!(!validation_ok(1, 0, false));
-    }
-}

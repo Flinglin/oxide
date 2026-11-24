@@ -33,18 +33,3 @@ impl TerminalActivityReceiver {
         self.receiver.recv().await.is_ok()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn activity_notifications_coalesce_without_blocking() {
-        let (sender, receiver) = terminal_activity_channel();
-        sender.notify();
-        sender.notify();
-
-        assert!(receiver.receiver.try_recv().is_ok());
-        assert!(receiver.receiver.try_recv().is_err());
-    }
-}

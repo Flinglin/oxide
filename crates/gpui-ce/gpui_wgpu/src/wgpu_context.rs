@@ -1,4 +1,4 @@
-// oxide modification: provide product-scoped GPU backend selection and deterministic fallback ordering.
+// OxideTerm modification: provide product-scoped GPU backend selection and deterministic fallback ordering.
 
 #[cfg(not(target_family = "wasm"))]
 use anyhow::Context as _;
@@ -10,9 +10,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use wgpu::TextureFormat;
 
 #[cfg(not(target_family = "wasm"))]
-const GPU_BACKEND_ENV: &str = "OXIDE_GPU_BACKEND";
+const GPU_BACKEND_ENV: &str = "OXIDETERM_GPU_BACKEND";
 #[cfg(not(target_family = "wasm"))]
-const GPU_DEVICE_ID_ENV: &str = "OXIDE_GPU_DEVICE_ID";
+const GPU_DEVICE_ID_ENV: &str = "OXIDETERM_GPU_DEVICE_ID";
 
 pub struct WgpuContext {
     pub instance: wgpu::Instance,
@@ -109,7 +109,7 @@ impl BackendPreference {
 
 #[cfg(all(not(target_family = "wasm"), target_os = "windows"))]
 fn auto_backends() -> wgpu::Backends {
-    // Preserve the upstream optional Windows WGPU path; oxide's Vulkan/GL fallback is Linux-only.
+    // Preserve the upstream optional Windows WGPU path; OxideTerm's Vulkan/GL fallback is Linux-only.
     wgpu::Backends::DX12
 }
 
@@ -669,7 +669,7 @@ impl WgpuContext {
 
     /// Sort adapters into a single priority order. Tiers (from highest to lowest):
     ///
-    /// 1. OXIDE_GPU_DEVICE_ID match — explicit user override
+    /// 1. OXIDETERM_GPU_DEVICE_ID match — explicit user override
     /// 2. Compositor GPU match — the GPU the display server is rendering on
     /// 3. Device type (Discrete > Integrated > Other > Virtual > Cpu).
     ///    "Other" ranks above "Virtual" because OpenGL seems to count as "Other".

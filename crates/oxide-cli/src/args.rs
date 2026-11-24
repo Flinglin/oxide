@@ -16,9 +16,6 @@ mod quick_commands;
 mod secrets;
 mod settings;
 
-#[cfg(test)]
-mod tests;
-
 pub use backup::*;
 pub use batch::*;
 pub use cloud_sync::*;

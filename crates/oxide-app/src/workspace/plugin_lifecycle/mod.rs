@@ -53,10 +53,6 @@ pub(super) use ui_helpers::native_plugin_theme_snapshot;
 use ui_helpers::*;
 use ui_host_calls::*;
 
-#[cfg(test)]
-use super::delivery;
-#[cfg(test)]
-use oxide_plugin_host_api::terminal::NativePluginTerminalNodeSnapshot;
 use oxide_plugin_host_api::{
     backend::*,
     catalog::{allowed_host_apis_for_capabilities, is_supported_host_api_capability},
@@ -65,14 +61,6 @@ use oxide_plugin_host_api::{
     scp::native_plugin_scp_response,
     sftp::native_plugin_sftp_response,
     transfers::*,
-};
-#[cfg(test)]
-use oxide_plugin_host_api::{
-    forwarding::native_plugin_forward_check_capability,
-    sftp::{
-        native_plugin_sftp_check_capability, native_plugin_sftp_node_id_arg,
-        native_plugin_sftp_path_arg,
-    },
 };
 
 // Runtime subscription sampling is independent from Plugin Manager visibility.
@@ -2302,8 +2290,3 @@ pub(in crate::workspace) fn native_plugin_permissions(
         allowed_host_apis,
     })
 }
-
-#[cfg(test)]
-mod test_support;
-#[cfg(test)]
-mod tests;

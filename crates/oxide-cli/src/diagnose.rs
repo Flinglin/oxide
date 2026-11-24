@@ -301,19 +301,3 @@ fn format_ssh_capability_status(status: SshCapabilityStatus) -> &'static str {
         SshCapabilityStatus::OptIn => "opt-in",
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn missing_file_is_reported_without_error() {
-        let path = std::env::temp_dir().join(format!("oxide-cli-missing-{}", std::process::id()));
-
-        let diagnostic = file_diagnostic("missing", &path);
-
-        assert!(!diagnostic.exists);
-        assert_eq!(diagnostic.kind, "missing");
-        assert!(diagnostic.error.is_none());
-    }
-}

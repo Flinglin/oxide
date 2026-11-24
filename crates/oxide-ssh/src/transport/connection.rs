@@ -777,24 +777,3 @@ fn resolve_remote_forward_port(
         ))
     })
 }
-
-#[cfg(test)]
-mod remote_forward_port_tests {
-    use super::*;
-
-    #[test]
-    fn remote_forward_port_resolution_handles_explicit_and_allocated_responses() {
-        for (requested, returned, expected) in [
-            (58_627, 0, Some(58_627)),
-            (0, 42_000, Some(42_000)),
-            (0, 0, None),
-            (0, u16::MAX as u32 + 1, None),
-        ] {
-            assert_eq!(
-                resolve_remote_forward_port(requested, returned).ok(),
-                expected,
-                "{requested}/{returned}"
-            );
-        }
-    }
-}

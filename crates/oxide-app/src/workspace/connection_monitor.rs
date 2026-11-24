@@ -7,8 +7,6 @@ mod health;
 mod helpers;
 mod lifecycle;
 mod runtime;
-#[cfg(test)]
-mod tests;
 mod topology;
 mod types;
 

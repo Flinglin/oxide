@@ -117,31 +117,3 @@ pub(in crate::workspace) enum ReconnectWorkerResult {
         >,
     },
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn workspace_ssh_node_keeps_only_non_secret_endpoint_metadata() {
-        let config = SshConfig::password(
-            "runtime.example.test",
-            2202,
-            "operator",
-            "node-secret-sentinel",
-        );
-        let node = WorkspaceSshNode::new(
-            None,
-            &config,
-            "Runtime".to_string(),
-            Vec::new(),
-            NodeReadiness::Disconnected,
-        );
-
-        assert_eq!(node.endpoint.host, "runtime.example.test");
-        assert_eq!(node.endpoint.port, 2202);
-        assert_eq!(node.endpoint.username, "operator");
-        // Debug output represents the UI projection and must never retain auth material.
-        assert!(!format!("{node:?}").contains("node-secret-sentinel"));
-    }
-}

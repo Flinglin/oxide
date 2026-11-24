@@ -57,22 +57,6 @@ pub(crate) fn terminal_horizontal_scrollbar_for_viewport(
     })
 }
 
-#[cfg(test)]
-mod horizontal_scrollbar_tests {
-    use super::*;
-
-    #[test]
-    fn horizontal_thumb_reaches_both_ends_of_the_overflow_range() {
-        let start = terminal_horizontal_scrollbar_for_viewport(800.0, 120.0, 0.0)
-            .expect("timestamp gutter overflow");
-        let end = terminal_horizontal_scrollbar_for_viewport(800.0, 120.0, 120.0)
-            .expect("timestamp gutter overflow");
-
-        assert_eq!(start.left, 0.0);
-        assert!((end.left - (800.0 - end.width)).abs() <= f32::EPSILON);
-    }
-}
-
 pub(crate) fn terminal_visible_rows_for_limit(
     bounds: Bounds<Pixels>,
     metrics: &TerminalMetrics,

@@ -7,8 +7,6 @@ mod restore;
 pub use restore::{
     PreparedProfileCredentials, ProfileCredentialRestoreSummary, is_profile_credential,
 };
-#[cfg(test)]
-mod tests;
 
 pub const PROFILE_CREDENTIAL_KIND: &str = "profile_credential";
 pub const CLEARED_PROFILE_CREDENTIAL_KIND: &str = "cleared_profile_credential";

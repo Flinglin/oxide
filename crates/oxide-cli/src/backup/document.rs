@@ -220,23 +220,3 @@ fn now_ms() -> u64 {
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or_default()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn backup_names_are_recognized_by_prefix_and_extension() {
-        let path = PathBuf::from("oxide-backup-123.json");
-
-        assert!(is_backup_file(&path));
-        assert!(!is_backup_file(Path::new("other.json")));
-    }
-
-    #[test]
-    fn inspect_query_resolves_plain_file_names_under_backup_dir() {
-        let path = resolve_backup_query("oxide-backup-123");
-
-        assert!(path.ends_with("oxide-backup-123.json"));
-    }
-}

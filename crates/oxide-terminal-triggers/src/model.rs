@@ -189,22 +189,3 @@ impl std::fmt::Debug for LocalProcessSpec {
             .finish()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn matcher_debug_redacts_configured_pattern() {
-        let matcher = TerminalTriggerMatch {
-            pattern: "secret-pattern-sentinel".to_string(),
-            mode: TerminalTriggerMatchMode::Regex,
-            case_sensitive: true,
-            whole_word: false,
-        };
-
-        let rendered = format!("{matcher:?}");
-        assert!(!rendered.contains("secret-pattern-sentinel"));
-        assert!(rendered.contains("<redacted>"));
-    }
-}

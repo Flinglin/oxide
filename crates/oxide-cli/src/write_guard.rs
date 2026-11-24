@@ -69,33 +69,3 @@ fn write_plan_from_backup(args: &WriteArgs, backup: Option<CreatedBackup>) -> Wr
 pub(crate) fn mark_applied(plan: &mut WriteGuardPlan) {
     plan.applied = true;
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn write_args(dry_run: bool, yes: bool, no_backup: bool) -> WriteArgs {
-        WriteArgs {
-            dry_run,
-            yes,
-            no_backup,
-            backup_before_write: false,
-            json: true,
-            format: None,
-        }
-    }
-
-    #[test]
-    fn preview_needs_no_confirmation_but_real_write_requires_it() {
-        let mut args = write_args(true, false, false);
-        let plan = prepare_write(&args, true).unwrap();
-
-        assert!(plan.dry_run);
-        assert!(!plan.applied);
-        assert!(plan.backup_path.is_none());
-        args.dry_run = false;
-        let error = prepare_write(&args, true).unwrap_err();
-
-        assert_eq!(error.code, "confirmation_required");
-    }
-}

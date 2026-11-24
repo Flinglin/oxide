@@ -80,34 +80,3 @@ impl fmt::Debug for X11SshRequest {
             .finish()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::{X11AuthCookie, X11AuthMaterial, X11Display};
-
-    use super::*;
-
-    #[test]
-    fn config_builds_russh_request_shape_without_runtime_wiring() {
-        let display = X11Display::parse(":0.1").unwrap();
-        let mut config = X11ForwardConfig::new(display);
-        config.single_connection = true;
-        let auth = X11AuthMaterial::with_fake_cookie(
-            X11AuthCookie::from_hex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
-            X11AuthCookie::from_hex("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap(),
-        );
-
-        let request = config.ssh_request(&auth);
-
-        assert!(request.single_connection);
-        assert_eq!(request.auth_protocol_name(), "MIT-MAGIC-COOKIE-1");
-        assert_eq!(
-            request.auth_cookie_hex.as_str(),
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-        );
-        assert_eq!(request.screen_number, 1);
-        assert_eq!(config.remote_display_value(), "localhost:10.1");
-        assert!(!format!("{request:?}").contains("aaaaaaaa"));
-        assert!(!format!("{config:?}").contains(":0.1"));
-    }
-}

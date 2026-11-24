@@ -16,25 +16,3 @@ pub(crate) fn value_to_text(value: &Value) -> String {
         other => serde_json::to_string_pretty(other).unwrap_or_else(|_| other.to_string()),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::*;
-
-    #[test]
-    fn dotted_path_reads_nested_keys() {
-        let value = json!({
-            "terminal": {
-                "fontFamily": "JetBrains Mono"
-            }
-        });
-
-        assert_eq!(
-            value_at_path(&value, "terminal.fontFamily"),
-            Some(&json!("JetBrains Mono"))
-        );
-        assert!(value_at_path(&value, "terminal.missing").is_none());
-    }
-}

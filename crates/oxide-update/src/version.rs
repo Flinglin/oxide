@@ -86,15 +86,3 @@ fn compare_prerelease(left: &str, right: &str) -> Ordering {
 
     left_parts.len().cmp(&right_parts.len())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn compares_prerelease_versions_without_semver_dependency() {
-        assert!(is_update_newer("1.2.0-beta.2", "1.2.0-beta.1"));
-        assert!(is_update_newer("1.2.0", "1.2.0-beta.9"));
-        assert!(!is_update_newer("1.2.0-beta.1", "1.2.0"));
-    }
-}

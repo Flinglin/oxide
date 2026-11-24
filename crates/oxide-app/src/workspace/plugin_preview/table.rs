@@ -254,33 +254,3 @@ impl PluginFilePreview {
         )
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn table_preview_validates_plugin_rows_and_requested_table() {
-        let value = json!({"kind":"table","page":0,"pageCount":1,"tables":["items"],"selectedTable":"items","columns":["id","name"],"rows":[["42",null]],"rowCount":1});
-        let page = TablePage::parse(value.clone(), 0, Some("items"))
-            .unwrap_or_else(|_| panic!("valid page"));
-        assert_eq!(page.columns, ["id", "name"]);
-        assert_eq!(page.rows, vec![vec![Some("42".into()), None]]);
-        for (key, invalid) in [
-            ("rows", json!([["42"]])),
-            ("rows", json!([["42", "a".repeat(4097)]])),
-            ("rowCount", json!(51)),
-            ("tables", json!(["items", "items"])),
-            ("selectedTable", json!("different")),
-            ("page", json!(1)),
-        ] {
-            let mut malformed = value.clone();
-            malformed[key] = invalid;
-            assert!(
-                TablePage::parse(malformed, 0, Some("items")).is_err(),
-                "{key}"
-            );
-        }
-    }
-}

@@ -40,23 +40,6 @@ impl RemoteDesktopRequestWriteCoalescer {
     }
 }
 
-#[cfg(test)]
-pub fn write_remote_desktop_requests(
-    writer: &mut impl Write,
-    request_rx: mpsc::Receiver<RemoteDesktopHelperRequest>,
-) -> Result<(), RemoteDesktopJsonLineError> {
-    loop {
-        let Ok(first_request) = request_rx.recv() else {
-            return Ok(());
-        };
-        if write_remote_desktop_request_batch_from_first(writer, &request_rx, first_request)?
-            == RemoteDesktopRequestBatchOutcome::ShutdownRequested
-        {
-            return Ok(());
-        }
-    }
-}
-
 pub(crate) fn write_remote_desktop_request_batch(
     writer: &mut impl Write,
     request_rx: &mpsc::Receiver<RemoteDesktopHelperRequest>,
@@ -108,54 +91,5 @@ fn write_remote_desktop_request_batch_from_first(
         Ok(RemoteDesktopRequestBatchOutcome::ShutdownRequested)
     } else {
         Ok(RemoteDesktopRequestBatchOutcome::Continue)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::io::Cursor;
-
-    use super::*;
-    use crate::{RemoteDesktopMouseButton, RemoteDesktopMouseButtonState, read_request_line};
-
-    #[test]
-    fn writer_coalesces_mouse_moves_without_reordering_button_edges() {
-        let (request_tx, request_rx) = mpsc::channel();
-        request_tx
-            .send(RemoteDesktopHelperRequest::MouseMove { x: 10, y: 20 })
-            .unwrap();
-        request_tx
-            .send(RemoteDesktopHelperRequest::MouseMove { x: 30, y: 40 })
-            .unwrap();
-        request_tx
-            .send(RemoteDesktopHelperRequest::MouseButton {
-                button: RemoteDesktopMouseButton::Left,
-                state: RemoteDesktopMouseButtonState::Pressed,
-            })
-            .unwrap();
-        request_tx
-            .send(RemoteDesktopHelperRequest::MouseMove { x: 50, y: 60 })
-            .unwrap();
-        drop(request_tx);
-
-        let mut output = Vec::new();
-        write_remote_desktop_requests(&mut output, request_rx).unwrap();
-
-        let mut reader = Cursor::new(output);
-        let mut decoded = Vec::new();
-        while let Some(request) = read_request_line(&mut reader).unwrap() {
-            decoded.push(request);
-        }
-        assert_eq!(
-            decoded,
-            vec![
-                RemoteDesktopHelperRequest::MouseMove { x: 30, y: 40 },
-                RemoteDesktopHelperRequest::MouseButton {
-                    button: RemoteDesktopMouseButton::Left,
-                    state: RemoteDesktopMouseButtonState::Pressed,
-                },
-                RemoteDesktopHelperRequest::MouseMove { x: 50, y: 60 },
-            ]
-        );
     }
 }

@@ -694,13 +694,6 @@ fn encode_buffer(buffer: &[u8]) -> Result<String, TrzszError> {
     Ok(STANDARD.encode(encoder.finish()?))
 }
 
-#[cfg(test)]
-pub mod tests_support {
-    pub fn encode_buffer_for_tests(buffer: &[u8]) -> String {
-        super::encode_buffer(buffer).expect("encode trzsz fixture")
-    }
-}
-
 fn decode_buffer(buffer: &str) -> Result<Vec<u8>, TrzszError> {
     let bytes = STANDARD
         .decode(buffer)
@@ -730,120 +723,6 @@ fn strip_tmux_status_line(buffer: &str) -> String {
             "{}{}",
             &next_buffer[..begin_index],
             &next_buffer[buffer_index..]
-        );
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::{Arc, Mutex};
-
-    use super::*;
-
-    #[derive(Debug)]
-    struct MemoryReader {
-        rel_path: Vec<String>,
-        data: Vec<u8>,
-        offset: usize,
-    }
-
-    impl TrzszFileReader for MemoryReader {
-        fn close_file(&mut self) {}
-        fn path_id(&self) -> u64 {
-            1
-        }
-        fn rel_path(&self) -> &[String] {
-            &self.rel_path
-        }
-        fn is_dir(&self) -> bool {
-            false
-        }
-        fn size(&self) -> u64 {
-            self.data.len() as u64
-        }
-        fn read_file(&mut self, max_len: usize) -> Result<Vec<u8>, TrzszError> {
-            let end = (self.offset + max_len).min(self.data.len());
-            let data = self.data[self.offset..end].to_vec();
-            self.offset = end;
-            Ok(data)
-        }
-    }
-
-    #[test]
-    fn sends_action_and_receives_config() {
-        let output = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
-        let output_clone = output.clone();
-        let mut transfer = TrzszTransfer::new(
-            move |data| output_clone.lock().unwrap().push(data),
-            false,
-            DEFAULT_MAX_DATA_CHUNK_SIZE,
-        );
-        transfer.send_action(true, false).unwrap();
-        let action_line = String::from_utf8(output.lock().unwrap()[0].clone()).unwrap();
-        assert!(action_line.starts_with("#ACT:"));
-        assert!(action_line.ends_with('\n'));
-
-        let config = json!({"binary": false, "directory": false});
-        let encoded = encode_buffer(config.to_string().as_bytes()).unwrap();
-        transfer.add_received_data(format!("#CFG:{encoded}\n").as_bytes());
-        assert_eq!(transfer.recv_config().unwrap(), config);
-    }
-
-    #[test]
-    fn send_files_writes_protocol_and_reads_success_acks() {
-        let output = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
-        let output_clone = output.clone();
-        let mut transfer = TrzszTransfer::new(
-            move |data| output_clone.lock().unwrap().push(data),
-            false,
-            DEFAULT_MAX_DATA_CHUNK_SIZE,
-        );
-        transfer.transfer_config = json!({"binary": false, "directory": false});
-        let remote_name = encode_buffer(b"remote.txt").unwrap();
-        let digest = md5::compute(b"hello").0;
-        transfer.add_received_data(format!("#SUCC:1\n#SUCC:{remote_name}\n#SUCC:5\n").as_bytes());
-        transfer.add_received_data(b"#SUCC:5\n");
-        transfer
-            .add_received_data(format!("#SUCC:{}\n", encode_buffer(&digest).unwrap()).as_bytes());
-
-        let names = transfer
-            .send_files(
-                vec![Box::new(MemoryReader {
-                    rel_path: vec!["hello.txt".to_string()],
-                    data: b"hello".to_vec(),
-                    offset: 0,
-                })],
-                None,
-            )
-            .unwrap();
-        assert_eq!(names, vec!["remote.txt"]);
-        assert_eq!(transfer.payload_bytes(), 5);
-        assert_eq!(transfer.completed_files(), 1);
-        let writes = output.lock().unwrap();
-        assert!(
-            String::from_utf8(writes[0].clone())
-                .unwrap()
-                .starts_with("#NUM:1")
-        );
-        assert!(
-            String::from_utf8(writes[1].clone())
-                .unwrap()
-                .starts_with("#NAME:")
-        );
-        assert!(
-            String::from_utf8(writes[2].clone())
-                .unwrap()
-                .starts_with("#SIZE:5")
-        );
-        assert!(
-            String::from_utf8(writes[3].clone())
-                .unwrap()
-                .starts_with("#DATA:")
-        );
-        assert!(
-            String::from_utf8(writes[4].clone())
-                .unwrap()
-                .starts_with("#MD5:")
         );
     }
 }

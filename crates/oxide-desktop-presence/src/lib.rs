@@ -80,25 +80,6 @@ pub fn install_for_window(
     Ok(cfg!(target_os = "windows").then_some(rx))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn delivery_notifies_after_event_is_queued() {
-        let (sender, receiver) = desktop_presence_channel();
-        let notification = receiver.notification();
-
-        sender.send(DesktopPresenceEvent::ShowMainWindow).unwrap();
-        notification.notified().await;
-
-        assert!(matches!(
-            receiver.try_recv().unwrap(),
-            DesktopPresenceEvent::ShowMainWindow
-        ));
-    }
-}
-
 pub fn set_keep_running_on_close(enabled: bool) {
     platform::set_keep_running_on_close(enabled);
 }

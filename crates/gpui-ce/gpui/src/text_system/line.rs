@@ -1,4 +1,4 @@
-// oxide modification: cached line paint can reuse a caller-owned bounded layer.
+// OxideTerm modification: cached line paint can reuse a caller-owned bounded layer.
 use crate::Hsla;
 use crate::window::PreparedGlyphBatch;
 use crate::{

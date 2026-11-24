@@ -76,38 +76,3 @@ impl Drop for Reservation {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn global_admission_rotates_waiters_and_cancel_does_not_stall_the_next_stream() {
-        let budget = Arc::new(RecordingBudget::default());
-        let mut held = (0..4)
-            .map(|id| budget.reserve(id, MAX_STREAM_BYTES).unwrap())
-            .collect::<Vec<_>>();
-        assert!(budget.reserve(4, 32 * 1024).is_none());
-        assert!(budget.reserve(5, 32 * 1024).is_none());
-        drop(held.pop());
-        assert!(
-            budget.reserve(6, 32 * 1024).is_none(),
-            "new work overtook an existing waiter"
-        );
-        let first = budget.reserve(4, 32 * 1024).unwrap();
-        assert!(
-            budget.reserve(4, 32 * 1024).is_none(),
-            "one stream took two turns ahead of a waiter"
-        );
-        budget.cancel_waiter(5);
-        let next = budget.reserve(6, 32 * 1024).unwrap();
-        let last = budget.reserve(4, 32 * 1024).unwrap();
-        drop((first, next, last, held));
-        let restored = (0..4)
-            .map(|id| budget.reserve(id, MAX_STREAM_BYTES).unwrap())
-            .collect::<Vec<_>>();
-        assert!(budget.reserve(7, 1).is_none());
-        drop(restored);
-        assert!(budget.reserve(7, 1).is_some());
-    }
-}

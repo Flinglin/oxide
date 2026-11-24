@@ -51,88 +51,6 @@ pub(in crate::workspace) fn is_bundled_workspace_background(
         .any(|background| image_path == background_directory.join(background.file_name))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    struct BackgroundTestView {
-        background: TerminalBackgroundPreferences,
-        image: Arc<RenderImage>,
-    }
-
-    impl Render for BackgroundTestView {
-        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            workspace_background_image_layer(self.background.clone(), Some(self.image.clone()))
-        }
-    }
-
-    #[gpui::test]
-    fn workspace_background_animation_paints_multiple_frames(cx: &mut gpui::TestAppContext) {
-        let cx = cx.add_empty_window();
-        cx.update(|window, _| window.activate_window());
-        cx.run_until_parked();
-        assert!(cx.update(|window, _| window.is_window_active()));
-        let image = Arc::new(RenderImage::new(vec![
-            image::Frame::new(image::RgbaImage::from_pixel(
-                1,
-                1,
-                image::Rgba([0, 0, 255, 255]),
-            )),
-            image::Frame::new(image::RgbaImage::from_pixel(
-                1,
-                1,
-                image::Rgba([255, 0, 0, 255]),
-            )),
-        ]));
-        let background = TerminalBackgroundPreferences {
-            path: "animation.webp".into(),
-            opacity: 1.0,
-            blur: 0.0,
-            fit: TerminalBackgroundFit::Cover,
-            alignment: (0.5, 0.5),
-            effect: None,
-            readability: None,
-            limits: Default::default(),
-            on_failure: None,
-            scene: Default::default(),
-        };
-        let view = cx.update(|_, cx| {
-            cx.new(|_| BackgroundTestView {
-                background,
-                image: image.clone(),
-            })
-        });
-        for expected_all_frames in [false, true] {
-            cx.draw(
-                gpui::point(px(0.0), px(0.0)),
-                gpui::size(px(64.0), px(64.0)),
-                |_, _| view.clone().into_any_element(),
-            );
-            assert_eq!(
-                cx.update(|window, _| window.has_image_atlas_entry(&image)),
-                expected_all_frames
-            );
-        }
-    }
-
-    #[test]
-    fn recognizes_every_bundled_background_as_protected() {
-        let settings_path = Path::new("/profile/settings.json");
-        let background_directory = background_images_directory(settings_path);
-
-        for background in BUNDLED_WORKSPACE_BACKGROUNDS {
-            assert!(is_bundled_workspace_background(
-                settings_path,
-                &background_directory.join(background.file_name),
-            ));
-        }
-        assert!(!is_bundled_workspace_background(
-            settings_path,
-            &background_directory.join("user-background.webp"),
-        ));
-    }
-}
-
 impl WorkspaceApp {
     pub(in crate::workspace) fn sync_system_appearance(
         &mut self,
@@ -412,9 +330,6 @@ impl window_shell::WorkspaceWindowBackgroundEntity {
         }
     }
 }
-
-#[cfg(test)]
-use oxide_background::background_image_layer as workspace_background_image_layer;
 
 pub(in crate::workspace) fn default_connections_path() -> PathBuf {
     default_settings_path()

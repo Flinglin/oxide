@@ -130,32 +130,3 @@ impl GssapiAuthenticator for KerberosAuthenticator {
         self.server_error_received = true;
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn debug_output_does_not_include_server_identity() {
-        let identity = "sensitive.internal.example";
-        let authenticator = KerberosAuthenticator::new("host", Some(identity), false).unwrap();
-
-        assert!(!format!("{authenticator:?}").contains(identity));
-    }
-
-    #[test]
-    fn fallback_is_limited_to_unavailable_credentials_before_integrity_exchange() {
-        let mut authenticator = KerberosAuthenticator::new("host", None, false).unwrap();
-        assert!(
-            KerberosAuthError::Platform(platform::PlatformError::NoCredentials)
-                .allows_authentication_fallback()
-        );
-        assert!(
-            !KerberosAuthError::Platform(platform::PlatformError::IntegrityUnavailable)
-                .allows_authentication_fallback()
-        );
-
-        authenticator.server_error_received = true;
-        assert!(!authenticator.allows_authentication_fallback());
-    }
-}

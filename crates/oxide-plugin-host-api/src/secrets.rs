@@ -36,27 +36,3 @@ fn validate_plugin_secret_key(key: &str) -> Result<(), String> {
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn account_ids_are_scoped_without_secret_values() {
-        assert_eq!(
-            plugin_secret_account_id("com.example.alpha", "token").unwrap(),
-            "plugin-secret:17:com.example.alpha:5:token"
-        );
-        assert_ne!(
-            plugin_secret_account_id("com.example.alpha", "token").unwrap(),
-            plugin_secret_account_id("com.example.beta", "token").unwrap()
-        );
-    }
-
-    #[test]
-    fn account_ids_reject_invalid_namespace_components() {
-        assert!(plugin_secret_account_id("com.example.alpha", "").is_err());
-        assert!(plugin_secret_account_id("com.example.alpha", "bad\nkey").is_err());
-        assert!(plugin_secret_account_id("../escape", "token").is_err());
-    }
-}

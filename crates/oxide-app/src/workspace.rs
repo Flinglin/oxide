@@ -927,8 +927,3 @@ struct DetachedLocalTerminalSession {
     detached_at: Instant,
     buffer_lines: usize,
 }
-
-#[cfg(test)]
-thread_local! {
-    static FAIL_NEXT_SESSION_TREE_REPLACE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}

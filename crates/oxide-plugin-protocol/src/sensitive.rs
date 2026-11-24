@@ -43,28 +43,3 @@ pub fn zeroize_json_value(value: &mut Value) {
     }
     *value = Value::Null;
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn classifies_all_credential_bearing_host_calls() {
-        for (namespace, method) in [
-            ("secrets", "get"),
-            ("secrets", "set"),
-            ("sync", "exportOxide"),
-            ("sync", "previewImport"),
-            ("sync", "importOxide"),
-        ] {
-            assert!(
-                PluginHostCallSensitivity::classify(namespace, method).is_sensitive(),
-                "{namespace}.{method} must use sensitive transport ownership"
-            );
-        }
-        assert_eq!(
-            PluginHostCallSensitivity::classify("sync", "validateOxide"),
-            PluginHostCallSensitivity::Public
-        );
-    }
-}

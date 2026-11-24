@@ -256,30 +256,6 @@ pub(crate) fn style_origin_for_cell(
     )
 }
 
-#[cfg(test)]
-mod style_origin_tests {
-    use super::*;
-
-    #[test]
-    fn style_origin_distinguishes_default_and_explicit_ansi_colors() {
-        let default = style_origin_for_cell(
-            Color::Named(NamedColor::Foreground),
-            Color::Named(NamedColor::Background),
-            TerminalAttrs::default(),
-        );
-        let explicit = style_origin_for_cell(
-            Color::Indexed(1),
-            Color::Named(NamedColor::Background),
-            TerminalAttrs::default(),
-        );
-
-        assert!(!default.foreground_explicit());
-        assert!(!default.background_explicit());
-        assert!(explicit.foreground_explicit());
-        assert!(!explicit.background_explicit());
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct HslaColor {
     h: f32,

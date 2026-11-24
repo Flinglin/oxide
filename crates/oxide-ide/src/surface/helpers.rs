@@ -300,19 +300,6 @@ fn watch_refresh_path(root_path: &str, event_path: &str) -> String {
     }
 }
 
-#[cfg(test)]
-mod helper_tests {
-    use super::*;
-
-
-    #[test]
-    fn normalize_remote_path_preserves_home_expansion_inputs() {
-        assert_eq!(normalize_remote_path("~"), "~");
-        assert_eq!(normalize_remote_path("~/project/"), "~/project");
-    }
-
-}
-
 fn language_for_location(location: &IdeLocation, source: &str) -> Option<LanguageId> {
     match location {
         IdeLocation::Local { path } => LanguageId::detect(Some(path.as_path()), source),

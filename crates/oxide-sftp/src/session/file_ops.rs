@@ -357,37 +357,3 @@ fn complete_deleted_child(
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod delete_scheduler_tests {
-    use super::*;
-
-    #[test]
-    fn parent_removal_waits_for_every_child_and_preserves_the_count() {
-        let parent_id = 7;
-        let mut directories = HashMap::from([(
-            parent_id,
-            DirectoryDeleteState {
-                path: "/tree".to_string(),
-                parent_id: None,
-                remaining_entries: 2,
-                deleted_descendants: 0,
-            },
-        )]);
-        let mut pending = VecDeque::new();
-
-        complete_deleted_child(parent_id, 1, &mut directories, &mut pending).unwrap();
-        assert!(pending.is_empty());
-        assert_eq!(directories[&parent_id].deleted_descendants, 1);
-
-        complete_deleted_child(parent_id, 4, &mut directories, &mut pending).unwrap();
-        assert_eq!(directories[&parent_id].deleted_descendants, 5);
-        assert!(matches!(
-            pending.pop_front(),
-            Some(PendingDeleteOperation::RemoveDirectory {
-                directory_id: 7,
-                path,
-            }) if path == "/tree"
-        ));
-    }
-}

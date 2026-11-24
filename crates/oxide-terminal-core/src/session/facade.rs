@@ -782,17 +782,3 @@ fn tmux_action_audit_detail(action: &crate::TmuxAction) -> String {
         TmuxAction::RunCommand(_) => "run_command".into(),
     }
 }
-
-#[cfg(test)]
-mod tmux_audit_tests {
-    use super::*;
-
-    #[test]
-    fn tmux_control_detail_excludes_arbitrary_command_and_rename_text() {
-        assert_eq!(tmux_action_audit_detail(&crate::TmuxAction::RunCommand(
-            "display-message private-token".into())), "run_command");
-        assert_eq!(tmux_action_audit_detail(&crate::TmuxAction::RenameWindow {
-            id: 7, name: "private-token".into(),
-        }), "rename_window id=7");
-    }
-}

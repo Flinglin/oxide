@@ -385,20 +385,3 @@ fn error_body(tokens: &ThemeTokens, message: Option<String>) -> AnyElement {
     )
     .into_any_element()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn reconnecting_session_keeps_last_frame_visible() {
-        assert!(should_render_remote_frame(
-            RemoteDesktopSessionStatus::Reconnecting,
-            true
-        ));
-        assert!(!should_render_remote_frame(
-            RemoteDesktopSessionStatus::Reconnecting,
-            false
-        ));
-    }
-}

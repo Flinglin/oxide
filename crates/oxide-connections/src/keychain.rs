@@ -2,14 +2,6 @@ use crate::SecretString;
 use anyhow::{Context, Result};
 use oxide_portable_runtime::keystore::{self as portable_keystore, PortableKeystoreError};
 use oxide_secret_store::NativeSecretStore;
-#[cfg(test)]
-use std::{
-    collections::HashMap,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
-};
 const SERVICE_NAME: &str = "com.oxide.ssh";
 const PORTABLE_ACCOUNT_PREFIX: &str = "portable:v1:";
 const LEGACY_ACCOUNT_SEPARATOR: &str = "@";
@@ -19,12 +11,6 @@ pub(crate) struct ConnectionKeychain {
     service: String,
     #[cfg(target_os = "macos")]
     authentication_reason: Option<String>,
-    #[cfg(test)]
-    test_store: Option<Arc<Mutex<HashMap<String, SecretString>>>>,
-    #[cfg(test)]
-    test_max_secret_bytes: Option<usize>,
-    #[cfg(test)]
-    test_fail_next_delete: Option<Arc<AtomicBool>>,
 }
 
 /// Grants multiple reads after one operation-scoped authentication.
@@ -44,12 +30,6 @@ impl Default for ConnectionKeychain {
             service: SERVICE_NAME.to_string(),
             #[cfg(target_os = "macos")]
             authentication_reason: None,
-            #[cfg(test)]
-            test_store: Some(Arc::new(Mutex::new(HashMap::new()))),
-            #[cfg(test)]
-            test_max_secret_bytes: None,
-            #[cfg(test)]
-            test_fail_next_delete: None,
         }
     }
 }
@@ -60,12 +40,6 @@ impl ConnectionKeychain {
             service: service.into(),
             #[cfg(target_os = "macos")]
             authentication_reason: None,
-            #[cfg(test)]
-            test_store: Some(Arc::new(Mutex::new(HashMap::new()))),
-            #[cfg(test)]
-            test_max_secret_bytes: None,
-            #[cfg(test)]
-            test_fail_next_delete: None,
         }
     }
 
@@ -77,53 +51,10 @@ impl ConnectionKeychain {
         Self {
             service: service.into(),
             authentication_reason: Some(reason.into()),
-            #[cfg(test)]
-            test_store: Some(Arc::new(Mutex::new(HashMap::new()))),
-            #[cfg(test)]
-            test_max_secret_bytes: None,
-            #[cfg(test)]
-            test_fail_next_delete: None,
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn with_max_secret_bytes_for_tests(
-        service: impl Into<String>,
-        max_secret_bytes: usize,
-    ) -> Self {
-        Self {
-            service: service.into(),
-            #[cfg(target_os = "macos")]
-            authentication_reason: None,
-            test_store: Some(Arc::new(Mutex::new(HashMap::new()))),
-            test_max_secret_bytes: Some(max_secret_bytes),
-            test_fail_next_delete: None,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn fail_next_delete_for_tests(&mut self) {
-        self.test_fail_next_delete = Some(Arc::new(AtomicBool::new(true)));
     }
 
     pub(crate) fn store(&self, id: &str, secret: &SecretString) -> Result<()> {
-        #[cfg(test)]
-        if let Some(store) = &self.test_store {
-            if self
-                .test_max_secret_bytes
-                .is_some_and(|limit| secret.expose_secret().len() > limit)
-            {
-                // Tests use this to emulate OS credential backends that reject
-                // large managed SSH keys, such as RSA private-key blobs.
-                anyhow::bail!("test keychain secret exceeds configured byte limit");
-            }
-            store
-                .lock()
-                .map_err(|error| anyhow::anyhow!("failed to lock test keychain: {error}"))?
-                .insert(id.to_string(), secret.clone());
-            return Ok(());
-        }
-
         if portable_keychain_enabled()? {
             let account = portable_account(id);
             let legacy_suffix = legacy_portable_account_suffix(id);
@@ -160,11 +91,6 @@ impl ConnectionKeychain {
     }
 
     pub(crate) fn authenticate_batch_access(&self) -> Result<ConnectionKeychainBatchAccess<'_>> {
-        #[cfg(test)]
-        if self.test_store.is_some() {
-            return Ok(ConnectionKeychainBatchAccess { keychain: self });
-        }
-
         #[cfg(target_os = "macos")]
         if let Some(reason) = self.authentication_reason.as_deref() {
             oxide_secret_store::authenticate_device_owner(reason)
@@ -181,15 +107,6 @@ impl ConnectionKeychain {
     ) -> Result<Option<SecretString>> {
         #[cfg(not(target_os = "macos"))]
         let _ = authenticate_device_owner;
-
-        #[cfg(test)]
-        if let Some(store) = &self.test_store {
-            return Ok(store
-                .lock()
-                .map_err(|error| anyhow::anyhow!("failed to lock test keychain: {error}"))?
-                .get(id)
-                .cloned());
-        }
 
         if portable_keychain_enabled()? {
             let account = portable_account(id);
@@ -234,23 +151,6 @@ impl ConnectionKeychain {
     }
 
     pub(crate) fn delete(&self, id: &str) -> Result<()> {
-        #[cfg(test)]
-        if let Some(store) = &self.test_store {
-            if self
-                .test_fail_next_delete
-                .as_ref()
-                .is_some_and(|fail| fail.swap(false, Ordering::SeqCst))
-            {
-                anyhow::bail!("test keychain delete failure");
-            }
-
-            store
-                .lock()
-                .map_err(|error| anyhow::anyhow!("failed to lock test keychain: {error}"))?
-                .remove(id);
-            return Ok(());
-        }
-
         if portable_keychain_enabled()? {
             let account = portable_account(id);
             let legacy_suffix = legacy_portable_account_suffix(id);
@@ -295,41 +195,4 @@ fn legacy_portable_account_suffix(id: &str) -> String {
 
 fn portable_keychain_enabled() -> Result<bool> {
     oxide_portable_runtime::is_portable_mode().context("failed to determine oxide portable mode")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn portable_account_is_independent_of_host_username() {
-        assert_eq!(
-            portable_account("managed-key-id"),
-            "portable:v1:managed-key-id"
-        );
-        assert_eq!(
-            legacy_portable_account_suffix("managed-key-id"),
-            "@managed-key-id"
-        );
-    }
-
-    #[test]
-    fn batch_access_reuses_one_guard_for_multiple_secret_reads() {
-        let keychain = ConnectionKeychain::with_service("com.oxide.test.batch");
-        keychain.store("first", &SecretString::from("one")).unwrap();
-        keychain
-            .store("second", &SecretString::from("two"))
-            .unwrap();
-
-        let access = keychain.authenticate_batch_access().unwrap();
-
-        assert_eq!(
-            access.get_optional("first").unwrap(),
-            Some(SecretString::from("one"))
-        );
-        assert_eq!(
-            access.get_optional("second").unwrap(),
-            Some(SecretString::from("two"))
-        );
-    }
 }

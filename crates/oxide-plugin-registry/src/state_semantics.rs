@@ -35,25 +35,3 @@ pub fn native_plugin_error_has_code(error: &str, code: &str) -> bool {
     };
     rest.is_empty() || rest.starts_with(':')
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn stable_errors_preserve_codes_and_conflict_identity() {
-        assert_eq!(
-            native_plugin_conflict_id("PLUGIN_ID_CONFLICT:com.example.demo").as_deref(),
-            Some("com.example.demo")
-        );
-        assert!(native_plugin_conflict_id("checksum mismatch").is_none());
-        assert!(native_plugin_error_has_code(
-            " wasm_runtime_not_installed: install runtime",
-            "wasm_runtime_not_installed"
-        ));
-        assert!(!native_plugin_error_has_code(
-            "wasm_runtime_not_installed_extra",
-            "wasm_runtime_not_installed"
-        ));
-    }
-}

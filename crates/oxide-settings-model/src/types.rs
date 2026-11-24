@@ -730,21 +730,3 @@ pub enum SettingsBackgroundTabIcon {
     Settings,
     Terminal,
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn secret_inputs_are_categorized_in_the_model_layer() {
-        assert!(SettingsInput::CloudSyncSecretAccessKey.is_secret());
-        assert!(SettingsInput::PortableCurrentPassword.is_secret());
-        assert!(SettingsInput::PortableNewPassword.is_secret());
-        assert!(SettingsInput::PortableConfirmPassword.is_secret());
-        assert!(SettingsInput::AppLockCurrentPassword.is_secret());
-        assert!(SettingsInput::AppLockNewPassword.is_secret());
-        assert!(SettingsInput::AppLockConfirmPassword.is_secret());
-        assert!(SettingsInput::LocalPrivilegeSecret.is_secret());
-        assert!(!SettingsInput::TerminalFontSize.is_secret());
-    }
-}

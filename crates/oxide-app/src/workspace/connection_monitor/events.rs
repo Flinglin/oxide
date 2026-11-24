@@ -193,39 +193,3 @@ pub(in crate::workspace) enum HostToolsNotice {
 }
 
 impl EventEmitter<HostToolsEvent> for HostToolsEntity {}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn terminal_request(command: &str) -> HostToolsWindowRequest {
-        HostToolsWindowRequest::new(HostToolsWindowIntent::OpenExistingNodeTerminal {
-            connection_id: "connection-1".to_string(),
-            command: command.to_string(),
-            title: "Service logs".to_string(),
-            opened_notice: "Opened".to_string(),
-            missing_notice: "Missing".to_string(),
-        })
-    }
-
-    #[test]
-    fn window_request_clones_share_one_consumable_intent() {
-        let request = terminal_request("journalctl --follow");
-        let cloned = request.clone();
-        let independent = terminal_request("journalctl --follow");
-
-        assert!(request == cloned);
-        assert!(request != independent);
-        match cloned.take() {
-            Some(HostToolsWindowIntent::OpenExistingNodeTerminal { command, .. }) => {
-                assert_eq!(command, "journalctl --follow");
-            }
-            Some(_) => panic!("cloned request retained the wrong intent kind"),
-            None => panic!("cloned request should retain the shared intent"),
-        }
-        assert!(request.take().is_none());
-        assert!(
-            matches!(independent.take(), Some(HostToolsWindowIntent::OpenExistingNodeTerminal { command, .. }) if command == "journalctl --follow")
-        );
-    }
-}

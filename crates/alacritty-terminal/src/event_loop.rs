@@ -277,8 +277,8 @@ where
                                 continue;
                             }
 
-                            if event.readable {
-                                if let Err(err) = self.pty_read(&mut state, &mut buf, pipe.as_mut())
+                            if event.readable &&
+                                 let Err(err) = self.pty_read(&mut state, &mut buf, pipe.as_mut())
                                 {
                                     // On Linux, a `read` on the master side of a PTY can fail
                                     // with `EIO` if the client side hangs up.  In that case,
@@ -293,14 +293,14 @@ where
                                     error!("Error reading from PTY in event loop: {err}");
                                     break 'event_loop;
                                 }
-                            }
 
-                            if event.writable {
-                                if let Err(err) = self.pty_write(&mut state) {
+
+                            if event.writable
+                                && let Err(err) = self.pty_write(&mut state) {
                                     error!("Error writing to PTY in event loop: {err}");
                                     break 'event_loop;
                                 }
-                            }
+
                         },
                         _ => (),
                     }

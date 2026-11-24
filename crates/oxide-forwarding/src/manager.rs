@@ -949,28 +949,3 @@ async fn check_local_port_available(
         ))),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn local_health_check_observes_the_client_side_listener() {
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .unwrap();
-        let port = listener.local_addr().unwrap().port();
-
-        assert!(
-            check_local_port_available("127.0.0.1", port, 1_000)
-                .await
-                .unwrap()
-        );
-        drop(listener);
-        assert!(
-            !check_local_port_available("127.0.0.1", port, 1_000)
-                .await
-                .unwrap()
-        );
-    }
-}

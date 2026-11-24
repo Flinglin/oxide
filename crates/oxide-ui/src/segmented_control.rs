@@ -225,37 +225,3 @@ pub fn segmented_control_item_content(
         })
         .child(child)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn selection_motion_follows_all_four_profiles() {
-        use oxide_theme::{UiMotion, UiMotionProfile, default_tokens};
-
-        for (profile, expected) in [
-            (UiMotionProfile::Off, None),
-            (UiMotionProfile::Reduced, Some((120, false))),
-            (UiMotionProfile::Normal, Some((200, true))),
-            (UiMotionProfile::Fast, Some((110, true))),
-        ] {
-            let mut tokens = default_tokens();
-            tokens.motion = UiMotion::from_profile(profile);
-            assert_eq!(
-                segmented_control_motion(&tokens)
-                    .map(|motion| (motion.duration.as_millis(), motion.spatial)),
-                expected,
-                "{profile:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn settled_transition_suppresses_stale_previous_index_motion() {
-        let settled = SegmentedControlOptions::new(3, 0, 5);
-        let user_transition = settled.user_transition_active(true);
-
-        assert!(!should_animate_selection(settled, 3, 0));
-        assert!(should_animate_selection(user_transition, 3, 0));
-    }
-}

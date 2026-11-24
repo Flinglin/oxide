@@ -1,4 +1,4 @@
-// oxide modification: preserve scene batch constants across DirectX blur passes.
+// OxideTerm modification: preserve scene batch constants across DirectX blur passes.
 use std::{
     slice,
     sync::{Arc, OnceLock},
@@ -23,6 +23,9 @@ use windows::{
 use crate::directx_renderer::shader_resources::{RawShaderBytes, ShaderModule, ShaderTarget};
 use crate::*;
 use gpui::*;
+
+#[cfg(test)]
+mod tests;
 
 /// The largest blur radius in a scene-space filter chain, in device pixels — used to size the
 /// blur kernel and the dilated region the blur passes are scissored to.
@@ -71,6 +74,7 @@ pub(crate) struct DirectXRenderer {
     direct_composition: Option<DirectComposition>,
     font_info: &'static FontInfo,
     gpu_specs: OnceLock<GpuSpecs>,
+
     width: u32,
     height: u32,
 
@@ -610,7 +614,7 @@ impl DirectXRenderer {
                                 corner_radii_array(boundary.corner_radii),
                                 max_blur_radius(&boundary.filters),
                                 boundary.opacity,
-                                boundary.clip_rounded
+                                boundary.clip_rounded,
                             )
                         } else {
                             Ok(())
@@ -1178,7 +1182,6 @@ impl DirectXRenderer {
     ) -> Result<()> {
         // Sigma is halved because the blur runs at half resolution.
         let sigma = (blur_radius * 0.5).max(0.0);
-
         // Span ±3σ. If that needs more than 32 taps, spread the taps apart (tap_step > 1) rather
         // than truncating the kernel — keeps very large radii from clipping. Matches wgpu.
         let ideal_taps = (3.0 * sigma).ceil();
@@ -1211,9 +1214,9 @@ impl DirectXRenderer {
             )
         };
 
-        // Downsample source -> ping, then separable gaussian ping -> pong -> ping.
         // A clip-only layer samples the original texture without downsampling or blur.
         if sigma > 0.0 {
+            // Downsample source -> ping, then separable gaussian ping -> pong -> ping.
             self.dx_blur_pass(
                 &self.pipelines.blur_downsample_vertex,
                 &self.pipelines.blur_downsample_fragment,
@@ -1266,7 +1269,7 @@ impl DirectXRenderer {
                 true,
             )?;
         }
-        // Composite the blurred result into the target (preserving its contents).
+        // Composite the result into the target (preserving its contents).
         self.dx_blur_pass(
             &self.pipelines.blur_composite_vertex,
             &self.pipelines.blur_composite_fragment,

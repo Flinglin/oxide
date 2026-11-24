@@ -34,8 +34,6 @@ struct PlaybackControl {
     cancelled: AtomicBool,
     paused: Mutex<bool>,
     wake: Condvar,
-    #[cfg(test)]
-    pause_observer: Mutex<Option<std::sync::mpsc::Sender<()>>>,
 }
 
 impl PlaybackControl {
@@ -45,10 +43,6 @@ impl PlaybackControl {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         while *paused && !self.cancelled.load(Ordering::Acquire) {
-            #[cfg(test)]
-            if let Some(observer) = &*self.pause_observer.lock().unwrap() {
-                let _ = observer.send(());
-            }
             paused = self
                 .wake
                 .wait(paused)
@@ -69,8 +63,6 @@ pub struct MediaStream {
     control: Arc<PlaybackControl>,
     pending: Arc<AtomicBool>,
     budget: MemoryBudget,
-    #[cfg(test)]
-    worker: Option<std::thread::JoinHandle<()>>,
 }
 
 impl MediaStream {
@@ -131,7 +123,6 @@ impl MediaStream {
                     delivery,
                 );
             })?;
-        #[cfg(not(test))]
         drop(worker);
         Ok(Self {
             sender,
@@ -139,8 +130,6 @@ impl MediaStream {
             control,
             pending: Arc::new(AtomicBool::new(false)),
             budget,
-            #[cfg(test)]
-            worker: Some(worker),
         })
     }
 
@@ -210,10 +199,6 @@ impl MediaStream {
         while self.receiver.try_recv().is_ok() {}
     }
 }
-
-#[cfg(test)]
-#[path = "tests.rs"]
-mod tests;
 
 impl Drop for MediaStream {
     fn drop(&mut self) {

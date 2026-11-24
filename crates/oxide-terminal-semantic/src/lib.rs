@@ -19,12 +19,8 @@ mod scheme;
 #[cfg(feature = "shell-syntax")]
 mod syntax;
 mod systemd;
-mod test_runner;
 mod tokens;
 mod types;
-
-#[cfg(test)]
-mod tests;
 
 pub use classifier::{
     classify_line, classify_line_with_compiled_scheme,

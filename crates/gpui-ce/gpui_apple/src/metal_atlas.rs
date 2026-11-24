@@ -1,4 +1,4 @@
-// Modified by oxide: support dedicated mutable atlas textures and partial uploads.
+// Modified by OxideTerm: support dedicated mutable atlas textures and partial uploads.
 
 use anyhow::{Context as _, Result};
 use derive_more::{Deref, DerefMut};

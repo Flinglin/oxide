@@ -304,8 +304,10 @@ pub struct Style {
 
     /// Filters applied to this element's own content and children (CSS `filter`).
     pub filter: Vec<Filter>,
+
     /// Clip this element's painted subtree to its rounded border box.
     pub clip_rounded: bool,
+
     /// Filters applied to the content rendered behind this element (CSS `backdrop-filter`).
     pub backdrop_filter: Vec<Filter>,
 

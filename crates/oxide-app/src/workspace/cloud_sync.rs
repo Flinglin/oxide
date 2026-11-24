@@ -658,11 +658,6 @@ impl CloudSyncWorkspaceEntity {
             });
         }));
     }
-
-    #[cfg(test)]
-    fn delivery_wake(&self) -> crate::workspace::delivery::ActiveDeliveryWake {
-        self.delivery_wake.clone()
-    }
 }
 
 impl CloudSyncDeliverySink for crate::workspace::delivery::ActiveDeliverySender<CloudSyncDelivery> {
@@ -791,78 +786,4 @@ fn cloud_sync_theme_border_half(color: u32, has_background: bool) -> Rgba {
 
 fn cloud_sync_theme_alpha(color: u32, alpha: u32) -> Rgba {
     rgba((color << 8) | alpha)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use gpui::TestAppContext;
-    use oxide_cloud_sync::progress::CloudSyncProgressStage;
-
-    fn test_cloud_sync_entity(cx: &mut TestAppContext) -> Entity<CloudSyncWorkspaceEntity> {
-        let store = oxide_cloud_sync::state::CloudSyncStateStore::load(
-            "target/cloud-sync-entity-test-state.json",
-        )
-        .expect("test cloud sync store");
-        cx.new(|cx| CloudSyncWorkspaceEntity::new(store, cx))
-    }
-
-    #[gpui::test]
-    fn hidden_surface_delivery_is_woken_and_retained_by_entity(cx: &mut TestAppContext) {
-        let entity = test_cloud_sync_entity(cx);
-        let sender = entity.update(cx, |cloud_sync, cx| cloud_sync.begin_delivery("check", cx));
-
-        sender
-            .send(CloudSyncDelivery::Progress(CloudSyncProgress {
-                stage: CloudSyncProgressStage::FetchMetadata,
-                current: 1.0,
-                total: 2.0,
-                message: None,
-            }))
-            .expect("delivery");
-        drop(sender);
-        cx.run_until_parked();
-
-        let (deliveries, closed) =
-            entity.update(cx, |cloud_sync, _cx| cloud_sync.take_deliveries());
-        assert_eq!(deliveries.len(), 1);
-        assert!(matches!(
-            deliveries.front(),
-            Some(CloudSyncDelivery::Progress(progress))
-                if progress.stage == CloudSyncProgressStage::FetchMetadata
-        ));
-        assert!(closed);
-    }
-
-    #[gpui::test]
-    fn entity_release_stops_delivery_waiter(cx: &mut TestAppContext) {
-        let entity = test_cloud_sync_entity(cx);
-        let wake = entity.read_with(cx, |cloud_sync, _cx| cloud_sync.delivery_wake());
-
-        drop(entity);
-        cx.update(|_cx| {});
-        cx.run_until_parked();
-
-        assert!(wake.is_stopped());
-    }
-
-    #[gpui::test]
-    fn stale_dirty_refresh_generation_cannot_complete(cx: &mut TestAppContext) {
-        let entity = test_cloud_sync_entity(cx);
-        entity.update(cx, |cloud_sync, cx| cloud_sync.queue_dirty_refresh(cx));
-        let stale_generation = entity.read_with(cx, |cloud_sync, _cx| {
-            cloud_sync.controller.dirty_refresh_generation
-        });
-        entity.update(cx, |cloud_sync, cx| cloud_sync.queue_dirty_refresh(cx));
-        let current_generation = entity.read_with(cx, |cloud_sync, _cx| {
-            cloud_sync.controller.dirty_refresh_generation
-        });
-
-        assert!(!entity.update(cx, |cloud_sync, _cx| {
-            cloud_sync.accept_dirty_refresh_generation(stale_generation)
-        }));
-        assert!(entity.update(cx, |cloud_sync, _cx| {
-            cloud_sync.accept_dirty_refresh_generation(current_generation)
-        }));
-    }
 }

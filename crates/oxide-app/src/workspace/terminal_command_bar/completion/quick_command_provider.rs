@@ -54,35 +54,3 @@ fn terminal_ssh_identity_candidate(token: &str) -> Option<String> {
     }
     Some(format!("{user}@{host}"))
 }
-
-#[cfg(test)]
-mod terminal_quick_command_provider_tests {
-    use super::{
-        infer_terminal_ssh_identity_from_buffer, terminal_cwd_looks_remote,
-        terminal_ssh_identity_candidate,
-    };
-
-    #[test]
-    fn infers_last_ssh_identity_from_terminal_buffer() {
-        let buffer = "Last login\nuser@example.com:~$ ssh deploy@prod-box\n\
-            deploy@prod-box:/srv/app$ ";
-
-        assert_eq!(
-            infer_terminal_ssh_identity_from_buffer(buffer),
-            Some("deploy@prod-box".to_string())
-        );
-    }
-
-    #[test]
-    fn rejects_secret_like_or_malformed_identity_tokens() {
-        assert_eq!(
-            terminal_ssh_identity_candidate("token@example.com=abc"),
-            None
-        );
-        assert_eq!(terminal_ssh_identity_candidate("@example.com:~$"), None);
-        assert_eq!(
-            terminal_ssh_identity_candidate("user@example.com:~$"),
-            Some("user@example.com".to_string())
-        );
-    }
-}

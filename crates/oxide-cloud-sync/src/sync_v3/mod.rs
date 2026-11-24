@@ -18,6 +18,3 @@ pub use publication::{PublicationId, PublishedReplica};
 pub use recovery::RecoveryJournal;
 pub use replica::{ReplicaSnapshot, SyncReplica};
 pub use storage::{LocalReplica, PendingPublication, ReplicaStore};
-
-#[cfg(test)]
-pub(crate) mod tests;

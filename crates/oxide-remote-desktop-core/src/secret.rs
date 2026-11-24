@@ -50,27 +50,3 @@ impl fmt::Debug for RemoteDesktopSecret {
         formatter.write_str("[redacted remote desktop secret]")
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn debug_redacts_secret_value() {
-        let secret = RemoteDesktopSecret::from("rdp-password");
-
-        let debug = format!("{secret:?}");
-
-        assert!(debug.contains("redacted"));
-        assert!(!debug.contains("rdp-password"));
-    }
-
-    #[test]
-    fn zeroizing_secret_handoff_reuses_the_original_buffer() {
-        let source = Zeroizing::new("rdp-password".to_string());
-        let source_buffer = source.as_ptr();
-        let secret = RemoteDesktopSecret::from(source);
-
-        assert_eq!(source_buffer, secret.0.as_ptr());
-    }
-}

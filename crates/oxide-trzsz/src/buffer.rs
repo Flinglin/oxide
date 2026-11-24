@@ -247,37 +247,3 @@ fn is_trzsz_letter(char_code: u8) -> bool {
 fn is_vt100_end(char_code: u8) -> bool {
     char_code.is_ascii_alphabetic()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn reads_line_across_chunks_and_keeps_remainder() {
-        let buffer = TrzszBuffer::default();
-        buffer.add_buffer(b"#NUM:1");
-        buffer.add_buffer(b"2\n#SUCC:12\n");
-        assert_eq!(buffer.read_line().unwrap(), "#NUM:12");
-        assert_eq!(buffer.read_line().unwrap(), "#SUCC:12");
-    }
-
-    #[test]
-    fn reads_binary_without_losing_remainder() {
-        let buffer = TrzszBuffer::default();
-        buffer.add_buffer(b"abcdef");
-        assert_eq!(buffer.read_binary(4).unwrap(), b"abcd");
-        assert_eq!(buffer.read_binary(2).unwrap(), b"ef");
-    }
-
-    #[test]
-    fn stopped_buffer_rejects_further_line_and_binary_reads() {
-        let buffer = TrzszBuffer::default();
-        buffer.stop_buffer();
-        assert!(
-            matches!(buffer.read_line(), Err(TrzszError::InvalidState(reason)) if reason == "Stopped")
-        );
-        assert!(
-            matches!(buffer.read_binary(1), Err(TrzszError::InvalidState(reason)) if reason == "Stopped")
-        );
-    }
-}

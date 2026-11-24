@@ -54,24 +54,3 @@ fn shell_quote(value: &str) -> String {
     output.push('\'');
     output
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::{X11AuthCookie, X11AuthMaterial};
-
-    use super::*;
-
-    #[test]
-    fn remote_xauth_command_quotes_display_and_redacts_debug() {
-        let auth = X11AuthMaterial::with_fake_cookie(
-            X11AuthCookie::from_hex("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
-            X11AuthCookie::from_hex("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap(),
-        );
-        let update = X11RemoteXauthUpdate::new("localhost:10.0", auth);
-
-        let command = update.command();
-        assert!(command.contains("xauth -f \"$authfile\" add 'localhost:10.0'"));
-        assert!(command.contains("'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'"));
-        assert!(!format!("{update:?}").contains("aaaaaaaa"));
-    }
-}

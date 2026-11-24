@@ -14,7 +14,7 @@ workspace = true
 
 [package]
 edition = "2024"
-rust-version = "1.85.0"
+rust-version = "1.97.0"
 name = "alacritty_terminal"
 version = "0.26.0"
 authors = [
@@ -86,12 +86,11 @@ optional = true
 version = "0.2.0"
 
 [dependencies.vte]
-git="https://github.com/Flinglin/vte.git"
+workspace = true
 features = [
     "std",
     "ansi",
 ]
-branch="master"
 
 [dev-dependencies.serde_json]
 version = "1.0.0"

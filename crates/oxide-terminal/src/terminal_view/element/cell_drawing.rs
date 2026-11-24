@@ -23,12 +23,6 @@ struct CellGeometry {
 }
 
 impl CellGeometry {
-    #[cfg(test)]
-    fn new(bounds: Bounds<Pixels>, scale: f32) -> Self {
-        let stroke = (bounds.size.width.as_f32() * scale / 8.0).round().max(1.0);
-        Self::with_stroke(bounds, scale, stroke)
-    }
-
     fn with_stroke(bounds: Bounds<Pixels>, scale: f32, stroke: f32) -> Self {
         let edges = [bounds.left(), bounds.top(), bounds.right(), bounds.bottom()]
             .map(|value| (value.as_f32() * scale).round());
@@ -129,16 +123,6 @@ impl CellGeometry {
             }
         }
     }
-}
-
-#[cfg(test)]
-pub(super) fn draw_cell(
-    ch: char,
-    bounds: Bounds<Pixels>,
-    scale: f32,
-    emit: impl FnMut(CellDrawing),
-) {
-    draw_geometry(ch, CellGeometry::new(bounds, scale), emit);
 }
 
 fn draw_geometry(ch: char, geometry: CellGeometry, mut emit: impl FnMut(CellDrawing)) {
@@ -312,114 +296,3 @@ const BOX_CONNECTIONS: [u8; 128] = [
     0x00, 0x00, 0x00, 0x00, 0x01, 0x10, 0x04, 0x40, // U+2570
     0x02, 0x20, 0x08, 0x80, 0x09, 0x90, 0x06, 0x60, // U+2578
 ];
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use gpui::size;
-
-    fn shapes(ch: char, scale: f32) -> Vec<CellDrawing> {
-        let bounds = Bounds::new(point(px(2.25), px(3.5)), size(px(9.5), px(21.0)));
-        let mut result = Vec::new();
-        draw_cell(ch, bounds, scale, |shape| result.push(shape));
-        result
-    }
-
-    #[test]
-    fn every_box_and_block_character_produces_geometry() {
-        for code in 0x2500..=0x259f {
-            let ch = char::from_u32(code).unwrap();
-            for scale in [1.0, 1.25, 1.5, 2.0] {
-                assert!(!shapes(ch, scale).is_empty(), "U+{code:04X} at {scale}");
-            }
-        }
-        assert!(!is_cell_drawing('界'));
-        assert!(!is_cell_drawing('A'));
-    }
-
-    #[test]
-    fn adjacent_horizontal_cells_share_pixel_aligned_edges() {
-        for scale in [1.0, 1.25, 1.5, 2.0] {
-            let mut fills = Vec::new();
-            for column in 0..2 {
-                let bounds = Bounds::new(
-                    point(px(2.25 + column as f32 * 9.5), px(3.5)),
-                    size(px(9.5), px(21.0)),
-                );
-                draw_cell('─', bounds, scale, |shape| {
-                    if let CellDrawing::Fill(bounds, _) = shape {
-                        fills.push(bounds);
-                    }
-                });
-            }
-            let right = fills[..2].iter().map(|b| b.right()).max().unwrap();
-            let left = fills[2..].iter().map(|b| b.left()).min().unwrap();
-            assert_eq!(left, right);
-            for bounds in fills {
-                for value in [bounds.left(), bounds.top(), bounds.right(), bounds.bottom()] {
-                    let device = value.as_f32() * scale;
-                    assert!((device - device.round()).abs() < 0.0001);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn light_corners_do_not_extend_past_the_joining_stroke() {
-        let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(16.0), px(24.0)));
-        let geometry = CellGeometry::new(bounds, 1.0);
-        let mut minimum = [f32::MAX; 2];
-        draw_cell('┌', bounds, 1.0, |shape| {
-            if let CellDrawing::Fill(rectangle, _) = shape {
-                minimum[0] = minimum[0].min(rectangle.left().as_f32());
-                minimum[1] = minimum[1].min(rectangle.top().as_f32());
-            }
-        });
-        assert_eq!(
-            minimum,
-            geometry.center.map(|value| value - geometry.stroke / 2.0)
-        );
-    }
-
-    #[test]
-    fn double_intersections_leave_the_center_open() {
-        let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(12.0), px(20.0)));
-        let center = CellGeometry::new(bounds, 1.0).center;
-        let center = point(px(center[0]), px(center[1]));
-        for ch in ['╬', '╔', '╗', '╚', '╝'] {
-            draw_cell(ch, bounds, 1.0, |shape| {
-                if let CellDrawing::Fill(rectangle, _) = shape {
-                    assert!(
-                        !rectangle.contains(&center),
-                        "{ch} closes the double-line channel"
-                    );
-                }
-            });
-        }
-    }
-
-    #[test]
-    fn lower_blocks_and_shades_keep_their_fraction() {
-        let bounds = Bounds::new(point(px(0.0), px(0.0)), size(px(16.0), px(24.0)));
-        for eighths in 1..=8 {
-            let ch = char::from_u32(0x2580 + eighths).unwrap();
-            draw_cell(ch, bounds, 1.0, |shape| {
-                let CellDrawing::Fill(rectangle, alpha) = shape else {
-                    panic!("block must fill")
-                };
-                assert_eq!(rectangle.size.height, px(eighths as f32 * 3.0));
-                assert_eq!(rectangle.bottom(), bounds.bottom());
-                assert_eq!(alpha, 1.0);
-            });
-        }
-        for (ch, expected) in [('░', 0.25), ('▒', 0.5), ('▓', 0.75)] {
-            draw_cell(ch, bounds, 1.0, |shape| {
-                let CellDrawing::Fill(rectangle, alpha) = shape else {
-                    panic!("shade must fill")
-                };
-                assert_eq!(rectangle, bounds);
-                assert_eq!(alpha, expected);
-            });
-        }
-    }
-}

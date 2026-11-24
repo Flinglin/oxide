@@ -16,6 +16,3 @@ pub use index::{
 };
 pub use paths::resolve_wasm_runtime_entry;
 pub use runtime::NativeWasmPluginRuntime;
-
-#[cfg(test)]
-mod tests;

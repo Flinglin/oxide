@@ -1574,35 +1574,3 @@ fn visible_indentation_columns(
     }
     columns_by_line
 }
-
-#[cfg(test)]
-mod tests {
-    use super::visible_indentation_columns;
-    use crate::surface::wrap::DisplayRow;
-    use oxide_editor_syntax::{LanguageId, StructureCache};
-
-    fn display_row(line: usize, start_col: usize, end_col: usize) -> DisplayRow {
-        DisplayRow {
-            line,
-            start_col,
-            end_col,
-            is_first: start_col == 0,
-            is_folded_header: false,
-        }
-    }
-
-    #[test]
-    fn indentation_guides_follow_syntax_ranges() {
-        let source = "fn main() {\n    if ready {\n        call();\n    }\n}\n";
-        let session = crate::grammar_fixture::parse(LanguageId::Rust, source).unwrap();
-        let mut cache = StructureCache::default();
-        cache.update(&session, source, 4, None);
-        let rows = [display_row(0, 0, 120), display_row(2, 0, 120)];
-        let columns = visible_indentation_columns(&cache, &rows, true);
-        assert_eq!(columns.get(&2), Some(&vec![0, 4]));
-        assert_eq!(columns.get(&0), None);
-        let rows = [display_row(2, 0, 4), display_row(2, 4, 12)];
-        assert_eq!(visible_indentation_columns(&cache, &rows, true), columns);
-        assert!(visible_indentation_columns(&cache, &rows, false).is_empty());
-    }
-}

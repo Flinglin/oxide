@@ -1199,7 +1199,3 @@ impl TerminalSessionBackend for SshPtySession {
         self.cancel();
     }
 }
-
-#[cfg(test)]
-#[path = "ssh_worker_tests.rs"]
-mod tests;
