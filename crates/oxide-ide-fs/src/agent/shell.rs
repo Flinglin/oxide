@@ -225,7 +225,7 @@ case "$oxide_action" in
    : > "$oxide_encoded" || exit 1
    oxide_received=0
    while IFS= read -r oxide_line; do
-    case "$oxide_line" in .) break;; '#oxideterm-cancel-{token}') exit 1;; esac
+    case "$oxide_line" in .) break;; '#oxide-cancel-{token}') exit 1;; esac
     printf '%s' "$oxide_line" >> "$oxide_encoded" || exit 1
     oxide_received=$((oxide_received + ${{#oxide_line}}))
     printf '\036%s:UPLOADED:%s\n' '{token}' "$oxide_received"

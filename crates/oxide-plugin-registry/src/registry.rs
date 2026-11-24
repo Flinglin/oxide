@@ -3,8 +3,10 @@
 use super::*;
 
 /// Official catalog endpoint shipped with oxide builds.
-pub const OFFICIAL_NATIVE_PLUGIN_REGISTRY_URL: &str = "https://raw.githubusercontent.com/AnalyseDeCircuit/oxideterm-plugins/main/registry/v1/index.json";
-pub const OFFICIAL_NATIVE_PLUGIN_REGISTRY_V2_URL: &str = "https://raw.githubusercontent.com/AnalyseDeCircuit/oxideterm-plugins/main/registry/v2/index.json";
+pub const OFFICIAL_NATIVE_PLUGIN_REGISTRY_URL: &str =
+    "https://raw.githubusercontent.com/AnalyseDeCircuit/oxide-plugins/main/registry/v1/index.json";
+pub const OFFICIAL_NATIVE_PLUGIN_REGISTRY_V2_URL: &str =
+    "https://raw.githubusercontent.com/AnalyseDeCircuit/oxide-plugins/main/registry/v2/index.json";
 const NATIVE_PLUGIN_REGISTRY_VERSION: u32 = 1;
 // The catalog is metadata, not a package transport. Keep malformed endpoints
 // from allocating package-sized responses on the application runtime.

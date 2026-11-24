@@ -1,4 +1,4 @@
-// OxideTerm modifications: commit child ownership after renderer setup; preserve restored window state.
+// Oxide modifications: commit child ownership after renderer setup; preserve restored window state.
 use std::{
     cell::{Cell, Ref, RefCell, RefMut},
     ffi::c_void,
@@ -2084,7 +2084,7 @@ impl PlatformWindow for WaylandWindow {
                 Ok(WgpuRecoveryStatus::Recovered | WgpuRecoveryStatus::Deferred) => true,
                 Ok(WgpuRecoveryStatus::Failed) => {
                     // A terminal recovery result must not keep the compositor frame loop busy.
-                    log::error!("GPU recovery exhausted; restart OxideTerm to restore rendering");
+                    log::error!("GPU recovery exhausted; restart Oxide to restore rendering");
                     false
                 }
                 Err(err) => {

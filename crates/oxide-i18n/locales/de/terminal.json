@@ -629,7 +629,7 @@
       "failed": "Dateizugriff konnte nicht gestartet werden. Prüfen Sie Shell und Umgebung. Verbinden Sie das Terminal erneut, falls es nicht wiederhergestellt wurde.",
       "preparing": "IDE-Dateidienst wird gestartet; Terminaleingaben sind pausiert…",
       "ssh": "SSH",
-      "agent_choice_hint": "Reine Shell installiert keinen Agenten. Der Agent wird unter ~/.oxideterm/oxideterm-agent in der gewählten Umgebung installiert oder wiederverwendet.",
+      "agent_choice_hint": "Reine Shell installiert keinen Agenten. Der Agent wird unter ~/.oxide/oxide-agent in der gewählten Umgebung installiert oder wiederverwendet.",
       "sftp_unavailable": "SFTP ist nicht verfügbar. Wählen Sie SSH.",
       "ssh_unavailable": "SSH-Dateizugriff fehlgeschlagen. Prüfen Sie die Umgebung. Falls eine interaktive Anmeldung nötig ist, schließen Sie diese im Terminal ab und wählen Sie dort per Rechtsklick „In IDE umwandeln“.",
       "ssh_shell": "SSH (Shell-Kanal)",

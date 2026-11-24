@@ -1,4 +1,4 @@
-// OxideTerm modification: modal parent ownership is registered only after window setup succeeds.
+// Oxide modification: modal parent ownership is registered only after window setup succeeds.
 use anyhow::{Context as _, anyhow};
 use x11rb::connection::RequestConnection;
 
@@ -1780,7 +1780,7 @@ impl PlatformWindow for X11Window {
                 Ok(WgpuRecoveryStatus::Recovered | WgpuRecoveryStatus::Deferred) => true,
                 Ok(WgpuRecoveryStatus::Failed) => {
                     // A terminal recovery result must not keep the X11 frame loop busy.
-                    log::error!("GPU recovery exhausted; restart OxideTerm to restore rendering");
+                    log::error!("GPU recovery exhausted; restart Oxide to restore rendering");
                     false
                 }
                 Err(err) => {

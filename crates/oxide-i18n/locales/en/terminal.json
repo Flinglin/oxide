@@ -629,7 +629,7 @@
       "failed": "Could not start file access. Check shell readiness and environment requirements. Reconnect if the terminal could not be restored.",
       "preparing": "Starting IDE file service; terminal input is paused…",
       "ssh": "SSH",
-      "agent_choice_hint": "Pure Shell installs no agent. Using an agent installs or reuses ~/.oxideterm/oxideterm-agent in the selected environment.",
+      "agent_choice_hint": "Pure Shell installs no agent. Using an agent installs or reuses ~/.oxide/oxide-agent in the selected environment.",
       "sftp_unavailable": "SFTP is unavailable. Choose SSH.",
       "ssh_unavailable": "SSH file access failed. Check the environment; if interactive login is required, complete it in a terminal, then right-click that terminal and choose Convert to IDE.",
       "ssh_shell": "SSH (shell channel)",

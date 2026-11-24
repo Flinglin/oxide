@@ -697,7 +697,7 @@ impl PlatformAtlas for TestAtlas {
 }
 
 #[cfg(test)]
-mod oxideterm_dynamic_texture_tests {
+mod oxide_dynamic_texture_tests {
     use super::*;
     use std::borrow::Cow;
 

@@ -629,7 +629,7 @@
       "failed": "No se pudo iniciar el acceso a archivos. Comprueba la shell y los requisitos del entorno. Reconecta el terminal si no se restauró.",
       "preparing": "Iniciando el servicio de archivos del IDE; la entrada del terminal está pausada…",
       "ssh": "SSH",
-      "agent_choice_hint": "Shell puro no instala agentes. El agente se instala o reutiliza en ~/.oxideterm/oxideterm-agent del entorno seleccionado.",
+      "agent_choice_hint": "Shell puro no instala agentes. El agente se instala o reutiliza en ~/.oxide/oxide-agent del entorno seleccionado.",
       "sftp_unavailable": "SFTP no está disponible. Elige SSH.",
       "ssh_unavailable": "Falló el acceso a archivos SSH. Comprueba el entorno. Si se requiere un inicio de sesión interactivo, complétalo en la terminal y después haz clic derecho en ella y elige Convertir a IDE.",
       "ssh_shell": "SSH (canal Shell)",

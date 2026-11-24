@@ -1,8 +1,8 @@
-# OxideTerm Alacritty Terminal Vendor Patches
+# Oxide Alacritty Terminal Vendor Patches
 
 This directory is a minimally modified copy of the crates.io
 `alacritty_terminal` 0.26.0 package. Keep upstream formatting intact so future
-upgrades can distinguish OxideTerm's behavioral changes from the imported
+upgrades can distinguish Oxide's behavioral changes from the imported
 source.
 
 ## Exact Upstream Baseline
@@ -36,7 +36,7 @@ source files are retained from the published package.
   retaining the scalar path for selections, scrollback views, and complex state.
 - `src/term/mod.rs` reports accumulated full-viewport upward scrolling separately
   from incompatible full damage. This adds no work to printable-cell writes and
-  lets OxideTerm reuse retained snapshot rows after ordinary output scrolling.
+  lets Oxide reuse retained snapshot rows after ordinary output scrolling.
 - Differential tests compare the batch and scalar paths across wrapping,
   scrolling, history, styles, Unicode, DEC charset, insert mode, and wide-cell
   overlap.

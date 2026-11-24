@@ -1,4 +1,4 @@
-// OxideTerm modification: adds mutable texture handles for remote desktop framebuffers.
+// Oxide modification: adds mutable texture handles for remote desktop framebuffers.
 
 use crate::{DevicePixels, Pixels, Result, SharedString, Size, size};
 use smallvec::SmallVec;
@@ -45,7 +45,7 @@ pub struct RenderImageParams {
     pub frame_index: usize,
 }
 
-/// The atlas lookup parameters for an OxideTerm dynamic texture.
+/// The atlas lookup parameters for an Oxide dynamic texture.
 #[derive(PartialEq, Eq, Hash, Clone)]
 #[doc(hidden)]
 pub struct DynamicTextureParams {

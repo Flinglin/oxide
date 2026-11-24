@@ -1,6 +1,6 @@
-// OxideTerm vendor modification: preserve virtual-adapter metadata for render policy.
-// OxideTerm modification: coordinate non-blocking device-loss recovery across windows.
-// OxideTerm modification: use product-owned font rendering environment variables.
+// Oxide vendor modification: preserve virtual-adapter metadata for render policy.
+// Oxide modification: coordinate non-blocking device-loss recovery across windows.
+// Oxide modification: use product-owned font rendering environment variables.
 use crate::{CompositorGpuHint, DeviceErrorState, WgpuAtlas, WgpuContext, WgpuDeviceRequirements};
 use anyhow::{Context as _, Result};
 use bytemuck::{Pod, Zeroable};
@@ -3894,9 +3894,9 @@ struct RenderingParameters {
     subpixel_enhanced_contrast: f32,
 }
 
-const FONT_GAMMA_ENV: &str = "OXIDETERM_FONTS_GAMMA";
-const FONT_GRAYSCALE_CONTRAST_ENV: &str = "OXIDETERM_FONTS_GRAYSCALE_ENHANCED_CONTRAST";
-const FONT_SUBPIXEL_CONTRAST_ENV: &str = "OXIDETERM_FONTS_SUBPIXEL_ENHANCED_CONTRAST";
+const FONT_GAMMA_ENV: &str = "OXIDE_FONTS_GAMMA";
+const FONT_GRAYSCALE_CONTRAST_ENV: &str = "OXIDE_FONTS_GRAYSCALE_ENHANCED_CONTRAST";
+const FONT_SUBPIXEL_CONTRAST_ENV: &str = "OXIDE_FONTS_SUBPIXEL_ENHANCED_CONTRAST";
 
 impl RenderingParameters {
     fn new(adapter: &wgpu::Adapter, surface_format: wgpu::TextureFormat) -> Self {

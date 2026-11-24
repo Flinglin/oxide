@@ -629,7 +629,7 @@
       "failed": "无法启动文件访问。请检查 shell 是否就绪，以及环境是否满足要求。若终端未能恢复，请重新连接。",
       "preparing": "正在启动 IDE 文件服务，终端输入暂时暂停…",
       "ssh": "SSH",
-      "agent_choice_hint": "纯 Shell 不安装代理；使用代理会在所选环境的 ~/.oxideterm/oxideterm-agent 安装或复用代理。",
+      "agent_choice_hint": "纯 Shell 不安装代理；使用代理会在所选环境的 ~/.oxide/oxide-agent 安装或复用代理。",
       "sftp_unavailable": "SFTP 不可用，请选择 SSH。",
       "ssh_unavailable": "SSH 文件访问启动失败。请检查环境；如需交互式登录，请先在终端完成，再右键该终端选择“转换为 IDE”。",
       "ssh_shell": "SSH（Shell 通道）",

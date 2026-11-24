@@ -343,7 +343,7 @@ fn write_script(method: &str, params: &serde_json::Value) -> Result<String, Agen
 if [ -L "$p" ]; then {symlink}; fi
 {check}
 [ ! -d "$p" ] || exit 1
-tmp=$(mktemp -- "$(dirname -- "$p")/.oxideterm-write.XXXXXXXX")
+tmp=$(mktemp -- "$(dirname -- "$p")/.oxide-write.XXXXXXXX")
 trap 'rm -f -- "$tmp"' EXIT HUP INT TERM
 printf '%s' {content} | base64 -d > "$tmp"
 {install}
@@ -366,7 +366,7 @@ fn terminal_bootstrap(token: &str, pty: bool) -> String {
 printf '\036{token}:0\n\n'
 while IFS= read -r request; do
  [ "$request" != '!quit' ] || exit 0
- [ "$request" != '#oxideterm-cancel-{token}' ] || exit 1
+ [ "$request" != '#oxide-cancel-{token}' ] || exit 1
  printf '%s' "$request" | base64 -d > "$oxide_dir/request" || exit 1
  /bin/sh "$oxide_dir/request" > "$oxide_dir/output" 2>/dev/null
  status=$?

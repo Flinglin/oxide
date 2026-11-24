@@ -111,7 +111,7 @@ impl IdeChannel {
         }
         // Wait for the bootstrap trap before showing a startup error or releasing its consumer.
         let recovery = tokio::time::timeout(Duration::from_secs(5), async {
-            let cancel = format!("\n#oxideterm-cancel-{}\n", self.token());
+            let cancel = format!("\n#oxide-cancel-{}\n", self.token());
             self.write(cancel.as_bytes()).await?;
             while self.recv().await.is_some() {}
             Ok::<_, anyhow::Error>(())

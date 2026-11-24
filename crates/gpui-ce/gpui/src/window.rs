@@ -1,4 +1,4 @@
-// OxideTerm modification: window lifecycle changes cancel stale pointer capture and drag state.
+// Oxide modification: window lifecycle changes cancel stale pointer capture and drag state.
 #[cfg(feature = "profiler")]
 use crate::DebugFrameOverlayMode;
 #[cfg(any(feature = "inspector", debug_assertions))]

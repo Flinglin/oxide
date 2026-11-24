@@ -377,9 +377,9 @@ mod tests {
     #[test]
     fn custom_environment_block_is_sorted_and_overrides_parent_path() {
         let custom_env = HashMap::from([
-            ("ZZ_OXIDETERM_SORT_PROBE".to_string(), "last".to_string()),
-            ("AA_OXIDETERM_SORT_PROBE".to_string(), "first".to_string()),
-            ("PaTh".to_string(), "oxideterm-path-probe".to_string()),
+            ("ZZ_OXIDE_SORT_PROBE".to_string(), "last".to_string()),
+            ("AA_OXIDE_SORT_PROBE".to_string(), "first".to_string()),
+            ("PaTh".to_string(), "oxide-path-probe".to_string()),
         ]);
         let block = convert_custom_env(&custom_env).expect("custom environment block");
         let entries = block
@@ -409,6 +409,6 @@ mod tests {
             .filter(|&(_, key)| key.to_string_lossy()
                     .eq_ignore_ascii_case("PATH")).map(|(index, _)| String::from_utf16_lossy(entries[index]))
             .collect::<Vec<_>>();
-        assert_eq!(path_entries, ["PaTh=oxideterm-path-probe"]);
+        assert_eq!(path_entries, ["PaTh=oxide-path-probe"]);
     }
 }

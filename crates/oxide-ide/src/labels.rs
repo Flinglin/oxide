@@ -134,7 +134,7 @@ impl Default for IdeLabels {
             agent_choices: ["Pure Shell", "Use agent (install or update if needed)"].map(str::to_owned),
             agent_installing: "Installing agent: {{percent}}% ({{transferred}} / {{total}} KiB)".into(),
             agent_starting: "Starting agent…".into(),
-            agent_choice_hint: "Choose how to access files. Agents are retained in ~/.oxideterm/oxideterm-agent.".into(),
+            agent_choice_hint: "Choose how to access files. Agents are retained in ~/.oxide/oxide-agent.".into(),
             ssh_unavailable: "SSH file access failed. Complete interactive login in a terminal, then right-click it and choose Convert to IDE.".into(),
             ssh_shell: "SSH (shell channel)".into(),
             sftp_unavailable: "SFTP is unavailable. Choose SSH.".into(),

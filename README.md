@@ -9,4 +9,4 @@ No account. No subscription. No telemetry.
 
 **GPL-3.0-only.**
 
-This project is a fork of [OxideTerm v2.2.2](https://github.com/AnalyseDeCircuit/oxideterm). It removes AI-related features and incorporates ongoing optimizations.
+This project is a fork of [Oxide v2.2.2](https://github.com/AnalyseDeCircuit/oxide). It removes AI-related features and incorporates ongoing optimizations.
