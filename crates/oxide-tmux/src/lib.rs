@@ -1,6 +1,3 @@
-// Copyright (C) 2026 oxide contributors.
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Byte-oriented support for tmux control mode.
 //!
 //! The protocol layer owns no process, terminal, or network transport. This

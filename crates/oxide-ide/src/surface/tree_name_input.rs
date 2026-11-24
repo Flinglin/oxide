@@ -114,10 +114,18 @@ impl gpui::EntityInputHandler for IdeSurface {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<gpui::UTF16Selection> {
-        let (value, selection_range, reversed) = if let Some(input) = self.tree_name_input.as_ref() {
+      if !self.accepts_ide_text_input() {
+            return None;
+        }
+        let (value, selection_range, reversed) = if let Some(input) = self.tree_name_input.as_ref()
+        {
             (&input.value, input.selection_range.clone(), false)
-        } else if self.search.open {
-            (&self.search.query, self.search.selection_range.clone(), false)
+        } else if self.search.open && !self.has_modal() {
+            (
+                &self.search.query,
+                self.search.selection_range.clone(),
+                false,
+            )
         } else if self.folder_picker.open && self.folder_picker.path_input_focused {
             (
                 &self.folder_picker.path_input,
@@ -139,9 +147,12 @@ impl gpui::EntityInputHandler for IdeSurface {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Range<usize>> {
+        if !self.accepts_ide_text_input() {
+            return None;
+        }
         let marked = if let Some(input) = self.tree_name_input.as_ref() {
             input.marked_text.as_ref()
-        } else if self.search.open {
+           } else if self.search.open && !self.has_modal() {
             self.search.marked_text.as_ref()
         } else if self.folder_picker.open && self.folder_picker.path_input_focused {
             self.folder_picker.path_marked_text.as_ref()
@@ -153,6 +164,9 @@ impl gpui::EntityInputHandler for IdeSurface {
     }
 
     fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+         if !self.accepts_ide_text_input() {
+            return;
+        }
         if let Some(input) = self.tree_name_input.as_mut()
             && input.marked_text.take().is_some()
         {
@@ -174,6 +188,9 @@ impl gpui::EntityInputHandler for IdeSurface {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.accepts_ide_text_input() {
+            return;
+        }
         if let Some(input) = self.tree_name_input.as_mut() {
             if input.submitting {
                 return;
@@ -191,7 +208,7 @@ impl gpui::EntityInputHandler for IdeSurface {
             cx.notify();
             return;
         }
-        if self.search.open {
+         if self.search.open && !self.has_modal() {
             let fallback_end = self.search.query.encode_utf16().count();
             let range = self
                 .search
@@ -229,6 +246,9 @@ impl gpui::EntityInputHandler for IdeSurface {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+          if !self.accepts_ide_text_input() {
+            return;
+        }
         if let Some(input) = self.tree_name_input.as_mut() {
             if input.submitting {
                 return;
@@ -255,7 +275,7 @@ impl gpui::EntityInputHandler for IdeSurface {
             cx.notify();
             return;
         }
-        if self.search.open {
+           if self.search.open && !self.has_modal() {
             if new_text.is_empty() {
                 if self.search.marked_text.take().is_some() {
                     cx.notify();
@@ -313,6 +333,9 @@ impl gpui::EntityInputHandler for IdeSurface {
         window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
+         if !self.accepts_ide_text_input() {
+            return None;
+        }
         if self.folder_picker.open && self.folder_picker.path_input_focused {
             return Some(self.folder_picker_path_bounds_for_range(
                 range_utf16,
@@ -332,6 +355,9 @@ impl gpui::EntityInputHandler for IdeSurface {
         window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
+         if !self.accepts_ide_text_input() {
+            return None;
+        }
         if self.folder_picker.open && self.folder_picker.path_input_focused {
             self.folder_picker_path_index_for_position(point, window)
         } else {
@@ -340,19 +366,29 @@ impl gpui::EntityInputHandler for IdeSurface {
     }
 
     fn accepts_text_input(&self, _window: &mut Window, _cx: &mut Context<Self>) -> bool {
-        self.tree_name_input
-            .as_ref()
-            .is_some_and(|input| !input.submitting)
-            || self.search.open
-            || (self.folder_picker.open && self.folder_picker.path_input_focused)
+         self.accepts_ide_text_input()
     }
 }
 
 impl IdeSurface {
+     fn accepts_ide_text_input(&self) -> bool {
+        match self.active_modal() {
+            Some(modal::IdeModal::TreeName) => self
+                .tree_name_input
+                .as_ref()
+                .is_some_and(|input| !input.submitting),
+            Some(modal::IdeModal::FolderPicker) => self.folder_picker.path_input_focused,
+            Some(_) => false,
+            None => self.search.open,
+        }
+    }
     fn active_ide_input_text_with_marked(&self) -> Option<String> {
+         if !self.accepts_ide_text_input() {
+            return None;
+        }
         if self.tree_name_input.is_some() {
             self.tree_name_text_with_marked()
-        } else if self.search.open {
+       } else if self.search.open && !self.has_modal() {
             Some(self.project_search_text_with_marked())
         } else if self.folder_picker.open && self.folder_picker.path_input_focused {
             Some(self.folder_picker_path_text_with_marked())

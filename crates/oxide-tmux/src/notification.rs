@@ -1,6 +1,3 @@
-// Copyright (C) 2026 oxide contributors.
-// SPDX-License-Identifier: GPL-3.0-only
-
 use std::borrow::Cow;
 
 use crate::{PaneId, SessionId, WindowId};

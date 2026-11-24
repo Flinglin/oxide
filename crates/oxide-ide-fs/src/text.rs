@@ -8,7 +8,25 @@ use oxide_preview::{
     normalize_text_line_endings, restore_text_line_endings,
 };
 use zeroize::Zeroizing;
+pub(crate) const FILE_PREFIX_BYTES: usize = 8192;
 
+pub(crate) fn check_text_prefix(bytes: &[u8], hint: Option<&str>) -> Result<(), IdeFileError> {
+    let explicit_unicode = hint
+        .and_then(|h| Encoding::for_label(h.as_bytes()))
+        .is_some_and(|e| e == UTF_16LE || e == UTF_16BE);
+    if explicit_unicode
+        || bytes.starts_with(&[0xff, 0xfe])
+        || bytes.starts_with(&[0xfe, 0xff])
+        || is_likely_text_content(bytes)
+    {
+        Ok(())
+    } else {
+        Err(IdeFileError::new(
+            IdeFileErrorKind::Binary,
+            "File is not text",
+        ))
+    }
+}
 pub(crate) fn check_size(size: u64) -> Result<(), IdeFileError> {
     if size > MAX_EDITABLE_FILE_SIZE {
         return Err(IdeFileError::new(
@@ -25,16 +43,7 @@ pub(crate) fn decode_file(
     version: SavedFileVersion,
 ) -> Result<IdeFileData, IdeFileError> {
     check_size(bytes.len() as u64)?;
-    let unicode_bom = bytes.starts_with(&[0xff, 0xfe]) || bytes.starts_with(&[0xfe, 0xff]);
-    let explicit_unicode = hint
-        .and_then(|h| Encoding::for_label(h.as_bytes()))
-        .is_some_and(|e| e == UTF_16LE || e == UTF_16BE);
-    if !unicode_bom && !explicit_unicode && !is_likely_text_content(bytes) {
-        return Err(IdeFileError::new(
-            IdeFileErrorKind::Unsupported,
-            "File is not text",
-        ));
-    }
+    check_text_prefix(bytes, hint)?;
     // A manual reopen must honor the selected encoding, even when a conflicting BOM exists.
     // Automatic detection remains shared with previews; editing rejects lossy decoding.
     let (decoded, name, has_bom, errors) = if let Some(hint) = hint {

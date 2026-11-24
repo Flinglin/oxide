@@ -336,7 +336,9 @@ impl WorkspaceApp {
         self.terminal_command_sender.update(cx, |sender, cx| {
             sender.set_compact_focused(false, cx);
         });
-        if let Some(pane) = self.active_pane(cx) {
+        if let Some(surface) = self.active_ide_surface(cx) {
+            window.focus(&surface.read(cx).focus_handle(cx), cx);
+        } else if let Some(pane) = self.active_pane(cx) {
             // A hidden terminal can retain paint operations that reference atlas slots later
             // reused by another surface. Force one fresh frame when the pane becomes active so
             // its unchanged snapshot is reshaped without reconnecting or rebuilding the session.
@@ -983,6 +985,11 @@ impl WorkspaceApp {
     }
 
     fn close_tab_at_index(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(tab_id) = self.tabs(cx).get(index).map(|tab| tab.id)
+            && self.guard_shell_ide_close(tab_id, cx)
+        {
+            return;
+        }
         let exiting_visual = self.tab_exit_visual(index, cx);
         let Some(transition) = self
             .tab_host

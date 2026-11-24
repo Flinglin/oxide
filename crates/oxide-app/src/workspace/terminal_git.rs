@@ -1,6 +1,3 @@
-// Copyright (C) 2026 oxide contributors.
-// SPDX-License-Identifier: GPL-3.0-only
-
 use std::process::Stdio;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 

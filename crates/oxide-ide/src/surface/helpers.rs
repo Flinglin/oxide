@@ -105,7 +105,7 @@ async fn open_text_file(
             format!("File is too large to edit ({size} > {limit})"),
         )),
         IdeFileCheck::Binary => Err(oxide_ide_core::IdeFileError::new(
-            oxide_ide_core::IdeFileErrorKind::Unsupported,
+            oxide_ide_core::IdeFileErrorKind::Binary,
             "File is binary",
         )),
         IdeFileCheck::NotEditable { reason } => Err(oxide_ide_core::IdeFileError::new(

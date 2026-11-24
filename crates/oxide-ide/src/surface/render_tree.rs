@@ -1,5 +1,47 @@
 impl IdeSurface {
-    fn render_empty_project(&self, _cx: &mut Context<Self>) -> AnyElement {
+    fn render_empty_project(&self, cx: &mut Context<Self>) -> AnyElement {
+        if self.access_request.is_some() {
+            let mut choices = div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(self.labels.access_title.clone());
+            for index in 0..self.labels.access_modes.len() {
+                choices = choices.child(
+                    button_with(
+                        &self.tokens,
+                        self.labels.access_modes[index].clone(),
+                        ButtonOptions {
+                            variant: ButtonVariant::Outline,
+                            size: ButtonSize::Default,
+                            radius: ButtonRadius::Md,
+                            disabled: false,
+                        },
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, window, cx| {
+                            if index == 1 {
+                                this.select_ssh_access(window, cx);
+                            } else {
+                                this.select_access(oxide_ide_fs::RemoteAccess::Sftp, cx);
+                            }
+                            cx.stop_propagation();
+                        }),
+                    ),
+                );
+            }
+            if let Some(error) = &self.last_error {
+                choices = choices.child(error.clone());
+            }
+            return div()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(choices)
+                .into_any_element();
+        }
         div()
             .size_full()
             .flex()
@@ -11,6 +53,10 @@ impl IdeSurface {
     }
 
     fn render_loading_project(&self, _cx: &mut Context<Self>) -> AnyElement {
+            let (label, percent) = self
+            .agent_install_progress
+            .map(|progress| self.labels.agent_install_status(progress))
+            .unwrap_or_else(|| (self.labels.loading_project.clone(), None));
         div()
             .size_full()
             .flex()
@@ -20,7 +66,18 @@ impl IdeSurface {
             .justify_center()
             .text_color(rgb(self.tokens.ui.text_muted))
             .child(self.spinner_icon("ide-project-loading", 24.0, self.tokens.ui.accent))
-            .child(self.labels.loading_project.clone())
+          .child(label)
+            .when(self.agent_install_progress.is_some(), |view| {
+                view.child(
+                    div()
+                        .w(px(280.0))
+                        .child(oxide_ui::progress::progress(
+                            &self.tokens,
+                            percent,
+                            percent.is_none(),
+                        )),
+                )
+            })
             .into_any_element()
     }
 
@@ -67,6 +124,38 @@ impl IdeSurface {
             .size_full()
             .flex()
             .flex_col()
+             .when_some(self.last_error.clone(), |body, error| {
+                body.child(
+                    oxide_ui::state_notice(
+                        &self.tokens,
+                        oxide_ui::UiStateTone::Error,
+                        self.icon(
+                            "lucide/circle-alert.svg",
+                            IDE_ICON_SIZE,
+                            self.tokens.ui.error,
+                        ),
+                        error,
+                        None,
+                    )
+                    .debug_selector(|| "ide-workspace-error".into())
+                    .relative()
+                    .flex_none()
+                    .pr(px(self.tokens.metrics.ui_toast_padding * 2.0))
+                    .child(
+                        oxide_ui::toast::toast_close(&self.tokens)
+                            .id("ide-dismiss-error")
+                            .debug_selector(|| "ide-dismiss-error".into())
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| {
+                                    this.last_error = None;
+                                    cx.stop_propagation();
+                                    cx.notify();
+                                }),
+                            ),
+                    ),
+                )
+            })
             .child(
                 div()
                     .flex_1()

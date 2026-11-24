@@ -794,30 +794,6 @@ impl WorkspaceApp {
                 }
                 Some(popup)
             }
-            (SettingsTab::Ide, SettingsSelect::IdeAgentMode) => {
-                let mut popup = select_overlay_popup(&self.theme_tokens, width);
-                for mode in [
-                    IdeAgentMode::Ask,
-                    IdeAgentMode::Enabled,
-                    IdeAgentMode::Disabled,
-                ] {
-                    popup = popup.child(select_option_action(
-                        select_option(
-                            &self.theme_tokens,
-                            ide_agent_label(mode, &self.i18n),
-                            mode == settings.ide.agent_mode,
-                        ),
-                        false,
-                        false,
-                        cx.listener(move |this, _event, _window, cx| {
-                            this.close_settings_select();
-                            this.edit_settings(|settings| settings.ide.agent_mode = mode, cx);
-                            cx.stop_propagation();
-                        }),
-                    ));
-                }
-                Some(popup)
-            }
             (SettingsTab::Terminal, SettingsSelect::XmodemBlockSize) => {
                 let mut popup = select_overlay_popup(&self.theme_tokens, width);
                 for size in [

@@ -11,4 +11,6 @@ mod surface;
 pub use labels::IdeLabels;
 pub use oxide_ide_core::{IdePluginFileSnapshot, IdePluginProjectSnapshot, IdePluginSnapshot};
 pub use oxide_ide_fs::NodeAgentMode;
-pub use surface::{IdeLoadState, IdeRuntimeSettings, IdeSurface, IdeSurfaceEvent, IdeSurfaceMount};
+pub use surface::{
+    IdeLoadState, IdeModalLayer, IdeRuntimeSettings, IdeSurface, IdeSurfaceEvent, IdeSurfaceMount,
+};

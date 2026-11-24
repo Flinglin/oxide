@@ -1,6 +1,3 @@
-// Copyright (C) 2026 oxide contributors.
-// SPDX-License-Identifier: GPL-3.0-only
-
 const TERMINAL_CWD_SCAN_LINES: usize = 16;
 
 /// Infer a terminal working directory from recent visible terminal text.

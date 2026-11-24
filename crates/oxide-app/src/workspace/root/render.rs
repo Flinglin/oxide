@@ -26,9 +26,26 @@ impl WorkspaceApp {
                 return self.render_tab_window_modals(page, &kind, window, cx);
             }
         }
-
+        let surface = self.tab_by_id(tab_id, cx).and_then(|tab| {
+            tab.active_pane_id
+                .and_then(|pane| {
+                    self.ide_workspace
+                        .read(cx)
+                        .shell_surface_for_pane(pane)
+                        .map(|(_, surface)| surface)
+                })
+                .or_else(|| {
+                    (*tab_kind == TabKind::Ide)
+                        .then(|| self.ide_workspace.read(cx).surface(tab_id))
+                        .flatten()
+                })
+        });
+        if let Some(modal) =
+            surface.and_then(|surface| self.ide_workspace.read(cx).modal_for_surface(&surface))
+        {
+            modals.push(modal.into_any_element());
+        }
         let window_id = window.window_handle().window_id();
-
         match tab_kind {
             TabKind::Settings => {
                 if let Some(modal) = self.render_settings_navigation_editor(cx) {
@@ -188,9 +205,15 @@ impl WorkspaceApp {
         {
             self.needs_active_pane_focus = false;
 
-            window.on_next_frame(move |window, cx| {
-                pane.update(cx, |pane, cx| pane.focus(window, cx));
-            });
+            if let Some(surface) = self.active_ide_surface(cx) {
+                window.on_next_frame(move |window, cx| {
+                    window.focus(&surface.read(cx).focus_handle(cx), cx);
+                });
+            } else {
+                window.on_next_frame(move |window, cx| {
+                    pane.update(cx, |pane, cx| pane.focus(window, cx));
+                });
+            }
         }
 
         self.split_drop_regions.borrow_mut().clear();
@@ -294,7 +317,12 @@ impl WorkspaceApp {
         let embedded_sftp_resize_cursor_active = self.embedded_sftp_sidebar_resizing;
         let read_only_selection_workspace = cx.entity();
         self.update_main_window_tabbar_drop_bounds(window, titlebar_visible, zen_mode);
-
+        let mut key_context = gpui::KeyContext::new_with_defaults();
+        key_context.add("Workspace");
+        if self.active_window_modal_owner(cx).is_some() && !self.ide_modal_owns_input(cx) {
+            // IDE dialogs register this context on their independently observed window layer.
+            key_context.add(oxide_ui::modal::MODAL_KEY_CONTEXT);
+        }
         div()
             .id("workspace-root")
             .size_full()
@@ -317,7 +345,7 @@ impl WorkspaceApp {
                 root.cursor(CursorStyle::ResizeRow)
             })
             .track_focus(&self.focus_handle)
-            .key_context("Workspace")
+            .key_context(key_context)
             // Host Tools actions bubble here from both sidebar pages and portaled dialogs.
             .on_action(
                 cx.listener(|this, request: &HostToolsWindowRequest, window, cx| {
@@ -383,11 +411,14 @@ impl WorkspaceApp {
                     cx.stop_propagation();
                     return;
                 }
-                if this.active_sftp_editor_owns_key(event.keystroke.key.as_str(), cx)
-                    || this
-                        .plugin_ui_state(cx)
-                        .focused_text_area_context(window, cx)
-                        .is_some()
+                if this.active_window_modal_owner(cx).is_some() {
+                    // Yield only to the modal's own input or editor, never background routing.
+                    return;
+                }
+                if this
+                    .plugin_ui_state(cx)
+                    .focused_text_area_context(window, cx)
+                    .is_some()
                     || this.quick_command_text_editor_focused(window, cx)
                     || this
                         .tab_host
@@ -816,7 +847,10 @@ impl WorkspaceApp {
             .on_action(cx.listener(|this, _: &SplitNavRight, window, cx| {
                 this.focus_adjacent_pane(true, window, cx);
             }))
-            .on_action(cx.listener(|this, _: &Copy, _window, cx| {
+            .on_action(cx.listener(|this, _: &Copy, window, cx| {
+                if this.handle_ide_modal_edit_action("c", window, cx) {
+                    return;
+                }
                 if this.copy_active_text_input(cx) {
                     return;
                 }
@@ -827,7 +861,10 @@ impl WorkspaceApp {
                     this.copy(cx);
                 }
             }))
-            .on_action(cx.listener(|this, _: &Cut, _window, cx| {
+            .on_action(cx.listener(|this, _: &Cut, window, cx| {
+                if this.handle_ide_modal_edit_action("x", window, cx) {
+                    return;
+                }
                 if this.cut_active_text_input(cx) {
                     return;
                 }
@@ -838,7 +875,10 @@ impl WorkspaceApp {
                     let _ = this.cut(cx);
                 }
             }))
-            .on_action(cx.listener(|this, _: &Paste, _window, cx| {
+            .on_action(cx.listener(|this, _: &Paste, window, cx| {
+                if this.handle_ide_modal_edit_action("v", window, cx) {
+                    return;
+                }
                 if this.paste_active_text_input(cx) {
                     return;
                 }

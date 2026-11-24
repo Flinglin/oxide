@@ -1,6 +1,3 @@
-// Copyright (C) 2026 oxide contributors.
-// SPDX-License-Identifier: GPL-3.0-only
-
 use crate::detector::{DetectedModemProtocol, detect_modem_start};
 use crate::stream::{ModemTransfer, ModemWakeCallback};
 use crate::zmodem::ZFrameType;

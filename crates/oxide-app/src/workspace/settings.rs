@@ -5,7 +5,7 @@ use gpui::{
     point, relative,
 };
 use oxide_settings::{
-    AppIconVariant, FrostedGlassMode, HighlightRule, HighlightRuleSet, IdeAgentMode, Language,
+    AppIconVariant, FrostedGlassMode, HighlightRule, HighlightRuleSet, Language,
     MAX_HIGHLIGHT_RULE_SETS, MAX_HIGHLIGHT_RULES, PersistedSettings,
     RECOMMENDED_FOCUS_HANDOFF_COMMANDS, RemoteShellIntegrationMode, SettingsApplicationProxyMode,
     SettingsUpstreamProxyAuth, SettingsUpstreamProxyConfig, SettingsUpstreamProxyProtocol,

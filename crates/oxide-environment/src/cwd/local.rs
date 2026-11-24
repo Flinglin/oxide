@@ -1,6 +1,3 @@
-// Copyright (C) 2026 oxide contributors.
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Local filesystem behavior for terminal current-directory awareness.
 
 use std::{cmp::Ordering, path::PathBuf};

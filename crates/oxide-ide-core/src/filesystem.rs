@@ -186,6 +186,7 @@ pub enum IdeFileCheck {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum IdeFileErrorKind {
+    Binary,
     TooLarge,
     InvalidEncoding,
     UnrepresentableText,

@@ -1,6 +1,3 @@
-// Copyright (C) 2026 oxide contributors.
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Terminal environment awareness primitives shared by local and SSH probes.
 //!
 //! This crate owns reusable environment detectors such as Git repository

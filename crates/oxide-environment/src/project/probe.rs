@@ -1,6 +1,3 @@
-// Copyright (C) 2026 oxide contributors.
-// SPDX-License-Identifier: GPL-3.0-only
-
 use super::model::{ProjectManifestEntry, ProjectProbeError, ProjectProbeOutcome};
 use super::parse::{interpret_project_manifest_entries, project_manifest_file_names};
 use crate::cwd::{CurrentDirectorySource, expand_local_home_path};

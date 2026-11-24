@@ -1,6 +1,3 @@
-// Copyright (C) 2026 oxide contributors.
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Git action validation and shell-visible command planning.
 
 use crate::shell::shell_quote;

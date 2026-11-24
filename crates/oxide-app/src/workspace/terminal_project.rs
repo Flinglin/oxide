@@ -1,6 +1,3 @@
-// Copyright (C) 2026 oxide contributors.
-// SPDX-License-Identifier: GPL-3.0-only
-
 use oxide_environment::{
     ProjectProbeKey, ProjectProbeOutcome, ProjectProbeScope, ProjectSnapshot, ProjectTask,
     remote_project_cwd_source_is_trusted,

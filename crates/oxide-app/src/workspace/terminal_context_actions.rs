@@ -128,6 +128,10 @@ impl WorkspaceApp {
         };
 
         match action {
+            TerminalContextAction::ConvertToShellIde => {
+                self.request_shell_ide(pane_id, source_pane, window, cx);
+                true
+            }
             TerminalContextAction::Reconnect => {
                 self.request_ssh_terminal_reconnect(pane_id, cx);
                 true

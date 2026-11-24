@@ -1,6 +1,3 @@
-// Copyright (C) 2026 oxide contributors.
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Terminal-native X/Y/ZMODEM protocol primitives.
 //!
 //! This crate owns byte-level modem protocol state that can be fed from

@@ -7234,22 +7234,27 @@ dependencies = [
 name = "oxide-ide-fs"
 version = "0.1.2"
 dependencies = [
+ "anyhow",
  "base64 0.23.1",
  "dashmap",
  "encoding_rs",
  "futures-util",
+ "memchr",
  "oxide-audit",
  "oxide-backend-classification",
  "oxide-ide-core",
  "oxide-preview",
  "oxide-sftp",
  "oxide-ssh",
+ "oxide-terminal-core",
+ "regex",
  "russh 0.64.1",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+ "uuid",
  "zeroize",
  "zstd",
 ]
@@ -7750,6 +7755,7 @@ dependencies = [
  "oxide-terminal-triggers",
  "oxide-tmux",
  "oxide-trzsz",
+ "parking_lot",
  "polling",
  "rand 0.10.3",
  "russh 0.64.1",
@@ -7759,6 +7765,7 @@ dependencies = [
  "tokio",
  "tracing",
  "unicode-segmentation",
+ "uuid",
  "windows 0.61.3",
  "zeroize",
 ]

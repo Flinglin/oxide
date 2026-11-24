@@ -1,6 +1,3 @@
-// Copyright (C) 2026 oxide contributors.
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Git environment awareness primitives.
 //!
 //! This module owns Git-specific DTOs, shell probe descriptions, parsers, and

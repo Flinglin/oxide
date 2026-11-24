@@ -1,6 +1,3 @@
-// Copyright (C) 2026 AnalyseDeCircuit
-// SPDX-License-Identifier: GPL-3.0-only
-
 use gpui::{
     AnyElement, AppContext, Context, Entity, Focusable, InteractiveElement, IntoElement,
     KeyDownEvent, MouseButton, ParentElement, StatefulInteractiveElement, Styled, Subscription,

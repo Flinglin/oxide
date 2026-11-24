@@ -8,9 +8,13 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+anyhow.workspace = true
+memchr.workspace = true
+uuid.workspace = true
 oxide-audit = { path = "../oxide-audit" }
 oxide-backend-classification = { path = "../oxide-backend-classification" }
 oxide-ide-core = { path = "../oxide-ide-core" }
+oxide-terminal-core = { path = "../oxide-terminal-core" }
 oxide-sftp = { path = "../oxide-sftp" }
 oxide-ssh = { path = "../oxide-ssh" }
 base64.workspace = true
@@ -22,6 +26,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+regex.workspace = true
 zstd = "0.13"
 
 oxide-preview = { path = "../oxide-preview" }

@@ -1,6 +1,3 @@
-// Copyright (C) 2026 oxide contributors.
-// SPDX-License-Identifier: GPL-3.0-only
-
 use std::collections::HashMap;
 
 use super::model::{GitProbeError, GitProbeKey, GitProbeOutcome, GitRepositorySnapshot};

@@ -1,6 +1,3 @@
-// Copyright (C) 2026 oxide contributors.
-// SPDX-License-Identifier: GPL-3.0-only
-
 use crate::xymodem::{NAK, WANT_CRC};
 use crate::zmodem::{ZBIN, ZBIN32, ZDLE, ZHEX, ZPAD};
 

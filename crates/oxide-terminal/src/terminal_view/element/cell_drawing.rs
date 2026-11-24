@@ -1,6 +1,3 @@
-// Copyright (C) 2026 oxide contributors.
-// SPDX-License-Identifier: GPL-3.0-only
-
 //! Font-independent cell graphics. Coordinates are quantized in device pixels
 //! before conversion back to GPUI pixels, including shared edges between cells.
 

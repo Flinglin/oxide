@@ -1,9 +1,10 @@
+mod shell_ide;
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, IntoElement, Subscription, div,
 };
 use oxide_ide::{
-    IdeLabels, IdePluginSnapshot, IdeRuntimeSettings, IdeSurface, IdeSurfaceEvent, IdeSurfaceMount,
-    NodeAgentMode,
+    IdeLabels, IdeModalLayer, IdePluginSnapshot, IdeRuntimeSettings, IdeSurface, IdeSurfaceEvent,
+    IdeSurfaceMount, NodeAgentMode,
 };
 use oxide_ide_fs::NodeAgentIdeFileSystem;
 use oxide_settings::{IdeAgentMode, PersistedSettings};
@@ -19,7 +20,10 @@ use super::{TabId, WorkspaceApp, tabs::TabRemovalTransition};
 
 /// Cross-workspace IDE effects that require settings, tabs, or reconnect coordination.
 pub(super) enum IdeWorkspaceEvent {
-    RememberAgentMode(NodeAgentMode),
+    ShellReturnReady {
+        tab_id: TabId,
+        failed: bool,
+    },
     TransientSurfaceClosed {
         tab_id: TabId,
     },
@@ -39,6 +43,7 @@ pub(super) enum IdeSurfaceCloseReason {
 }
 
 struct IdeSurfaceEntry {
+    modal: Entity<IdeModalLayer>,
     node_id: NodeId,
     surface: Entity<IdeSurface>,
     _subscription: Subscription,
@@ -60,16 +65,44 @@ enum ExistingReconnectRestore {
 /// Each `IdeSurface` retains its own node consumer and mount lifecycle, so removing one entry only
 /// releases that surface owner and cannot disconnect a shared node or another IDE consumer.
 pub(super) struct IdeWorkspaceEntity {
+    shell_sources: HashMap<TabId, oxide_workspace::PaneId>,
+    shell_open_tasks: HashMap<oxide_workspace::PaneId, gpui::Task<()>>,
     fs: NodeAgentIdeFileSystem,
     backend_runtime: Arc<tokio::runtime::Runtime>,
     surfaces_by_tab: BTreeMap<u64, IdeSurfaceEntry>,
     tabs_by_node: HashMap<NodeId, BTreeSet<u64>>,
     last_closed_at_by_node: HashMap<NodeId, SystemTime>,
+    reconnect_access_by_node: HashMap<NodeId, oxide_ide_fs::RemoteAccess>,
 }
 
 impl IdeWorkspaceEntity {
-    pub(in crate::workspace) fn set_agent_fs_mode(&mut self, mode: oxide_ide_fs::NodeAgentMode) {
-        self.fs.set_mode(mode);
+    pub(super) fn modal_for_surface(
+        &self,
+        surface: &Entity<IdeSurface>,
+    ) -> Option<Entity<IdeModalLayer>> {
+        self.surfaces_by_tab
+            .values()
+            .find(|entry| entry.surface == *surface)
+            .map(|entry| entry.modal.clone())
+    }
+
+    pub(super) fn open_project_count(&self, cx: &App) -> usize {
+        // Count actual project owners, including inline and detached surfaces, rather than AI consumers.
+        self.surfaces_by_tab
+            .values()
+            .filter(|entry| entry.surface.read(cx).has_open_project())
+            .count()
+    }
+
+    pub(super) fn shell_surface_for_pane(
+        &self,
+        pane: oxide_workspace::PaneId,
+    ) -> Option<(TabId, Entity<IdeSurface>)> {
+        self.shell_sources.iter().find_map(|(id, source)| {
+            (*source == pane)
+                .then(|| self.surface(*id).map(|surface| (*id, surface)))
+                .flatten()
+        })
     }
 
     pub(super) fn new(
@@ -77,11 +110,14 @@ impl IdeWorkspaceEntity {
         backend_runtime: Arc<tokio::runtime::Runtime>,
     ) -> Self {
         Self {
+            shell_sources: HashMap::new(),
+            shell_open_tasks: HashMap::new(),
             fs,
             backend_runtime,
             surfaces_by_tab: BTreeMap::new(),
             tabs_by_node: HashMap::new(),
             last_closed_at_by_node: HashMap::new(),
+            reconnect_access_by_node: HashMap::new(),
         }
     }
 
@@ -90,6 +126,7 @@ impl IdeWorkspaceEntity {
         tab_id: TabId,
         node_id: NodeId,
         initial_path: String,
+        access: Option<oxide_ide_fs::RemoteAccess>,
         tokens: oxide_theme::ThemeTokens,
         labels: IdeLabels,
         runtime_settings: IdeRuntimeSettings,
@@ -100,7 +137,10 @@ impl IdeWorkspaceEntity {
         let surface =
             cx.new(|cx| IdeSurface::new(fs, tokens, labels, runtime_settings, backend_runtime, cx));
         surface.update(cx, |surface, cx| {
-            surface.open_remote_folder_picker_for_node(node_id.0.clone(), initial_path, cx);
+            surface.request_backend_selection(node_id.0.clone(), initial_path, cx);
+            if let Some(access) = access {
+                surface.select_access(access, cx);
+            }
         });
         self.register_surface(tab_id, node_id, surface, cx);
     }
@@ -116,12 +156,22 @@ impl IdeWorkspaceEntity {
         runtime_settings: IdeRuntimeSettings,
         cx: &mut Context<Self>,
     ) -> bool {
+        let access = self
+            .reconnect_access_by_node
+            .get(&target_node_id)
+            .copied()
+            .unwrap_or_default();
         let fs = self.fs.clone();
         let backend_runtime = self.backend_runtime.clone();
         let surface =
             cx.new(|cx| IdeSurface::new(fs, tokens, labels, runtime_settings, backend_runtime, cx));
         let restored = surface.update(cx, |surface, cx| {
-            surface.restore_reconnect_snapshot(ide_snapshot, reconnect_node_id.0.clone(), cx)
+            surface.restore_reconnect_with_access(
+                ide_snapshot,
+                reconnect_node_id.0.clone(),
+                access,
+                cx,
+            )
         });
         if !restored {
             return false;
@@ -149,16 +199,23 @@ impl IdeWorkspaceEntity {
         let subscription = cx.subscribe(
             &surface,
             move |workspace, _surface, event: &IdeSurfaceEvent, cx| match event {
-                IdeSurfaceEvent::RememberAgentMode(mode) => {
-                    // The registry propagates the mode before notifying the root persistence
-                    // adapter, avoiding a re-entrant update back into this Entity.
-                    workspace.apply_agent_mode_to_surfaces(*mode, cx);
-                    cx.emit(IdeWorkspaceEvent::RememberAgentMode(*mode));
+                IdeSurfaceEvent::ShellReturnReady | IdeSurfaceEvent::ShellOpenFailed => {
+                    let failed = matches!(event, IdeSurfaceEvent::ShellOpenFailed);
+                    // Defer teardown until this surface subscription has returned.
+                    cx.spawn(async move |weak_registry, cx| {
+                        let _ = weak_registry.update(cx, |_workspace, cx| {
+                            cx.emit(IdeWorkspaceEvent::ShellReturnReady { tab_id, failed });
+                        });
+                    })
+                    .detach();
                 }
                 IdeSurfaceEvent::ProjectOpened => {
                     if let Some(node_id) = workspace.node_for_tab(tab_id).cloned() {
                         // A successful project open supersedes an earlier explicit-close marker.
                         workspace.last_closed_at_by_node.remove(&node_id);
+                        workspace
+                            .reconnect_access_by_node
+                            .insert(node_id, _surface.read(cx).remote_access());
                     }
                 }
                 IdeSurfaceEvent::TransientFolderPickerCancelled => {
@@ -201,9 +258,11 @@ impl IdeWorkspaceEntity {
             .entry(node_id.clone())
             .or_default()
             .insert(tab_id.0);
+        let modal = cx.new(|cx| IdeModalLayer::new(surface.clone(), cx));
         self.surfaces_by_tab.insert(
             tab_id.0,
             IdeSurfaceEntry {
+                modal,
                 node_id,
                 surface,
                 _subscription: subscription,
@@ -227,6 +286,7 @@ impl IdeWorkspaceEntity {
         closed_at: SystemTime,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.shell_sources.remove(&tab_id);
         let Some(entry) = self.surfaces_by_tab.remove(&tab_id.0) else {
             return false;
         };
@@ -299,14 +359,6 @@ impl IdeWorkspaceEntity {
             entry.surface.update(cx, |surface, cx| {
                 surface.set_visual_and_runtime_settings(tokens, runtime_settings.clone(), cx);
             });
-        }
-    }
-
-    fn apply_agent_mode_to_surfaces(&mut self, mode: NodeAgentMode, cx: &mut Context<Self>) {
-        for entry in self.surfaces_by_tab.values() {
-            entry
-                .surface
-                .update(cx, |surface, cx| surface.set_agent_mode(mode, cx));
         }
     }
 
@@ -454,11 +506,13 @@ impl WorkspaceApp {
     }
     pub(in crate::workspace) fn sync_ide_surface_mount(&mut self, tab_id: TabId, cx: &mut App) {
         let mut pages = Vec::new();
+        let mut panes = Vec::new();
         if let Some(root) = self
             .tab_by_id(tab_id, cx)
             .and_then(|tab| tab.root_pane.as_ref())
         {
             root.collect_page_ids(&mut pages);
+            root.collect_pane_ids(&mut panes);
         }
         for page in pages {
             self.sync_ide_surface_mount(page, cx);
@@ -480,16 +534,88 @@ impl WorkspaceApp {
         // the sampling, watcher, and node-session mount transition.
         self.ide_workspace
             .update(cx, |workspace, cx| workspace.set_mount(tab_id, mount, cx));
+        self.ide_workspace.update(cx, |workspace, cx| {
+            for pane in panes {
+                if let Some((id, _)) = workspace.shell_surface_for_pane(pane) {
+                    workspace.set_mount(id, mount, cx);
+                }
+            }
+        });
     }
 
-    pub(super) fn open_ide_folder_picker_tab(&mut self, node_id: NodeId, cx: &mut Context<Self>) {
-        let active_terminal_cwd = self.active_ssh_terminal_cwd_path_for_node(&node_id, cx);
-        self.open_ide_folder_picker_tab_with_initial_path(
-            node_id,
-            active_terminal_cwd,
-            IdeOpenIntent::ActivateOrCreate,
+    pub(super) fn open_ide_folder_picker_tab(
+        &mut self,
+        node_id: NodeId,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) {
+        let initial_path = self.active_ssh_terminal_cwd_path_for_node(&node_id, cx);
+        if self.ide_workspace.read(cx).tab_for_node(&node_id).is_some() {
+            self.open_ide_folder_picker_tab_with_initial_path(
+                node_id,
+                initial_path,
+                IdeOpenIntent::ActivateOrCreate,
+                None,
+                cx,
+            );
+            return;
+        }
+        let labels = self.ide_labels();
+        let prompt = window.prompt(
+            gpui::PromptLevel::Info,
+            &labels.access_title,
+            None,
+            &[
+                labels.access_modes[0].as_str(),
+                labels.access_modes[1].as_str(),
+                labels.cancel.as_str(),
+            ],
             cx,
         );
+        let window_handle = window.window_handle();
+        cx.spawn(async move |weak, cx| {
+            let access = match prompt.await {
+                Ok(0) => oxide_ide_fs::RemoteAccess::Sftp,
+                Ok(1) => {
+                    let Ok(prompt) = window_handle.update(cx, |_, window, cx| {
+                        window.prompt(
+                            gpui::PromptLevel::Info,
+                            &labels.access_modes[1],
+                            Some(&labels.agent_choice_hint),
+                            &[
+                                labels.agent_choices[0].as_str(),
+                                labels.agent_choices[1].as_str(),
+                                labels.cancel.as_str(),
+                            ],
+                            cx,
+                        )
+                    }) else {
+                        return;
+                    };
+                    match prompt.await {
+                        Ok(0) => oxide_ide_fs::RemoteAccess::Commands,
+                        Ok(1) => oxide_ide_fs::RemoteAccess::Agent,
+                        _ => return,
+                    }
+                }
+                _ => return,
+            };
+            // The dialog owns no surface or node consumer; allocate only after confirmation.
+            let _ = window_handle.update(cx, |_, _, cx| {
+                let _ = weak.update(cx, |this, cx| {
+                    if this.ssh_nodes.contains_key(&node_id) {
+                        this.open_ide_folder_picker_tab_with_initial_path(
+                            node_id,
+                            initial_path,
+                            IdeOpenIntent::ActivateOrCreate,
+                            Some(access),
+                            cx,
+                        );
+                    }
+                });
+            });
+        })
+        .detach();
     }
 
     pub(in crate::workspace) fn open_ide_folder_picker_tab_at_path(
@@ -507,6 +633,7 @@ impl WorkspaceApp {
             node_id,
             initial_path,
             IdeOpenIntent::ChooseFolder,
+            None,
             cx,
         );
     }
@@ -516,6 +643,7 @@ impl WorkspaceApp {
         node_id: NodeId,
         initial_path_override: Option<String>,
         intent: IdeOpenIntent,
+        access: Option<oxide_ide_fs::RemoteAccess>,
         cx: &mut Context<Self>,
     ) {
         let node_title = self
@@ -564,6 +692,7 @@ impl WorkspaceApp {
                     tab_id,
                     node_id.clone(),
                     initial_path,
+                    access,
                     tokens,
                     labels,
                     runtime_settings,
@@ -586,8 +715,7 @@ impl WorkspaceApp {
         }
         self.active_ssh_node_id = Some(node_id.clone());
         self.expanded_ssh_nodes.insert(node_id.clone());
-        // The folder chooser is a node/SFTP consumer like Tauri's IDE tree.
-        // Opening it must not create a terminal or implicitly start SSH.
+        // The chosen backend consumes the existing node without creating a terminal.
         cx.notify();
     }
 
@@ -818,11 +946,43 @@ impl WorkspaceApp {
             surface.select_previous_active_editor_search_match(cx)
         })
     }
-
+    pub(in crate::workspace) fn handle_ide_modal_edit_action(
+        &mut self,
+        key: &str,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.ide_modal_owns_input(cx) {
+            return false;
+        }
+        if let Some(surface) = self.active_ide_surface(cx) {
+            let event = gpui::KeyDownEvent {
+                keystroke: gpui::Keystroke {
+                    modifiers: gpui::Modifiers {
+                        control: true,
+                        ..Default::default()
+                    },
+                    key: key.into(),
+                    key_char: None,
+                },
+                is_held: false,
+                prefer_character_input: false,
+            };
+            surface.update(cx, |surface, cx| {
+                surface.handle_modal_key(&event, window, cx);
+            });
+        }
+        true
+    }
     pub(in crate::workspace) fn active_ide_surface(
         &self,
         cx: &App,
     ) -> Option<gpui::Entity<IdeSurface>> {
+        if let Some(pane) = self.active_pane_id(cx)
+            && let Some((_, surface)) = self.ide_workspace.read(cx).shell_surface_for_pane(pane)
+        {
+            return Some(surface);
+        }
         let tab_id = self.active_content_tab_id(cx)?;
         let tab = self.tabs(cx).iter().find(|tab| tab.id == tab_id)?;
         (tab.kind == TabKind::Ide)
@@ -832,6 +992,7 @@ impl WorkspaceApp {
 
     fn ide_labels(&self) -> IdeLabels {
         IdeLabels {
+            file_binary: self.i18n.t("ide.file_binary"),
             file_too_large: self.i18n.t("ide.file_too_large"),
             file_encoding: self.i18n.t("ide.file_encoding"),
             file_line_ending: self.i18n.t("ide.file_line_ending"),
@@ -843,6 +1004,20 @@ impl WorkspaceApp {
             large_file: self.i18n.t("ide.large_file"),
 
             open_folder: self.i18n.t("ide.open_folder"),
+            backend_requirements: self.i18n.t("terminal.shell_ide.requirements"),
+            shell_commands: self.i18n.t("terminal.shell_ide.commands"),
+            access_title: self.i18n.t("terminal.shell_ide.access_title"),
+            agent_choices: ["commands", "agent"]
+                .map(|key| self.i18n.t(&format!("terminal.shell_ide.{key}"))),
+            agent_choice_hint: self.i18n.t("terminal.shell_ide.agent_choice_hint"),
+            agent_installing: self.i18n.t("terminal.shell_ide.agent_installing"),
+            agent_starting: self.i18n.t("terminal.shell_ide.agent_starting"),
+            sftp_unavailable: self.i18n.t("terminal.shell_ide.sftp_unavailable"),
+            ssh_unavailable: self.i18n.t("terminal.shell_ide.ssh_unavailable"),
+            ssh_shell: self.i18n.t("terminal.shell_ide.ssh_shell"),
+            access_modes: ["sftp", "ssh"]
+                .map(|key| self.i18n.t(&format!("terminal.shell_ide.{key}"))),
+            return_to_terminal: self.i18n.t("terminal.shell_ide.return"),
             search: self.i18n.t("ide.search"),
             refresh: self.i18n.t("ide.refresh"),
             search_placeholder: self.i18n.t("ide.search_placeholder"),
@@ -914,14 +1089,7 @@ impl WorkspaceApp {
             agent_checking: self.i18n.t("ide.agent_status_checking"),
             agent_manual_upload: self.i18n.t("ide.agent_status_manual_upload"),
             agent_manual_update: self.i18n.t("ide.agent_status_manual_update"),
-            agent_optin_title: self.i18n.t("ide.agent_optin_title"),
-            agent_optin_desc: self.i18n.t("ide.agent_optin_desc"),
-            agent_optin_benefit_watch: self.i18n.t("ide.agent_optin_benefit_watch"),
-            agent_optin_benefit_git: self.i18n.t("ide.agent_optin_benefit_git"),
-            agent_optin_benefit_atomic: self.i18n.t("ide.agent_optin_benefit_atomic"),
-            agent_optin_remember: self.i18n.t("ide.agent_optin_remember"),
-            agent_optin_sftp_only: self.i18n.t("ide.agent_optin_sftp_only"),
-            agent_optin_enable: self.i18n.t("ide.agent_optin_enable"),
+
             agent_remove_btn: self.i18n.t("ide.agent_remove_btn"),
             agent_deploy_btn: self.i18n.t("ide.agent_deploy_btn"),
             agent_remove_confirm_title: self.i18n.t("ide.agent_remove_confirm_title"),
@@ -986,8 +1154,16 @@ impl WorkspaceApp {
         cx: &mut Context<Self>,
     ) {
         match event {
-            IdeWorkspaceEvent::RememberAgentMode(mode) => {
-                self.remember_ide_agent_mode(*mode, cx);
+            IdeWorkspaceEvent::ShellReturnReady { tab_id, failed } => {
+                self.finish_shell_ide_return(*tab_id, cx);
+                if *failed {
+                    self.push_command_palette_toast(
+                        self.i18n.t("terminal.shell_ide.convert"),
+                        Some(self.i18n.t("terminal.shell_ide.failed")),
+                        super::TerminalNoticeVariant::Error,
+                        cx,
+                    );
+                }
             }
             IdeWorkspaceEvent::TransientSurfaceClosed { tab_id } => {
                 self.close_transient_ide_tab_after_folder_cancel(*tab_id, cx);
@@ -1040,22 +1216,6 @@ impl WorkspaceApp {
         }
 
         self.sync_active_tab_surface(cx);
-        cx.notify();
-    }
-
-    fn remember_ide_agent_mode(&mut self, mode: NodeAgentMode, cx: &mut Context<Self>) {
-        self.settings_store.settings_mut().ide.agent_mode = match mode {
-            NodeAgentMode::Ask => IdeAgentMode::Ask,
-            NodeAgentMode::Enabled => IdeAgentMode::Enabled,
-            NodeAgentMode::Disabled => IdeAgentMode::Disabled,
-        };
-        let _ = self.settings_store.save();
-        self.settings_workspace.update(cx, |settings, _cx| {
-            settings.acknowledge_external_store_state()
-        });
-        self.ide_workspace.update(cx, |ide, _| {
-            ide.set_agent_fs_mode(mode);
-        });
         cx.notify();
     }
 }

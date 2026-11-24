@@ -584,7 +584,7 @@ fn settings_search_specs() -> Vec<SettingsSearchEntrySpec> {
             SettingsTab::Ide,
             2,
             "settings_view.ide.agent_title",
-            &["settings_view.ide.agent_mode_label"],
+            &["settings_view.ide.agent_description"],
         ),
         settings_search_entry(
             SettingsTab::Ide,
