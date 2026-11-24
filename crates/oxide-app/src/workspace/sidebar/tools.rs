@@ -2,22 +2,23 @@ use super::*;
 use gpui::{StatefulInteractiveElement, point};
 use oxide_ui::select::{
     select_option_action, select_option_highlighted, select_overlay_popup_with_max_height,
+    select_separator,
 };
 
 const TOOLS: [HostTools; 11] = [
     HostTools::Monitor,
     HostTools::Processes,
+    HostTools::Gpu,
+    HostTools::Docker,
     HostTools::Services,
     HostTools::Logs,
-    HostTools::Docker,
-    HostTools::Gpu,
-    HostTools::Tmux,
     HostTools::Ports,
-    HostTools::Schedules,
+    HostTools::Tmux,
     HostTools::Filesystems,
+    HostTools::Schedules,
     HostTools::Packages,
 ];
-
+const MONITORING_TOOL_COUNT: usize = 4;
 impl HostTools {
     pub(in crate::workspace) fn label_key(self) -> &'static str {
         match self {
@@ -38,29 +39,38 @@ impl HostTools {
     pub(in crate::workspace) fn icon(self) -> LucideIcon {
         match self {
             Self::Monitor => LucideIcon::Activity,
-            Self::Gpu => LucideIcon::Cpu,
-            Self::Processes => LucideIcon::ListChecks,
-            Self::Services => LucideIcon::Wrench,
+            Self::Gpu => LucideIcon::Gpu,
+            Self::Processes => LucideIcon::ListTree,
+            Self::Services => LucideIcon::ServerCog,
             Self::Logs => LucideIcon::FileText,
-            Self::Tmux => LucideIcon::Terminal,
-            Self::Docker => LucideIcon::Layers,
+            Self::Tmux => LucideIcon::SplitSquareHorizontal,
+            Self::Docker => LucideIcon::Docker,
             Self::Ports => LucideIcon::Network,
-            Self::Schedules => LucideIcon::Clock,
+            Self::Schedules => LucideIcon::CalendarClock,
             Self::Filesystems => LucideIcon::HardDrive,
-            Self::Packages => LucideIcon::Archive,
+            Self::Packages => LucideIcon::Package,
         }
     }
 }
 
 fn visible_tool_count(available_height: f32, row_height: f32, separator_height: f32) -> usize {
-    let slots =
-        (((available_height - separator_height) / row_height).floor() as usize).saturating_sub(1);
-    // OxideSens always has a row; More only takes space when tools actually overflow.
-    if slots >= TOOLS.len() {
-        TOOLS.len()
+    // Reserve More only for overflow, and the second divider only when both groups show.
+    (0..=TOOLS.len())
+        .rev()
+        .find(|&count| {
+            let more_height = if count < TOOLS.len() { row_height } else { 0.0 };
+            tool_stack_height(count, row_height, separator_height) + more_height <= available_height
+        })
+        .unwrap_or(0)
+}
+
+fn tool_stack_height(count: usize, row_height: f32, separator_height: f32) -> f32 {
+    let separators = if count > MONITORING_TOOL_COUNT {
+        2.0
     } else {
-        slots.saturating_sub(1)
-    }
+        1.0
+    };
+    (count + 1) as f32 * row_height + separators * separator_height
 }
 
 fn overflow_tools(visible: usize) -> Vec<HostTools> {
@@ -68,6 +78,14 @@ fn overflow_tools(visible: usize) -> Vec<HostTools> {
 }
 
 impl WorkspaceApp {
+    fn context_tool_separator(&self) -> gpui::Div {
+        div()
+            .flex_none()
+            .w(px(self.theme_tokens.metrics.divider_width))
+            .h(px(self.theme_tokens.metrics.divider_height))
+            .mb(px(self.theme_tokens.metrics.activity_icon_gap))
+            .bg(self.workspace_divider_color(self.theme_tokens.ui.divider, 0xff))
+    }
     fn context_tool_count(&self, window: &Window) -> usize {
         let metrics = self.theme_tokens.metrics;
         let lock_height = if self.settings_store.settings().sidebar_ui.show_app_lock_icon {
@@ -140,15 +158,11 @@ impl WorkspaceApp {
             .flex_col()
             .items_center()
             .pt(px(PRIMARY_SIDEBAR_CONTENT_TOP_INSET))
-            .child(
-                div()
-                    .flex_none()
-                    .w(px(self.theme_tokens.metrics.divider_width))
-                    .h(px(self.theme_tokens.metrics.divider_height))
-                    .mb(px(self.theme_tokens.metrics.activity_icon_gap))
-                    .bg(self.workspace_divider_color(self.theme_tokens.ui.divider, 0xff)),
-            );
-        for tool in TOOLS.iter().take(count).copied() {
+            .child(self.context_tool_separator());
+        for (index, tool) in TOOLS.iter().take(count).copied().enumerate() {
+            if index == MONITORING_TOOL_COUNT {
+                buttons = buttons.child(self.context_tool_separator());
+            }
             let active = self.context_tool_active(tool, cx);
             buttons = buttons.child(
                 div()
@@ -251,8 +265,8 @@ impl WorkspaceApp {
         let mut popup = select_overlay_popup_with_max_height(&self.theme_tokens, 220.0, max_height)
             .id("context-tools-menu")
             .track_scroll(&self.context_tools_menu_scroll);
-        for tool in overflow {
-            popup = popup.child(select_option_action(
+        for (index, tool) in overflow.into_iter().enumerate() {
+            let option = select_option_action(
                 select_option_highlighted(
                     &self.theme_tokens,
                     self.i18n.t(tool.label_key()),
@@ -265,7 +279,15 @@ impl WorkspaceApp {
                     this.activate_context_tool(tool, cx);
                     cx.stop_propagation();
                 }),
-            ));
+            );
+            // Keep one scroll item per tool, including its optional group divider.
+            popup = popup.child(
+                div()
+                    .when(index > 0 && count + index == MONITORING_TOOL_COUNT, |row| {
+                        row.child(select_separator(&self.theme_tokens))
+                    })
+                    .child(option),
+            );
         }
         let metrics = self.theme_tokens.metrics;
         // The fixed rail has no scroll transform. Derive the trigger position from the same
@@ -273,9 +295,11 @@ impl WorkspaceApp {
         let top = self.window_titlebar_height(window)
             + metrics.tabbar_height
             + PRIMARY_SIDEBAR_CONTENT_TOP_INSET
-            + (count + 1) as f32 * (metrics.activity_icon_size + metrics.activity_icon_gap)
-            + metrics.divider_height
-            + metrics.activity_icon_gap;
+            + tool_stack_height(
+                count,
+                metrics.activity_icon_size + metrics.activity_icon_gap,
+                metrics.divider_height + metrics.activity_icon_gap,
+            );
         Some(
             popover_backdrop()
                 .on_mouse_down(
