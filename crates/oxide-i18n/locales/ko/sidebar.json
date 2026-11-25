@@ -1,5 +1,11 @@
 {
   "sidebar": {
+    "background_tasks": {
+      "summary": "백그라운드 작업: {{count}}",
+      "search": "백그라운드 작업 검색…",
+      "transferring": "전송 중",
+      "reconnecting": "다시 연결 중"
+    },
     "tab_scope": {
       "all": "모든 탭",
       "global": "공통 페이지",

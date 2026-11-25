@@ -1,5 +1,11 @@
 {
   "sidebar": {
+    "background_tasks": {
+      "summary": "Tác vụ nền: {{count}}",
+      "search": "Tìm tác vụ nền…",
+      "transferring": "Đang truyền",
+      "reconnecting": "Đang kết nối lại"
+    },
     "tab_scope": {
       "all": "Tất cả thẻ",
       "global": "Trang chung",

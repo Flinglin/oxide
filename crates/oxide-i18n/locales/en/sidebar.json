@@ -1,5 +1,11 @@
 {
   "sidebar": {
+    "background_tasks": {
+      "summary": "Background tasks: {{count}}",
+      "search": "Search background tasks…",
+      "transferring": "Transferring",
+      "reconnecting": "Reconnecting"
+    },
     "tab_scope": {
       "all": "All tabs",
       "global": "Global pages",

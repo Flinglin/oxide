@@ -2,6 +2,7 @@ mod actions;
 
 mod app_lock;
 mod audit;
+mod background_tasks;
 mod breadcrumb_scroll;
 mod browser_behavior;
 mod cloud_sync;
@@ -711,6 +712,8 @@ pub(crate) struct WorkspaceApp {
     forwarding_service: forwards::ForwardingRuntimeService,
     forwarding_runtime: Arc<tokio::runtime::Runtime>,
     sftp_transfer_manager: Arc<SftpTransferManager>,
+    background_transfers: Vec<background_tasks::TransferSummary>,
+    _background_transfer_observation: Task<()>,
     sftp_progress_store: Arc<dyn ProgressStore>,
     node_router: NodeRouter,
     notification_center: NotificationCenterState,

@@ -1,5 +1,11 @@
 {
   "sidebar": {
+    "background_tasks": {
+      "summary": "Attività in background: {{count}}",
+      "search": "Cerca attività in background…",
+      "transferring": "Trasferimento in corso",
+      "reconnecting": "Riconnessione in corso"
+    },
     "tab_scope": {
       "all": "Tutte le schede",
       "global": "Pagine globali",

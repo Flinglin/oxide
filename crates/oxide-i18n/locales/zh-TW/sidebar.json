@@ -1,5 +1,11 @@
 {
   "sidebar": {
+    "background_tasks": {
+      "summary": "背景工作：{{count}}",
+      "search": "搜尋背景工作…",
+      "transferring": "傳輸中",
+      "reconnecting": "正在重新連線"
+    },
     "tab_scope": {
       "all": "全部分頁",
       "global": "全域頁面",

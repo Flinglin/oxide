@@ -1,5 +1,11 @@
 {
   "sidebar": {
+    "background_tasks": {
+      "summary": "Hintergrundaufgaben: {{count}}",
+      "search": "Hintergrundaufgaben suchen…",
+      "transferring": "Übertragung läuft",
+      "reconnecting": "Verbindung wird wiederhergestellt"
+    },
     "tab_scope": {
       "all": "Alle Tabs",
       "global": "Globale Seiten",

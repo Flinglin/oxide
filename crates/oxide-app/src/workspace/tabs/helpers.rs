@@ -129,8 +129,8 @@ fn newest_welcome_connections(
     recent
 }
 
-// Keep empty-workspace hints aligned with the same effective bindings used by dispatch.
-pub(super) fn effective_shortcut_label(
+// Keep visible shortcut hints aligned with the effective bindings used by dispatch.
+pub(in crate::workspace) fn effective_shortcut_label(
     action_id: &str,
     overrides: &serde_json::Map<String, serde_json::Value>,
 ) -> Option<String> {

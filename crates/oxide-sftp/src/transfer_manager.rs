@@ -278,6 +278,7 @@ pub struct SftpTransferManager {
     audit_transfers: RwLock<HashMap<String, AuditedTransfer>>,
     previous_attempts: RwLock<HashMap<String, String>>,
     background_notify: Arc<Notify>,
+    background_state_changes: watch::Sender<()>,
     tar_capability_probes: RwLock<HashMap<String, Arc<OnceCell<TarCapabilities>>>>,
     scp_capability_probes: RwLock<HashMap<String, Arc<OnceCell<ScpCapabilities>>>>,
 }
@@ -359,6 +360,7 @@ impl SftpTransferManager {
             audit_transfers: RwLock::new(HashMap::new()),
             previous_attempts: RwLock::new(HashMap::new()),
             background_notify: Arc::new(Notify::new()),
+            background_state_changes: watch::channel(()).0,
             tar_capability_probes: RwLock::new(HashMap::new()),
             scp_capability_probes: RwLock::new(HashMap::new()),
         }
@@ -492,7 +494,10 @@ impl SftpTransferManager {
     pub fn active_count(&self) -> usize {
         self.active_count.load(Ordering::Acquire)
     }
-
+    /// Observes task membership and state, without waking UI consumers for byte progress.
+    pub fn subscribe_background_state_changes(&self) -> watch::Receiver<()> {
+        self.background_state_changes.subscribe()
+    }
     pub fn registered_count(&self) -> usize {
         self.controls.read().len()
     }
@@ -641,6 +646,7 @@ impl SftpTransferManager {
             .write()
             .insert(transfer_id.clone(), snapshot);
         self.background_notify.notify_waiters();
+        self.background_state_changes.send_replace(());
         if !accepted {
             let _ = self.finish_background_transfer(
                 &transfer_id,
@@ -673,7 +679,11 @@ impl SftpTransferManager {
         if let Some(snapshot) = self.background_transfers.write().get_mut(transfer_id)
             && !snapshot.state.is_finished()
         {
+            let changed = snapshot.state != BackgroundTransferState::Active;
             snapshot.state = BackgroundTransferState::Active;
+            if changed {
+                self.background_state_changes.send_replace(());
+            }
             self.background_notify.notify_waiters();
         }
     }
@@ -693,7 +703,11 @@ impl SftpTransferManager {
                 snapshot.size = total;
             }
             snapshot.backend_speed = Some(speed);
+            let changed = snapshot.state != BackgroundTransferState::Active;
             snapshot.state = BackgroundTransferState::Active;
+            if changed {
+                self.background_state_changes.send_replace(());
+            }
             self.background_notify.notify_waiters();
         }
     }
@@ -752,6 +766,7 @@ impl SftpTransferManager {
             );
         }
         self.background_notify.notify_waiters();
+        self.background_state_changes.send_replace(());
         Some(snapshot)
     }
 
@@ -827,6 +842,7 @@ impl SftpTransferManager {
             {
                 snapshot.state = BackgroundTransferState::Paused;
                 snapshot.backend_speed = Some(0);
+                self.background_state_changes.send_replace(());
                 self.background_notify.notify_waiters();
             }
             true
@@ -847,6 +863,7 @@ impl SftpTransferManager {
                 && snapshot.state == BackgroundTransferState::Paused
             {
                 snapshot.state = BackgroundTransferState::Pending;
+                self.background_state_changes.send_replace(());
                 self.background_notify.notify_waiters();
             }
             true
@@ -890,6 +907,7 @@ impl SftpTransferManager {
             snapshot.error = Some(reason);
             snapshot.backend_speed = Some(0);
             snapshot.end_time = Some(now_ms());
+            self.background_state_changes.send_replace(());
             self.background_notify.notify_waiters();
             return true;
         }
@@ -950,7 +968,7 @@ impl SftpTransferManager {
             }
         }
         self.background_notify.notify_waiters();
-
+        self.background_state_changes.send_replace(());
         let drained = tokio::time::timeout(grace_period, async {
             loop {
                 let notified = self.shutdown_notify.notified();

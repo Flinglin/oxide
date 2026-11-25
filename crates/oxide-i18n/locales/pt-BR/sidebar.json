@@ -1,5 +1,11 @@
 {
   "sidebar": {
+    "background_tasks": {
+      "summary": "Tarefas em segundo plano: {{count}}",
+      "search": "Buscar tarefas em segundo plano…",
+      "transferring": "Transferindo",
+      "reconnecting": "Reconectando"
+    },
     "tab_scope": {
       "all": "Todas as abas",
       "global": "Páginas globais",
