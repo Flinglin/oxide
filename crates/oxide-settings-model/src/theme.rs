@@ -4,7 +4,7 @@
 //! GPUI rendering. The app keeps the modal layout while this module owns the
 //! JSON shape, color normalization, and editor value conversion.
 
-use oxide_settings::PersistedSettings;
+use oxide_settings::{AppearanceScheme, PersistedSettings};
 use oxide_theme::{AppUiColors, BUILT_IN_THEMES, TerminalTheme, ThemeTokens, theme_by_id};
 
 pub const CUSTOM_THEME_PREFIX: &str = "custom:";
@@ -38,9 +38,14 @@ impl ThemeTarget {
     }
 
     pub fn resolved_id(self, settings: &PersistedSettings, dark: bool) -> &str {
-        if !settings.appearance.follow_system_appearance {
-            self.selected_id(settings)
-        } else if dark {
+        match settings.appearance.active_scheme(dark) {
+            Some(scheme) => self.scheme_id(settings, scheme.is_dark()),
+            None => self.selected_id(settings),
+        }
+    }
+
+    pub fn scheme_id(self, settings: &PersistedSettings, dark: bool) -> &str {
+        if dark {
             &self.system_themes(settings).dark
         } else {
             &self.system_themes(settings).light
@@ -74,6 +79,93 @@ impl ThemeTarget {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AppearanceSchemeError {
+    Unassigned,
+    Unavailable(AppearanceScheme),
+    Identical,
+}
+
+pub fn validate_appearance_scheme(
+    settings: &PersistedSettings,
+    scheme: AppearanceScheme,
+) -> Result<(), AppearanceSchemeError> {
+    for target in [ThemeTarget::Application, ThemeTarget::Terminal] {
+        let id = target.scheme_id(settings, scheme.is_dark());
+        let valid = BUILT_IN_THEMES.iter().any(|theme| theme.id == id)
+            || settings
+                .custom_themes
+                .get(id)
+                .is_some_and(|theme| match target {
+                    ThemeTarget::Application => theme
+                        .get("uiColors")
+                        .and_then(app_ui_colors_from_value)
+                        .is_some(),
+                    ThemeTarget::Terminal => theme.get("terminalColors").is_some_and(|colors| {
+                        TERMINAL_THEME_COLOR_FIELDS
+                            .iter()
+                            .all(|field| color_value(colors, field.json_key).is_some())
+                    }),
+                });
+        if !valid {
+            return Err(AppearanceSchemeError::Unavailable(scheme));
+        }
+    }
+    Ok(())
+}
+
+pub fn next_appearance_scheme(
+    settings: &PersistedSettings,
+    system_dark: bool,
+) -> Result<AppearanceScheme, AppearanceSchemeError> {
+    let current = settings
+        .appearance
+        .active_scheme(system_dark)
+        .ok_or(AppearanceSchemeError::Unassigned)?;
+    let next = AppearanceScheme::from_dark(!current.is_dark());
+    validate_appearance_scheme(settings, next)?;
+    if [ThemeTarget::Application, ThemeTarget::Terminal]
+        .into_iter()
+        .all(|target| target.scheme_id(settings, false) == target.scheme_id(settings, true))
+        && settings.terminal.background_for_scheme(Some(false))
+            == settings.terminal.background_for_scheme(Some(true))
+    {
+        return Err(AppearanceSchemeError::Identical);
+    }
+    Ok(next)
+}
+
+pub fn apply_appearance_mode(settings: &mut PersistedSettings, scheme: Option<AppearanceScheme>) {
+    settings.appearance.follow_system_appearance = scheme.is_none();
+    if let Some(scheme) = scheme {
+        settings.appearance.manual_scheme = Some(scheme);
+        // Keep the fixed-theme fields usable by released clients and plugin APIs.
+        for target in [ThemeTarget::Application, ThemeTarget::Terminal] {
+            let id = target.scheme_id(settings, scheme.is_dark()).to_owned();
+            target.apply(settings, id);
+        }
+        let background = settings
+            .terminal
+            .background_for_scheme(Some(scheme.is_dark()));
+        settings.terminal.apply_background_style(background);
+    }
+}
+
+pub fn assign_current_appearance(
+    settings: &mut PersistedSettings,
+    scheme: AppearanceScheme,
+    system_dark: bool,
+) {
+    let background = settings.resolved_background(system_dark);
+    for target in [ThemeTarget::Application, ThemeTarget::Terminal] {
+        let id = target.resolved_id(settings, system_dark).to_owned();
+        target.apply_for_scheme(settings, Some(scheme.is_dark()), id);
+    }
+    settings
+        .terminal
+        .set_background_for_scheme(Some(scheme.is_dark()), background);
+    apply_appearance_mode(settings, Some(scheme));
+}
 #[derive(Clone, Copy)]
 pub struct ThemeColorField {
     pub json_key: &'static str,

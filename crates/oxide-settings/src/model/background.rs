@@ -235,7 +235,10 @@ impl TerminalSettings {
 
 impl PersistedSettings {
     pub fn resolved_background(&self, dark: bool) -> BackgroundStyle {
-        self.terminal
-            .background_for_scheme(self.appearance.follow_system_appearance.then_some(dark))
+         self.terminal.background_for_scheme(
+            self.appearance
+                .active_scheme(dark)
+                .map(AppearanceScheme::is_dark),
+        )
     }
 }
