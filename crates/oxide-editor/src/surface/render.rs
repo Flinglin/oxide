@@ -2,10 +2,9 @@ use std::{cell::Cell, collections::BTreeMap, ops::Range, rc::Rc};
 
 use gpui::{
     Anchor, AnchoredPositionMode, AnyElement, App, AppContext, Context, CursorStyle, Div,
-    EmptyView, Entity, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ParentElement, Render, ScrollWheelEvent, SharedString,
-    StatefulInteractiveElement, Styled, Window, anchored, deferred, div, prelude::FluentBuilder,
-    px, rgb, rgba,
+    EmptyView, Entity, InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement,
+    Render, ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled, Window, anchored,
+    deferred, div, prelude::FluentBuilder, px, rgb, rgba,
 };
 use oxide_editor_core::{BufferOffset, Selection};
 use oxide_editor_syntax::{BracketPair, SyntaxScope};
@@ -169,15 +168,6 @@ impl Render for TextEditorView {
             .on_scroll_wheel(cx.listener(|this, event: &ScrollWheelEvent, _window, cx| {
                 this.handle_scroll(event, cx);
             }))
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
-                this.drag_selection_to_point(event.position, window, cx);
-            }))
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
-                    this.finish_selection_drag(cx);
-                }),
-            )
             .child(
                 div()
                     .absolute()
