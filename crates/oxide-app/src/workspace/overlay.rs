@@ -5,6 +5,10 @@ const WORKSPACE_NOTICE_TTL: Duration = Duration::from_secs(4);
 const PLUGIN_REQUIRED_NOTICE_TTL: Duration = Duration::from_secs(12);
 const TOOLTIP_DELAY: Duration = Duration::from_millis(300);
 const TOOLTIP_EXIT_DURATION: Duration = Duration::from_millis(90);
+const TOOLTIP_REENTRY_WINDOW: Duration = Duration::from_millis(250);
+const TOOLTIP_ENTER_OFFSET_Y: f32 = 3.0;
+const TOOLTIP_SWITCH_ROW_TOLERANCE: f32 = 12.0;
+const TOOLTIP_SWITCH_MAX_DISTANCE: f32 = 96.0;
 const CONNECTION_TRACE_UPDATE_COALESCE: Duration = Duration::from_millis(300);
 const CONNECTION_TRACE_SUCCESS_TTL: Duration = Duration::from_millis(900);
 const CONNECTION_TRACE_HISTORY_LIMIT: usize = 12;
@@ -62,6 +66,7 @@ pub(in crate::workspace) enum WorkspaceOverlayIntent {
     ClearAllTooltips,
     ShowZenHint {
         ttl: Duration,
+        label: String,
     },
     ClearZenHint,
     ShowTerminalFontSizeHud {
@@ -149,7 +154,10 @@ struct TerminalFontSizeHud {
     generation: u64,
     expires_at: Instant,
 }
-
+struct ZenHint {
+    label: String,
+    expires_at: Instant,
+}
 #[derive(Clone, Debug)]
 struct ActiveConnectionCard {
     visible: bool,
@@ -170,12 +178,33 @@ struct WorkspaceTooltip {
     remove_at: Option<Instant>,
     fade_from: f32,
     opacity: std::rc::Rc<std::cell::Cell<f32>>,
+    position_from: gpui::Point<f32>,
+    position: std::rc::Rc<std::cell::Cell<gpui::Point<f32>>>,
+    switching: bool,
     id: String,
     label: String,
     x: f32,
     y: f32,
 }
 
+impl WorkspaceTooltip {
+    fn new(id: String, label: String, position: gpui::Point<f32>, generation: u64) -> Self {
+        let position_from = gpui::point(position.x, position.y + TOOLTIP_ENTER_OFFSET_Y);
+        Self {
+            generation,
+            remove_at: None,
+            fade_from: 0.0,
+            opacity: std::rc::Rc::new(std::cell::Cell::new(0.0)),
+            position_from,
+            position: std::rc::Rc::new(std::cell::Cell::new(position_from)),
+            switching: false,
+            id,
+            label,
+            x: position.x,
+            y: position.y,
+        }
+    }
+}
 #[derive(Clone, Debug)]
 struct WorkspaceTooltipPending {
     id: String,
@@ -203,7 +232,8 @@ pub(in crate::workspace) struct WorkspaceOverlayEntity {
     tooltip: Option<WorkspaceTooltip>,
     tooltip_pending: Option<WorkspaceTooltipPending>,
     tooltip_generation: u64,
-    zen_hint_expires_at: Option<Instant>,
+    tooltip_warm_until: Option<Instant>,
+    zen_hint: Option<ZenHint>,
     terminal_font_size_hud: Option<TerminalFontSizeHud>,
     terminal_font_size_hud_generation: u64,
     confirm: Option<WorkspaceOverlayConfirmKind>,
@@ -261,7 +291,8 @@ impl WorkspaceOverlayEntity {
             tooltip: None,
             tooltip_pending: None,
             tooltip_generation: 0,
-            zen_hint_expires_at: None,
+            tooltip_warm_until: None,
+            zen_hint: None,
             terminal_font_size_hud: None,
             terminal_font_size_hud_generation: 0,
             confirm: None,
@@ -358,11 +389,14 @@ impl WorkspaceOverlayEntity {
                 self.clear_tooltip(&id, cx.background_executor().now())
             }
             WorkspaceOverlayIntent::ClearAllTooltips => self.clear_all_tooltips(),
-            WorkspaceOverlayIntent::ShowZenHint { ttl } => {
-                self.zen_hint_expires_at = Some(cx.background_executor().now() + ttl);
+            WorkspaceOverlayIntent::ShowZenHint { ttl, label } => {
+                self.zen_hint = Some(ZenHint {
+                    label,
+                    expires_at: cx.background_executor().now() + ttl,
+                });
                 true
             }
-            WorkspaceOverlayIntent::ClearZenHint => self.zen_hint_expires_at.take().is_some(),
+            WorkspaceOverlayIntent::ClearZenHint => self.zen_hint.take().is_some(),
             WorkspaceOverlayIntent::ShowTerminalFontSizeHud { font_size, ttl } => {
                 self.terminal_font_size_hud_generation =
                     self.terminal_font_size_hud_generation.wrapping_add(1);
@@ -636,28 +670,54 @@ impl WorkspaceOverlayEntity {
     fn queue_tooltip(&mut self, id: String, label: String, x: f32, y: f32, now: Instant) -> bool {
         if let Some(tooltip) = self.tooltip.as_mut()
             && tooltip.id == id
+            && tooltip.remove_at.is_none_or(|deadline| now < deadline)
         {
             let resumed = tooltip.remove_at.take().is_some();
             if resumed {
                 self.tooltip_generation = self.tooltip_generation.wrapping_add(1);
                 tooltip.generation = self.tooltip_generation;
                 tooltip.fade_from = tooltip.opacity.get();
+                tooltip.position_from = tooltip.position.get();
+                tooltip.switching = true;
+                tooltip.x = x;
+                tooltip.y = y;
             }
-            let changed = resumed || tooltip.label != label || tooltip.x != x || tooltip.y != y;
+            // A visible hint stays still while the pointer moves within its trigger.
+            let changed = resumed || tooltip.label != label;
             tooltip.label = label;
-            tooltip.x = x;
-            tooltip.y = y;
             return changed;
         }
         if let Some(pending) = self.tooltip_pending.as_mut()
             && pending.id == id
         {
+            pending.label = label;
             pending.x = x;
             pending.y = y;
             return false;
         }
-        self.tooltip = None;
+
         self.tooltip_generation = self.tooltip_generation.wrapping_add(1);
+        let previous = self
+            .tooltip
+            .take()
+            .filter(|tooltip| tooltip.remove_at.is_none_or(|deadline| now < deadline));
+        let warm = previous.is_some() || self.tooltip_warm_until.is_some_and(|until| now < until);
+        if warm {
+            self.tooltip_pending = None;
+            let mut tooltip =
+                WorkspaceTooltip::new(id, label, gpui::point(x, y), self.tooltip_generation);
+            if let Some(previous) = previous
+                && (previous.y - y).abs() <= TOOLTIP_SWITCH_ROW_TOLERANCE
+                && (previous.x - x).abs() <= TOOLTIP_SWITCH_MAX_DISTANCE
+            {
+                tooltip.fade_from = previous.opacity.get();
+                tooltip.position_from = previous.position.get();
+                tooltip.position.set(tooltip.position_from);
+                tooltip.switching = true;
+            }
+            self.tooltip = Some(tooltip);
+            return true;
+        }
         self.tooltip_pending = Some(WorkspaceTooltipPending {
             id,
             label,
@@ -684,12 +744,14 @@ impl WorkspaceOverlayEntity {
             && tooltip.id == id
             && tooltip.remove_at.is_none()
         {
+            self.tooltip_warm_until = Some(now + TOOLTIP_REENTRY_WINDOW);
             if self.control_exit_duration.is_zero() {
                 self.tooltip = None;
             } else {
                 self.tooltip_generation = self.tooltip_generation.wrapping_add(1);
                 tooltip.generation = self.tooltip_generation;
                 tooltip.fade_from = tooltip.opacity.get();
+                tooltip.position_from = tooltip.position.get();
                 tooltip.remove_at =
                     Some(now + self.control_exit_duration.min(TOOLTIP_EXIT_DURATION));
             }
@@ -699,6 +761,7 @@ impl WorkspaceOverlayEntity {
     }
 
     fn clear_all_tooltips(&mut self) -> bool {
+        self.tooltip_warm_until = None;
         let visible = self.tooltip.take().is_some();
         let pending = self.tooltip_pending.take().is_some();
         let changed = visible || pending;
@@ -960,23 +1023,20 @@ impl WorkspaceOverlayEntity {
             && let Some(pending) = self.tooltip_pending.take()
             && pending.generation == self.tooltip_generation
         {
-            self.tooltip = Some(WorkspaceTooltip {
-                generation: pending.generation,
-                remove_at: None,
-                fade_from: 0.0,
-                opacity: std::rc::Rc::new(std::cell::Cell::new(0.0)),
-                id: pending.id,
-                label: pending.label,
-                x: pending.x,
-                y: pending.y,
-            });
+            self.tooltip = Some(WorkspaceTooltip::new(
+                pending.id,
+                pending.label,
+                gpui::point(pending.x, pending.y),
+                pending.generation,
+            ));
             changed = true;
         }
         if self
-            .zen_hint_expires_at
-            .is_some_and(|expires_at| expires_at <= now)
+            .zen_hint
+            .as_ref()
+            .is_some_and(|hint| hint.expires_at <= now)
         {
-            self.zen_hint_expires_at = None;
+            self.zen_hint = None;
             changed = true;
         }
         if self
@@ -1073,7 +1133,7 @@ impl WorkspaceOverlayEntity {
             next,
             self.tooltip.as_ref().and_then(|tooltip| tooltip.remove_at),
         );
-        next = min_deadline(next, self.zen_hint_expires_at);
+        next = min_deadline(next, self.zen_hint.as_ref().map(|hint| hint.expires_at));
         next = min_deadline(next, self.terminal_font_size_hud.map(|hud| hud.expires_at));
         for toast in &self.standard_toasts {
             next = min_deadline(
@@ -1120,11 +1180,10 @@ impl WorkspaceOverlayEntity {
                 self.control_exit_duration.min(TOOLTIP_EXIT_DURATION),
             ));
         }
-        if self
-            .zen_hint_expires_at
-            .is_some_and(|expires_at| expires_at > cx.background_executor().now())
+        if let Some(hint) = &self.zen_hint
+            && hint.expires_at > cx.background_executor().now()
         {
-            layers.push(render_zen_hint(tokens, i18n));
+            layers.push(render_zen_hint(tokens, &hint.label));
         }
         if let Some(toasts) = self.render_toasts(tokens, native_update, cx) {
             layers.push(toasts);
@@ -1728,47 +1787,87 @@ fn render_tooltip(
 ) -> AnyElement {
     let exiting = tooltip.remove_at.is_some();
     let target = if exiting { 0.0 } else { 1.0 };
-    let surface = tooltip_surface(tokens, tooltip.label, None);
-    let surface = if !tokens.motion.enabled {
+    let target_position = if exiting {
+        tooltip.position_from
+    } else {
+        gpui::point(tooltip.x, tooltip.y)
+    };
+    let surface = tooltip_surface(tokens, tooltip.label, None)
+        .debug_selector(|| "workspace-tooltip-surface".into());
+    let anchored_surface = if !tokens.motion.enabled {
         tooltip.opacity.set(target);
-        surface.opacity(target).into_any_element()
+        tooltip.position.set(target_position);
+        anchored()
+            .anchor(Corner::TopLeft)
+            .position(gpui::point(px(target_position.x), px(target_position.y)))
+            .position_mode(AnchoredPositionMode::Window)
+            .child(surface.opacity(target))
+            .into_any_element()
     } else {
         let duration = if exiting {
             exit_duration
         } else {
-            oxide_ui::motion::duration(tokens, oxide_ui::motion::MotionDuration::Micro)
+            oxide_ui::motion::duration(
+                tokens,
+                if tooltip.switching {
+                    oxide_ui::motion::MotionDuration::Control
+                } else {
+                    oxide_ui::motion::MotionDuration::Micro
+                },
+            )
         };
         let opacity = tooltip.opacity;
         let from = tooltip.fade_from;
-        surface
-            .with_animation(
-                ("workspace-tooltip-fade", tooltip.generation as usize),
-                Animation::new(duration).with_easing(oxide_ui::motion::ease_out_cubic),
-                move |surface, progress| {
-                    let value = from + (target - from) * progress;
-                    opacity.set(value);
-                    surface.opacity(value)
-                },
-            )
-            .into_any_element()
-    };
-    deferred(
-        anchored()
+        let position = tooltip.position;
+        let position_from = tooltip.position_from;
+        let spatial = tokens.motion.spatial_enabled;
+        let easing = if tooltip.switching && !exiting {
+            oxide_ui::motion::ease_in_out_cubic
+        } else {
+            oxide_ui::motion::ease_out_cubic
+        };
+        let surface = surface.with_animation(
+            ("workspace-tooltip-fade", tooltip.generation as usize),
+            Animation::new(duration).with_easing(easing),
+            move |surface, progress| {
+                let value = from + (target - from) * progress;
+                opacity.set(value);
+                surface.opacity(value)
+            },
+        );
+        let anchor = anchored()
             .anchor(Corner::TopLeft)
-            .position(gpui::point(px(tooltip.x), px(tooltip.y)))
             .position_mode(AnchoredPositionMode::Window)
-            .child(surface),
-    )
-    .with_priority(oxide_ui::modal::TAURI_TOOLTIP_LAYER_PRIORITY)
-    .into_any_element()
+            .child(surface);
+        if spatial {
+            // Move the anchor so viewport fitting applies to every animation frame.
+            anchor
+                .with_animation(
+                    ("workspace-tooltip-position", tooltip.generation as usize),
+                    Animation::new(duration).with_easing(easing),
+                    move |anchor, progress| {
+                        let point = gpui::point(
+                            position_from.x + (target_position.x - position_from.x) * progress,
+                            position_from.y + (target_position.y - position_from.y) * progress,
+                        );
+                        position.set(point);
+                        anchor.position(gpui::point(px(point.x), px(point.y)))
+                    },
+                )
+                .into_any_element()
+        } else {
+            position.set(target_position);
+            anchor
+                .position(gpui::point(px(target_position.x), px(target_position.y)))
+                .into_any_element()
+        }
+    };
+    deferred(anchored_surface)
+        .with_priority(oxide_ui::modal::TAURI_TOOLTIP_LAYER_PRIORITY)
+        .into_any_element()
 }
 
-fn render_zen_hint(tokens: &ThemeTokens, i18n: &I18n) -> AnyElement {
-    let key = if cfg!(target_os = "macos") {
-        "zen_mode.hint"
-    } else {
-        "zen_mode.hint_other"
-    };
+fn render_zen_hint(tokens: &ThemeTokens, label: &str) -> AnyElement {
     div()
         .absolute()
         .left_0()
@@ -1788,7 +1887,7 @@ fn render_zen_hint(tokens: &ThemeTokens, i18n: &I18n) -> AnyElement {
                 .line_height(px(20.0))
                 .text_color(rgb(tokens.ui.text_muted))
                 .shadow_lg()
-                .child(i18n.t(key)),
+                .child(label.to_owned()),
         )
         .into_any_element()
 }

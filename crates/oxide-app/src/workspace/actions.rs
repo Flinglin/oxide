@@ -603,8 +603,23 @@ impl WorkspaceApp {
             self.right_sidebar_rendered = false;
 
             const ZEN_HINT_TTL: Duration = Duration::from_millis(2500);
+            let label = tabs::effective_shortcut_label(
+                "app.zenMode",
+                &self.settings_store.settings().keybindings.overrides,
+            )
+            .map_or_else(
+                || self.i18n.t("zen_mode.hint_unbound"),
+                |shortcut| {
+                    self.i18n
+                        .t("zen_mode.hint")
+                        .replace("{{shortcut}}", &shortcut)
+                },
+            );
             self.apply_workspace_overlay_intent(
-                WorkspaceOverlayIntent::ShowZenHint { ttl: ZEN_HINT_TTL },
+                WorkspaceOverlayIntent::ShowZenHint {
+                    ttl: ZEN_HINT_TTL,
+                    label,
+                },
                 cx,
             );
         } else {
