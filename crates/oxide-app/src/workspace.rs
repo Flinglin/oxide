@@ -464,6 +464,7 @@ struct ExitingTabVisual {
     width: f32,
     visual_index: usize,
     was_active: bool,
+    started_at: Instant,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -529,12 +530,6 @@ struct DetachedTabReturnHandoff {
     tab_id: TabId,
     origin: TabWindowHandoffOrigin,
     generation: u64,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct DetachedTabReturnPlaceholder {
-    tab_id: TabId,
-    visible_index: usize,
 }
 
 impl WorkspaceWindowTabState {

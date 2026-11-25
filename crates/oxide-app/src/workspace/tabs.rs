@@ -6,6 +6,7 @@ mod create;
 mod detach;
 mod entity;
 mod helpers;
+mod layout;
 mod navigation;
 mod nodes;
 mod nodes_reconnect_helpers;
@@ -20,6 +21,7 @@ pub(in crate::workspace) use entity::{
     TabMountCloseReason, TabMountId, TabRemovalTransition, TerminalLocation,
     WorkspaceTabHostEntity, WorkspaceTabHostEvent,
 };
+use layout::TabStripItemKind;
 
 // The main tab strip keeps a thin visual thumb while exposing a larger drag target.
 const TABBAR_SCROLLBAR_HEIGHT: f32 = 3.0;
