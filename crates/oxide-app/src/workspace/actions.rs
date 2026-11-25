@@ -1,12 +1,18 @@
 use super::ime::WorkspaceImeTarget;
 use super::tabs::TabCloseConfirmKeyAction;
 use super::*;
+use gpui::EntityInputHandler;
+use oxide_editor::{EditorContextMenuLabels, TextEditorView};
 use oxide_quick_commands::{
     PreparedQuickCommand, QuickCommand, QuickCommandContextValues, QuickCommandRisk,
     QuickCommandTargetContext, QuickCommandTargetProtocol,
     classify_command_risk as classify_quick_command_risk, prepare_quick_command,
 };
 use oxide_terminal_core::TerminalSessionKind;
+use oxide_ui::search_bar::{
+    search_action_button, search_input_height, search_mode_button, search_mode_group, search_panel,
+    search_row,
+};
 use zeroize::Zeroizing;
 
 const TERMINAL_FONT_SIZE_MIN: i64 = 8;
@@ -141,19 +147,6 @@ impl TerminalSearchState {
         self.focused == Some(pane_id) && self.blur()
     }
 
-    pub(super) fn replace_query(
-        &mut self,
-        pane_id: PaneId,
-        range: Option<std::ops::Range<usize>>,
-        text: &str,
-    ) -> bool {
-        let Some(search) = self.panes.get_mut(&pane_id).filter(|search| search.visible) else {
-            return false;
-        };
-        oxide_editor_core::utf16::replace_utf16(&mut search.query, range, text);
-        true
-    }
-
     pub(super) fn remove(&mut self, pane_id: PaneId) {
         self.panes.remove(&pane_id);
         if self.focused == Some(pane_id) {
@@ -166,14 +159,19 @@ impl TerminalSearchState {
 pub(super) struct SearchBarState {
     pub(super) visible: bool,
     pub(super) query: String,
+    pub(super) options: oxide_terminal_core::TerminalSearchOptions,
+    editor: Option<Entity<TextEditorView>>,
+    _editor_subscription: Option<Subscription>,
+    editor_version: u64,
     pub(super) active_match: Option<usize>,
     pub(super) match_count: usize,
+    invalid_regex: bool,
 }
-
 impl SearchBarState {
     pub(super) fn sync_from_terminal(&mut self, status: TerminalSearchStatus) {
         self.active_match = status.active_match;
         self.match_count = status.match_count;
+        self.invalid_regex = status.invalid_regex;
     }
 
     fn clear_match_state(&mut self) {
@@ -317,12 +315,157 @@ impl WorkspaceApp {
         self.blur_terminal_quick_commands_input(cx);
         self.focus_search_pane(pane_id, cx);
         self.search.open(pane_id);
-        window.focus(&self.focus_handle, cx);
+        self.ensure_search_editor(pane_id, cx);
+        self.focus_search_editor(pane_id, window, cx);
+        if let Some(editor) = self
+            .search
+            .panes
+            .get(&pane_id)
+            .and_then(|search| search.editor.clone())
+        {
+            editor.update(cx, |editor, cx| editor.select_all(cx));
+        }
         self.update_search_query_for_pane(pane_id, false, cx);
-        self.select_all_active_text_input(cx);
         cx.notify();
     }
+    fn ensure_search_editor(&mut self, pane_id: PaneId, cx: &mut Context<Self>) {
+        let Some(search) = self.search.panes.get(&pane_id) else {
+            return;
+        };
+        if search.editor.is_some() {
+            return;
+        }
+        let text = search.query.clone();
+        let tokens = self.theme_tokens;
+        let placeholder = self.i18n.t("search.placeholder");
+        let labels = self.search_editor_context_labels();
+        let editor = TextEditorView::new_search_input(&text, &tokens, placeholder, labels, cx);
+        let version = editor.read(cx).buffer().version();
+        let subscription = cx.observe(&editor, move |this, editor, cx| {
+            let version = editor.read(cx).buffer().version();
+            let Some(search) = this.search.panes.get_mut(&pane_id) else {
+                return;
+            };
+            if search.editor_version == version {
+                return;
+            }
+            search.editor_version = version;
+            let text = editor.read(cx).buffer().text();
+            if search.query == text {
+                return;
+            }
+            search.query = text;
+            this.update_search_query_for_pane(pane_id, true, cx);
+        });
+        if let Some(search) = self.search.panes.get_mut(&pane_id) {
+            search.editor = Some(editor);
+            search.editor_version = version;
+            search._editor_subscription = Some(subscription);
+        }
+    }
 
+    fn search_editor_context_labels(&self) -> EditorContextMenuLabels {
+        EditorContextMenuLabels {
+            copy: self.i18n.t("menu.copy"),
+            cut: self.i18n.t("fileManager.cut"),
+            paste: self.i18n.t("menu.paste"),
+            select_all: self.i18n.t("fileManager.selectAll"),
+        }
+    }
+
+    fn focus_search_editor(
+        &mut self,
+        pane_id: PaneId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_search_pane(pane_id, cx);
+        if let Some(editor) = self
+            .search
+            .panes
+            .get(&pane_id)
+            .and_then(|search| search.editor.as_ref())
+        {
+            window.focus(&editor.read(cx).focus_handle(cx), cx);
+        }
+    }
+
+    pub(super) fn search_editor_focused(&self, window: &Window, cx: &App) -> bool {
+        self.search.panes.values().any(|search| {
+            search.visible
+                && search
+                    .editor
+                    .as_ref()
+                    .is_some_and(|editor| editor.read(cx).focus_handle(cx).is_focused(window))
+        })
+    }
+
+    pub(super) fn handle_search_editor_key(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some((pane_id, editor)) = self.search.panes.iter().find_map(|(pane_id, search)| {
+            search
+                .visible
+                .then_some(search.editor.as_ref())
+                .flatten()
+                .filter(|editor| editor.read(cx).focus_handle(cx).is_focused(window))
+                .map(|editor| (*pane_id, editor.clone()))
+        }) else {
+            return false;
+        };
+        if editor.update(cx, |editor, cx| {
+            editor.marked_text_range(window, cx).is_some()
+        }) {
+            return false;
+        }
+        if crate::keybindings::keystroke_matches_action(
+            &event.keystroke,
+            "terminal.search",
+            &self.settings_store.settings().keybindings.overrides,
+        ) {
+            editor.update(cx, |editor, cx| editor.select_all(cx));
+            return true;
+        }
+        match event.keystroke.key.as_str() {
+            "enter" => self.search_next_for_pane(pane_id, !event.keystroke.modifiers.shift, cx),
+            "escape" | "tab" => {
+                if event.keystroke.key == "escape" {
+                    self.hide_search(pane_id, cx);
+                } else {
+                    self.search.blur();
+                }
+                if let Some(pane) = self.tab_host.read(cx).panes().get(&pane_id).cloned() {
+                    pane.update(cx, |pane, cx| pane.focus(window, cx));
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    pub(super) fn sync_search_editor_appearance(&self, cx: &mut Context<Self>) {
+        let tokens = self.theme_tokens;
+        for search in self.search.panes.values() {
+            if let Some(editor) = &search.editor {
+                editor.update(cx, |editor, cx| {
+                    editor.apply_runtime_settings(
+                        &tokens,
+                        tokens.metrics.font_family.to_string(),
+                        tokens.metrics.ui_text_sm,
+                        1.5,
+                        false,
+                        false,
+                        cx,
+                    );
+                    editor.set_placeholder(Some(self.i18n.t("search.placeholder")), cx);
+                    editor.set_context_menu_labels(self.search_editor_context_labels());
+                });
+            }
+        }
+    }
     pub(super) fn hide_search(&mut self, pane_id: PaneId, cx: &mut Context<Self>) {
         if self.search.close(pane_id) {
             self.ime_marked_text = None;
@@ -350,6 +493,9 @@ impl WorkspaceApp {
         let Some(search) = self.search.panes.get_mut(&pane_id) else {
             return;
         };
+        if !search.visible {
+            return;
+        }
         let query = (!search.query.is_empty()).then(|| search.query.clone());
         if reset_match {
             search.active_match = query.as_ref().map(|_| 0);
@@ -360,7 +506,12 @@ impl WorkspaceApp {
                 status
             } else {
                 pane.update(cx, |pane, cx| {
-                    pane.set_search_query(query, search.active_match, cx)
+                    pane.set_search_query_with_options(
+                        query,
+                        search.options,
+                        search.active_match,
+                        cx,
+                    )
                 })
             };
             search.sync_from_terminal(status);
@@ -830,7 +981,8 @@ impl WorkspaceApp {
             cx.stop_propagation();
             return;
         }
-        if self.terminal_command_sender_editor_focused(window, cx)
+        if self.search_editor_focused(window, cx)
+            || self.terminal_command_sender_editor_focused(window, cx)
             || self.quick_command_text_editor_focused(window, cx)
         {
             // Child editor handlers own the bubble path while focused.
@@ -2597,21 +2749,26 @@ impl WorkspaceApp {
     }
 
     pub(super) fn render_search_bar(&self, pane_id: PaneId, cx: &mut Context<Self>) -> AnyElement {
-        const SEARCH_PANEL_BG_ALPHA: u32 = 0xf5; // Tauri bg-theme-bg-elevated translated to native opacity.
-        const SEARCH_PANEL_BORDER_ALPHA: u32 = 0xcc; // Tauri border-theme-border.
-
         let theme = self.theme_tokens.ui;
         let Some(search) = self.search.panes.get(&pane_id) else {
             return div().into_any_element();
         };
-        let focused = self.focused_search_pane(cx) == Some(pane_id);
-        let target = WorkspaceImeTarget::Search(pane_id);
+        let Some(editor) = search.editor.clone() else {
+            return div().into_any_element();
+        };
+        let input_height = search_input_height(
+            editor.read(cx).buffer().line_count(),
+            editor.read(cx).line_height(),
+        );
         let has_query = !search.query.is_empty();
-        let marked_text = self.marked_text_for_target(target, cx);
+
         let match_count = search.match_count;
         let active_match = search.active_match.filter(|index| *index < match_count);
         let navigation_disabled = !has_query || match_count == 0;
-        let result_label = if !has_query {
+        let invalid_pattern = search.invalid_regex;
+        let result_label = if invalid_pattern {
+            self.i18n.t("search.invalid_regex")
+        } else if !has_query {
             String::new()
         } else if match_count == 0 {
             self.i18n.t("search.no_results")
@@ -2619,31 +2776,11 @@ impl WorkspaceApp {
             format!("{}/{}", active_match.unwrap_or(0) + 1, match_count)
         };
 
-        div()
+        search_panel(&self.theme_tokens)
             .id(("terminal-search", pane_id.0))
-            .absolute()
-            .top(px(12.0))
-            .right(px(12.0))
-            .w(px(420.0))
-            .max_w(relative(0.92))
-            .flex()
-            .flex_col()
-            .overflow_hidden()
-            .rounded(px(self.theme_tokens.radii.md))
-            .border_1()
-            .border_color(rgba((theme.border << 8) | SEARCH_PANEL_BORDER_ALPHA))
-            .bg(rgba((theme.bg_elevated << 8) | SEARCH_PANEL_BG_ALPHA))
-            .shadow_lg()
-            .text_size(px(13.0))
-            .text_color(rgb(theme.text))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
-                div()
-                    .h(px(44.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(8.0))
-                    .px(px(12.0))
+                search_row()
                     .border_b_1()
                     .border_color(rgba((theme.border << 8) | 0x99))
                     .child(Self::render_lucide_icon(
@@ -2652,36 +2789,73 @@ impl WorkspaceApp {
                         rgb(theme.text_muted),
                     ))
                     .child(
-                        self.text_input_with_workspace_ime(
-                            target,
-                            self.workspace_text_input(
-                                target,
-                                oxide_ui::text_input::TextInputView {
-                                    value: &search.query,
-                                    placeholder: self.i18n.t("search.placeholder"),
-                                    focused,
-                                    caret_visible: self.input_caret.visible(),
-                                    secret: false,
-                                    selected_all: false,
-                                    selected_range: self.ime_selected_range_for_target(target, cx),
-                                    marked_text,
-                                },
-                            )
-                            .h(px(28.0))
+                        div()
+                            .id(("terminal-search-input", pane_id.0))
+                            .aria_label(self.i18n.t("search.placeholder"))
                             .flex_1()
-                            .min_w_0()
-                            .border_0()
-                            .bg(rgba(0x00000000))
-                            .px(px(2.0))
-                            .text_size(px(13.0)),
-                            move |this, cx| this.focus_search_pane(pane_id, cx),
-                            cx,
-                        ),
+                            .min_w(px(160.0))
+                            .max_w_full()
+                            .h(px(input_height))
+                            .capture_any_mouse_down(cx.listener(move |this, _, _, cx| {
+                                this.focus_search_pane(pane_id, cx);
+                            }))
+                            .child(editor),
                     )
+                    .child({
+                        let mut row = search_mode_group();
+                        for (index, text, key, selected) in [
+                            (
+                                0usize,
+                                "Aa",
+                                "search.match_case",
+                                search.options.case_sensitive,
+                            ),
+                            (1, ".*", "search.use_regex", search.options.regex),
+                        ] {
+                            let tokens = self.theme_tokens;
+                            let label = self.i18n.t(key);
+                            row = row.child(
+                                search_mode_button(&tokens, text, selected)
+                                    .id(("terminal-search-mode", index))
+                                    .aria_label(label.clone())
+                                    .tooltip(move |_, cx| {
+                                        oxide_ui::tooltip::tooltip_view(
+                                            tokens,
+                                            label.clone(),
+                                            None,
+                                            cx,
+                                        )
+                                    })
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _, window, cx| {
+                                            if let Some(search) =
+                                                this.search.panes.get_mut(&pane_id)
+                                            {
+                                                match index {
+                                                    0 => {
+                                                        search.options.case_sensitive =
+                                                            !search.options.case_sensitive
+                                                    }
+                                                    _ => {
+                                                        search.options.regex = !search.options.regex
+                                                    }
+                                                }
+                                            }
+                                            this.focus_search_editor(pane_id, window, cx);
+                                            this.update_search_query_for_pane(pane_id, true, cx);
+                                            cx.stop_propagation();
+                                        }),
+                                    ),
+                            );
+                        }
+                        row
+                    })
                     .when(has_query, |row| {
                         row.child(
                             div()
                                 .flex_none()
+                                .max_w_full()
                                 .min_w(px(48.0))
                                 .text_size(px(12.0))
                                 .text_color(rgb(theme.text_muted))
@@ -2689,98 +2863,60 @@ impl WorkspaceApp {
                         )
                     })
                     .child(
-                        div()
-                            .size(px(28.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(self.theme_tokens.radii.md))
-                            .cursor_pointer()
-                            .hover(move |style| {
-                                if navigation_disabled {
-                                    style
-                                } else {
-                                    style.bg(rgb(theme.bg_hover))
-                                }
-                            })
-                            .child(Self::render_lucide_icon(
-                                LucideIcon::ArrowUp,
-                                14.0,
-                                if navigation_disabled {
-                                    rgba((theme.text_muted << 8) | 0x66)
-                                } else {
-                                    rgb(theme.text_muted)
-                                },
-                            ))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |this, _event, _window, cx| {
-                                    this.search_next_for_pane(pane_id, false, cx);
-                                    cx.stop_propagation();
-                                }),
-                            ),
+                        search_action_button(
+                            &self.theme_tokens,
+                            ("terminal-search-arrow-up", pane_id.0),
+                            "lucide/arrow-up.svg",
+                            self.i18n.t("ide.find_previous"),
+                            navigation_disabled,
+                        )
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _event, _window, cx| {
+                                this.search_next_for_pane(pane_id, false, cx);
+                                cx.stop_propagation();
+                            }),
+                        ),
                     )
                     .child(
-                        div()
-                            .size(px(28.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(self.theme_tokens.radii.md))
-                            .cursor_pointer()
-                            .hover(move |style| {
-                                if navigation_disabled {
-                                    style
-                                } else {
-                                    style.bg(rgb(theme.bg_hover))
-                                }
-                            })
-                            .child(Self::render_lucide_icon(
-                                LucideIcon::ArrowDown,
-                                14.0,
-                                if navigation_disabled {
-                                    rgba((theme.text_muted << 8) | 0x66)
-                                } else {
-                                    rgb(theme.text_muted)
-                                },
-                            ))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |this, _event, _window, cx| {
-                                    this.search_next_for_pane(pane_id, true, cx);
-                                    cx.stop_propagation();
-                                }),
-                            ),
+                        search_action_button(
+                            &self.theme_tokens,
+                            ("terminal-search-arrow-down", pane_id.0),
+                            "lucide/arrow-down.svg",
+                            self.i18n.t("ide.find_next"),
+                            navigation_disabled,
+                        )
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _event, _window, cx| {
+                                this.search_next_for_pane(pane_id, true, cx);
+                                cx.stop_propagation();
+                            }),
+                        ),
                     )
                     .child(
-                        div()
-                            .size(px(28.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(self.theme_tokens.radii.md))
-                            .cursor_pointer()
-                            .hover(move |style| style.bg(rgb(theme.bg_hover)))
-                            .child(Self::render_lucide_icon(
-                                LucideIcon::X,
-                                14.0,
-                                rgb(theme.text_muted),
-                            ))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |this, _event, window, cx| {
-                                    let restore_focus = this.search.focused == Some(pane_id)
-                                        || this.active_pane_id(cx) == Some(pane_id);
-                                    this.hide_search(pane_id, cx);
-                                    if restore_focus
-                                        && let Some(pane) =
-                                            this.tab_host.read(cx).panes().get(&pane_id).cloned()
-                                    {
-                                        pane.update(cx, |pane, cx| pane.focus(window, cx));
-                                    }
-                                    cx.stop_propagation();
-                                }),
-                            ),
+                        search_action_button(
+                            &self.theme_tokens,
+                            ("terminal-search-x", pane_id.0),
+                            "lucide/x.svg",
+                            self.i18n.t("ide.close_search"),
+                            false,
+                        )
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _event, window, cx| {
+                                let restore_focus = this.search.focused == Some(pane_id)
+                                    || this.active_pane_id(cx) == Some(pane_id);
+                                this.hide_search(pane_id, cx);
+                                if restore_focus
+                                    && let Some(pane) =
+                                        this.tab_host.read(cx).panes().get(&pane_id).cloned()
+                                {
+                                    pane.update(cx, |pane, cx| pane.focus(window, cx));
+                                }
+                                cx.stop_propagation();
+                            }),
+                        ),
                     ),
             )
             .child(

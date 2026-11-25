@@ -1,20 +1,6 @@
 use std::{cell::RefCell, collections::HashMap, fmt, ops::Range, rc::Rc, time::Instant};
 
-use gpui::{
-    App, Bounds, ClipboardItem, Context, CursorStyle, Element, ElementId, Entity, FocusHandle,
-    GlobalElementId, InputHandler, InspectorElementId, InteractiveElement, IntoElement, Keystroke,
-    LayoutId, MouseButton, Pixels, Point, SharedString, Style, Styled, TextRun, Timer,
-    UTF16Selection, Window, font, point, px, rgb,
-};
-use oxide_editor_core::utf16::{
-    byte_index_for_utf16, control_k_delete_end, floor_char_boundary, line_end_for_utf16_offset,
-    line_range_for_utf16_offset, line_ranges_utf16, line_start_for_utf16_offset,
-    next_utf16_boundary, next_word_boundary, previous_utf16_boundary, previous_word_boundary,
-    replace_utf16, transpose_text_at_utf16_offset, utf16_offset_for_byte_index,
-    utf16_offset_for_char_index, utf16_slice, vertical_line_navigation_destination,
-    word_range_for_utf16_offset,
-};
-
+use super::WorkspaceApp;
 use super::connection_monitor::HostToolsTextInput;
 use super::file_manager::FileManagerInput;
 use super::forwards::ForwardInput;
@@ -29,7 +15,20 @@ use super::quick_commands::{
 use super::session_manager::{SessionManagerInput, SessionManagerState};
 use super::sftp::SftpInput;
 use super::terminal_git::TerminalGitPanelSection;
-use super::{PaneId, WorkspaceApp};
+use gpui::{
+    App, Bounds, ClipboardItem, Context, CursorStyle, Element, ElementId, Entity, FocusHandle,
+    GlobalElementId, InputHandler, InspectorElementId, InteractiveElement, IntoElement, Keystroke,
+    LayoutId, MouseButton, Pixels, Point, SharedString, Style, Styled, TextRun, Timer,
+    UTF16Selection, Window, font, point, px, rgb,
+};
+use oxide_editor_core::utf16::{
+    byte_index_for_utf16, control_k_delete_end, floor_char_boundary, line_end_for_utf16_offset,
+    line_range_for_utf16_offset, line_ranges_utf16, line_start_for_utf16_offset,
+    next_utf16_boundary, next_word_boundary, previous_utf16_boundary, previous_word_boundary,
+    replace_utf16, transpose_text_at_utf16_offset, utf16_offset_for_byte_index,
+    utf16_offset_for_char_index, utf16_slice, vertical_line_navigation_destination,
+    word_range_for_utf16_offset,
+};
 use oxide_settings_view::SettingsInput;
 use oxide_ui::{
     tauri_ui_font_family,
@@ -130,8 +129,6 @@ pub(super) enum WorkspaceImeTarget {
     ActiveSessionSearch,
     AuditSearch,
     AuditPolicy(super::audit::AuditPolicyInput),
-
-    Search(PaneId),
     TerminalCommandSenderCompact,
     TerminalCwdSearch,
     TerminalGitBranchSearch,
@@ -523,7 +520,6 @@ impl WorkspaceImeTarget {
             Self::AuditSearch => 25,
             Self::AuditPolicy(super::audit::AuditPolicyInput::Retention) => 26,
             Self::AuditPolicy(super::audit::AuditPolicyInput::Capacity) => 27,
-            Self::Search(pane_id) => (1_u64 << 63) | pane_id.0,
             Self::TerminalCommandSenderCompact => 2,
             Self::TerminalCwdSearch => 18,
             Self::TerminalGitBranchSearch => 17,
@@ -1311,7 +1307,8 @@ impl WorkspaceApp {
             return Some(target);
         }
 
-        self.focused_search_pane(cx).map(WorkspaceImeTarget::Search)
+        // Terminal search editors own their platform input handler and composition.
+        None
     }
 
     pub(super) fn active_ime_target_for_window(
@@ -1337,31 +1334,6 @@ impl WorkspaceApp {
             if self.sftp_surface_window(surface, cx) != Some(window_id) {
                 return None;
             }
-        }
-
-        let owner = match target {
-            WorkspaceImeTarget::Search(pane_id) => self
-                .tabs(cx)
-                .iter()
-                .find(|tab| {
-                    tab.root_pane
-                        .as_ref()
-                        .is_some_and(|root| root.contains_pane(pane_id))
-                })
-                .and_then(|tab| {
-                    self.tab_host
-                        .read(cx)
-                        .detached_window_handle(tab.id)
-                        .or_else(|| {
-                            self.window_registry
-                                .handle_for_role(super::window_registry::WindowRole::Main)
-                        })
-                })
-                .map(|handle| handle.window_id()),
-            _ => None,
-        };
-        if matches!(target, WorkspaceImeTarget::Search(_)) && owner != Some(window_id) {
-            return None;
         }
         Some(target)
     }
@@ -2075,12 +2047,6 @@ impl WorkspaceApp {
             WorkspaceImeTarget::ActiveSessionSearch => Some(self.session_search_query.clone()),
             WorkspaceImeTarget::AuditSearch => Some(self.audit.search.clone()),
             WorkspaceImeTarget::AuditPolicy(input) => Some(self.audit_policy_input_value(input)),
-
-            WorkspaceImeTarget::Search(pane_id) => self
-                .search
-                .panes
-                .get(&pane_id)
-                .map(|search| search.query.clone()),
             WorkspaceImeTarget::TerminalCommandSenderCompact => self
                 .terminal_command_sender
                 .read(cx)
@@ -2936,11 +2902,6 @@ impl WorkspaceApp {
                 self.shortcuts_modal.scroll_handle = gpui::UniformListScrollHandle::new();
                 self.show_active_input_caret(cx);
                 cx.notify();
-            }
-            WorkspaceImeTarget::Search(pane_id) => {
-                if self.search.replace_query(pane_id, replacement_range, text) {
-                    self.update_search_query_for_pane(pane_id, true, cx);
-                }
             }
             WorkspaceImeTarget::TerminalCommandSenderCompact => {
                 let mut draft = Zeroizing::new(

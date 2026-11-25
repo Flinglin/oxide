@@ -213,6 +213,7 @@ impl TerminalPane {
 
         if key == "end" && modifiers.platform {
             self.pending_search_reveal = false;
+            self.search_navigation_needs_viewport_anchor = true;
             let snapshot = {
                 let mut terminal = self.terminal.lock();
                 terminal.scroll_to_bottom();
@@ -226,6 +227,7 @@ impl TerminalPane {
 
         if key == "home" && modifiers.platform {
             self.pending_search_reveal = false;
+            self.search_navigation_needs_viewport_anchor = true;
             let snapshot = {
                 let mut terminal = self.terminal.lock();
                 terminal.scroll_to_top();
@@ -535,7 +537,7 @@ impl TerminalPane {
             return;
         };
         self.pending_search_reveal = false;
-
+        self.search_navigation_needs_viewport_anchor = true;
         if mouse_mode(mode, event.modifiers.shift) {
             self.clear_smooth_scroll_animation();
             let rows = scroll_delta.rows;
@@ -1271,7 +1273,7 @@ impl TerminalPane {
         };
 
         self.pending_search_reveal = false;
-
+        self.search_navigation_needs_viewport_anchor = true;
         let available = (geometry.track_height - geometry.height).max(px(1.0));
         let y = (position.y - geometry.y - thumb_offset_y).clamp(px(0.0), available);
         let scroll_fraction = y / available;
@@ -1454,6 +1456,7 @@ impl TerminalPane {
 
     fn apply_scroll_action(&mut self, action: TerminalScrollAction, cx: &mut Context<Self>) {
         self.pending_search_reveal = false;
+        self.search_navigation_needs_viewport_anchor = true;
         let folded_offset = self.folding_active().then(|| {
             let current = self.visible_scroll_offset();
             let page = self.snapshot.rows.saturating_sub(1).max(1);
@@ -1501,17 +1504,39 @@ impl TerminalPane {
             .selected_search_match
             .unwrap_or(0)
             .min(matches.len() - 1);
-        self.selected_search_match = Some(if forward {
-            (current + 1) % matches.len()
-        } else if current == 0 {
-            matches.len() - 1
-        } else {
-            current - 1
-        });
+        self.selected_search_match =
+            if std::mem::take(&mut self.search_navigation_needs_viewport_anchor) {
+                let snapshot = self.terminal.lock().snapshot();
+                self.snapshot = self.stamp_snapshot(snapshot);
+                self.nearest_search_match(&matches)
+            } else {
+                Some(if forward {
+                    (current + 1) % matches.len()
+                } else if current == 0 {
+                    matches.len() - 1
+                } else {
+                    current - 1
+                })
+            };
         let selected = matches[self.selected_search_match.unwrap()].clone();
         self.scroll_to_search_match(&selected, cx);
     }
-
+    pub(super) fn nearest_search_match(&self, matches: &[TerminalSearchMatch]) -> Option<usize> {
+        let origin = self.snapshot.scrollback_lines as i64;
+        let top = self.displayed_absolute_line(0) as i64 - origin;
+        let bottom =
+            self.displayed_absolute_line(self.snapshot.rows.saturating_sub(1)) as i64 - origin;
+        matches
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, hit)| {
+                let start = i64::from(hit.line);
+                let end = i64::from(hit.ranges.last().map_or(hit.line, |range| range.line));
+                // Every visible match has zero distance; buffer order breaks ties.
+                (top - end).max(start - bottom).max(0)
+            })
+            .map(|(index, _)| index)
+    }
     pub(super) fn scroll_to_selected_search_match(&mut self, cx: &mut Context<Self>) {
         let matches = self.current_search_matches();
         let Some(index) = self

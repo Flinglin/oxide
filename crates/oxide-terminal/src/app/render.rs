@@ -515,6 +515,7 @@ impl Render for TerminalPane {
             .id("terminal-pane")
             .size_full()
             .relative()
+            .cursor(gpui::CursorStyle::IBeam)
             .bg(if transparent_pane_base {
                 rgba(0x00000000)
             } else {

@@ -138,7 +138,7 @@ impl Render for TextEditorView {
             .relative()
             .size_full()
             .overflow_hidden()
-            .cursor(CursorStyle::IBeam)
+            .cursor(CursorStyle::Arrow)
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseDownEvent, window, cx| {
@@ -177,6 +177,15 @@ impl Render for TextEditorView {
                 cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
                     this.finish_selection_drag(cx);
                 }),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .left(px(self.visible_gutter_width()))
+                    .right_0()
+                    .top_0()
+                    .bottom_0()
+                    .cursor(CursorStyle::IBeam),
             )
             .child(rows);
         if let Some(placeholder) = self.render_placeholder() {
@@ -329,7 +338,8 @@ impl TextEditorView {
     ) -> Option<AnyElement> {
         let geometry = editor_scrollbar_geometry(
             self.viewport.height_px,
-            self.document_row_count() as f32 * self.metrics.line_height,
+            self.viewport
+                .scrollable_height(self.document_row_count(), self.metrics.line_height),
             self.viewport.scroll_y_px,
         )?;
         let drag_state = EditorScrollbarDragState {
@@ -401,7 +411,8 @@ impl TextEditorView {
         };
         let Some(geometry) = editor_scrollbar_geometry(
             self.viewport.height_px,
-            self.document_row_count() as f32 * self.metrics.line_height,
+            self.viewport
+                .scrollable_height(self.document_row_count(), self.metrics.line_height),
             self.viewport.scroll_y_px,
         ) else {
             return;

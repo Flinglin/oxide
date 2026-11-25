@@ -15,6 +15,7 @@ gpui.workspace = true
 oxide-ui = { path = "../oxide-ui" }
 tracing.workspace = true
 serde.workspace = true
+regex.workspace = true
 oxide-editor-core = { path = "../oxide-editor-core" }
 oxide-editor-syntax = { path = "../oxide-editor-syntax" }
 oxide-plugin-manifest = { path = "../oxide-plugin-manifest" }
