@@ -45,3 +45,6 @@ package target="":
 # 发布新版本
 publish:
     bash scripts/release/publish.sh
+
+revoke:
+    bash scripts/release/revoke.sh
