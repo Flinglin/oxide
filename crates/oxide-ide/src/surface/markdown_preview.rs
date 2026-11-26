@@ -7,6 +7,7 @@ struct MarkdownPreviewState {
     editing: bool,
     source: Option<Arc<str>>,
     document: Option<MarkdownDocument>,
+    selection: Option<MarkdownPreviewSelection>,
     scroll: MarkdownVirtualListScrollHandle,
     // The file tab owns parsing; closing it cancels delivery to the surface.
     parse_task: Option<Task<()>>,
@@ -52,6 +53,7 @@ impl IdeSurface {
     }
 
     fn toggle_markdown_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.finish_markdown_selection();
         let Some(tab_id) = self.active_markdown_tab() else {
             return;
         };
@@ -140,6 +142,7 @@ impl IdeSurface {
         }
         state.source = Some(source.clone());
         state.document = None;
+        state.selection = None;
         let parse_source = source.clone();
         let parse = cx
             .background_executor()
@@ -147,6 +150,7 @@ impl IdeSurface {
         state.parse_task = Some(cx.spawn(async move |weak, cx| {
             let document = parse.await;
             let _ = weak.update(cx, |this, cx| {
+                let options = this.markdown_options();
                 let Some(state) = this.markdown_previews.get_mut(&tab_id) else {
                     return;
                 };
@@ -155,6 +159,11 @@ impl IdeSurface {
                     .as_ref()
                     .is_some_and(|current| Arc::ptr_eq(current, &source))
                 {
+                    state.selection = Some(MarkdownPreviewSelection::new(
+                        &document,
+                        &this.tokens,
+                        &options,
+                    ));
                     state.document = Some(document);
                     state.parse_task = None;
                     cx.notify();
@@ -167,7 +176,11 @@ impl IdeSurface {
         let tab_id = self.active_markdown_tab().expect("markdown tab selected");
         let source = self.editors[&tab_id].read(cx).buffer().text_snapshot();
         self.prepare_markdown_preview(tab_id, source, cx);
+        let options = self.markdown_options();
         let state = &self.markdown_previews[&tab_id];
+        if let Some(selection) = &state.selection {
+            selection.layouts.borrow_mut().clear();
+        }
         let Some(document) = &state.document else {
             return self.render_loading_file();
         };
@@ -175,13 +188,19 @@ impl IdeSurface {
             .debug_selector(|| "ide-markdown-preview".into())
             .size_full()
             .p_4()
-            .child(oxide_markdown::render::render_document_virtual(
-                SharedString::from(format!("ide-markdown-preview-{}", tab_id.0)),
-                document,
-                &self.tokens,
-                &self.markdown_options(),
-                &state.scroll,
-            ))
+            .child(
+                oxide_markdown::render::render_document_virtual_selectable(
+                    SharedString::from(format!("ide-markdown-preview-{}", tab_id.0)),
+                    document,
+                    &self.tokens,
+                    &options,
+                    &state.scroll,
+                    None,
+                    &mut |key, text, runs, links| {
+                        self.render_markdown_fragment(tab_id, key, text, runs, links, cx)
+                    },
+                ),
+            )
             .into_any_element()
     }
 
@@ -202,12 +221,29 @@ impl IdeSurface {
             } else {
                 modifiers.control
             };
-            (command
-                && !modifiers.shift
-                && !modifiers.alt
-                && event.keystroke.key.eq_ignore_ascii_case("s"))
-            .then_some(EditorShortcut::Save)
+            if command && !modifiers.shift && !modifiers.alt {
+                match event.keystroke.key.to_ascii_lowercase().as_str() {
+                    "s" => Some(EditorShortcut::Save),
+                    "c" => Some(EditorShortcut::Copy),
+                    "a" => Some(EditorShortcut::SelectAll),
+                    "x" => Some(EditorShortcut::Cut),
+                    "v" => Some(EditorShortcut::Paste),
+                    _ => None,
+                }
+            } else {
+                None
+            }
         };
+        match shortcut {
+            Some(EditorShortcut::Copy) => self.copy_markdown_selection(cx),
+            Some(EditorShortcut::SelectAll) => self.select_all_markdown(cx),
+            Some(EditorShortcut::Cut | EditorShortcut::Paste) => {}
+            _ => {
+                if shortcut != Some(EditorShortcut::Save) {
+                    return false;
+                }
+            }
+        }
         if shortcut == Some(EditorShortcut::Save) {
             if let Some(tab_id) = self.workspace.active_tab() {
                 self.sync_editor_to_workspace(tab_id, cx);
@@ -216,6 +252,7 @@ impl IdeSurface {
             cx.stop_propagation();
             return true;
         }
-        false
+        cx.stop_propagation();
+        true
     }
 }
