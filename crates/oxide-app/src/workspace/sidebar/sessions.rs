@@ -106,7 +106,18 @@ fn session_group_connection_name(members: &[ActiveSessionSidebarRow]) -> Option<
     }
     (!names.is_empty()).then(|| names.join(" · "))
 }
-
+fn session_endpoint_label(username: &str, host: &str, port: u16) -> String {
+    let host = if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]")
+    } else {
+        host.to_owned()
+    };
+    if username.is_empty() {
+        format!("{host}:{port}")
+    } else {
+        format!("{username}@{host}:{port}")
+    }
+}
 struct LocalSessionRowState {
     terminal_ids: Vec<TerminalSessionId>,
     search: String,
@@ -1465,6 +1476,7 @@ impl WorkspaceApp {
                 // actions, and reconnect state all invalidate the cached height.
                 self.active_session_sidebar_row_signature(member, view_mode, cx)
                     .hash(&mut hasher);
+                self.session_group_member_route(member).hash(&mut hasher);
             }
         }
         hasher.finish()
@@ -2790,7 +2802,7 @@ impl WorkspaceApp {
                     items.push(self.render_session_tree_child(
                         2,
                         member_is_last_row && member_items.is_empty(),
-                        self.render_session_group_member_label(member),
+                        self.render_session_group_member_label(member, cx),
                     ));
                 }
                 items.extend(member_items);
@@ -2833,21 +2845,113 @@ impl WorkspaceApp {
         container.into_any_element()
     }
 
-    fn render_session_group_member_label(&self, member: &ActiveSessionSidebarRow) -> AnyElement {
+    fn session_group_member_route(&self, member: &ActiveSessionSidebarRow) -> Option<String> {
+        member.parent_id.as_ref()?;
+        // Use the complete node-owned route, not a terminal pane or secret-bearing config.
+        // Two routes can share the same final jump host in different private networks.
+        let path = self.node_router.path_to_node(&member.node_id).ok()?;
+        let endpoints = path
+            .iter()
+            .map(|id| {
+                let node = self.node_router.node_metadata(id)?;
+                Some(session_endpoint_label(
+                    &node.username,
+                    &node.host,
+                    node.port,
+                ))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(endpoints.join(" → "))
+    }
+
+    fn render_session_group_member_label(
+        &self,
+        member: &ActiveSessionSidebarRow,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let theme = self.theme_tokens.ui;
+        let route = self.session_group_member_route(member);
+        let endpoint = session_endpoint_label(&member.username, &member.host, member.port);
+        let tooltip = format!(
+            "{}\n{}",
+            member.title,
+            route.as_deref().unwrap_or(&endpoint)
+        );
+        let tooltip_id = format!("session-group-member-{}", member.node_id.0);
+        let leave_id = tooltip_id.clone();
+        let port_selector = format!("session-group-member-port-{}", member.node_id.0);
+        let route_selector = format!("session-group-member-route-{}", member.node_id.0);
         div()
-            .h(px(SESSION_TREE_ITEM_HEIGHT))
+            .id(SharedString::from(tooltip_id.clone()))
+            .min_w_0()
             .ml_1()
             .px_2()
             .flex()
-            .flex_row()
-            .items_center()
+            .flex_col()
             .text_size(px(SESSION_TREE_TEXT_SIZE))
             .text_color(rgb(theme.text_muted))
-            .child(div().min_w(px(0.0)).truncate().child(member.title.clone()))
             .child(
-                self.render_session_status_dot(self.session_node_status(member.node_view.status())),
+                div()
+                    .h(px(SESSION_TREE_ITEM_HEIGHT))
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .truncate()
+                            .child(member.title.clone()),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .debug_selector(move || port_selector)
+                            .child(format!(":{}", member.port)),
+                    )
+                    .child(self.render_session_status_dot(
+                        self.session_node_status(member.node_view.status()),
+                    )),
             )
+            .when_some(route, |row, route| {
+                row.child(
+                    div()
+                        .h(px(SESSION_TREE_ITEM_HEIGHT))
+                        .w_full()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.0))
+                        .child(Self::render_lucide_icon(
+                            LucideIcon::ArrowDownRight,
+                            SESSION_TREE_CHILD_ICON_SIZE,
+                            rgb(theme.text_muted),
+                        ))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex_1()
+                                .truncate()
+                                .debug_selector(move || route_selector)
+                                .child(route),
+                        ),
+                )
+            })
+            .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
+                this.queue_workspace_tooltip(
+                    tooltip_id.clone(),
+                    tooltip.clone(),
+                    f32::from(event.position.x) + 12.0,
+                    f32::from(event.position.y) + 16.0,
+                    cx,
+                );
+            }))
+            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                if !*hovered {
+                    this.clear_workspace_tooltip(&leave_id, cx);
+                }
+            }))
             .into_any_element()
     }
 
