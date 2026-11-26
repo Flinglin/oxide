@@ -317,14 +317,35 @@ fn s3_object_url(config: &CloudSyncSettings, relative_path: &str) -> Result<Url>
 fn s3_revision_blob_key(config: &CloudSyncSettings, revision: &str) -> String {
     crate::s3_revision_blob_key(&config.namespace, revision)
 }
-
+fn oss_service_name(host: &str) -> Option<&str> {
+    host.strip_prefix("s3.")
+        .unwrap_or(host)
+        .strip_suffix(".aliyuncs.com")
+        .filter(|service| service.starts_with("oss-") && !service.contains('.'))
+}
 fn join_s3_object_url(endpoint: &str, bucket: &str, key: &str) -> Result<Url> {
     let mut url = Url::parse(endpoint).context("missing_endpoint: invalid S3 endpoint")?;
+    let host = url.host_str().unwrap_or_default();
+    let bucket_prefix = format!("{bucket}.");
+    // A service label can also be a bucket name, so recognize service endpoints
+    // before removing a possible bucket prefix.
+    let oss_service = oss_service_name(host)
+        .or_else(|| host.strip_prefix(&bucket_prefix).and_then(oss_service_name));
+    let bucket_path = if let Some(service) = oss_service {
+        // OSS rejects path-style addressing. Normalize native OSS endpoints to
+        // its documented S3 endpoint before signing the bucket-qualified host.
+        let host = format!("{bucket}.s3.{service}.aliyuncs.com");
+        url.set_host(Some(&host))
+            .context("missing_endpoint: invalid S3 endpoint")?;
+        String::new()
+    } else {
+        encode_component(bucket)
+    };
     let base_path = trim_slashes(url.path());
     let encoded_key = encode_path_segments(key);
     let path = [
         base_path.as_str(),
-        encode_component(bucket).as_str(),
+        bucket_path.as_str(),
         encoded_key.as_str(),
     ]
     .into_iter()
