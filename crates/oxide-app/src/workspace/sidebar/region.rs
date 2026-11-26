@@ -173,12 +173,13 @@ impl WorkspaceApp {
                                         self.render_host_tools_context_panel(cx)
                                     }
                                 };
-                                oxide_ui::motion::fade_in(
+                                oxide_ui::motion::slide_fade_in_x(
                                     &self.theme_tokens,
-                                    match self.active_right_sidebar_panel {
-                                        RightSidebarPanel::HostTools => "context-panel-host-tools",
-                                    },
+                                    gpui::ElementId::Name(
+                                        format!("context-panel-{title_key}").into(),
+                                    ),
                                     div().size_full().child(content),
+                                    6.0,
                                     oxide_ui::motion::MotionDuration::Micro,
                                 )
                             }),

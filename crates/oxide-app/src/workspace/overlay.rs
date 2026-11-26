@@ -1560,24 +1560,26 @@ fn render_connection_stage_path(
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(rgb(color))
                 .child(marker_text);
-            let marker = if active && !failed && tokens.motion.enabled {
-                marker
-                    .with_animation(
-                        format!("connection-stage-{attempt_id}-{index}"),
-                        Animation::new(Duration::from_millis(1200)).repeat(),
-                        |marker, progress| {
-                            let wave = if progress < 0.5 {
-                                progress * 2.0
-                            } else {
-                                (1.0 - progress) * 2.0
-                            };
-                            marker.opacity(0.7 + wave * 0.3)
-                        },
-                    )
-                    .into_any_element()
-            } else {
-                marker.into_any_element()
-            };
+            let marker =
+                if active && !failed && tokens.motion.enabled && tokens.motion.spatial_enabled {
+                    marker
+                        .with_animation(
+                            format!("connection-stage-{attempt_id}-{index}"),
+                            Animation::new(oxide_ui::motion::scaled_duration(tokens, 1200))
+                                .repeat(),
+                            |marker, progress| {
+                                let wave = if progress < 0.5 {
+                                    progress * 2.0
+                                } else {
+                                    (1.0 - progress) * 2.0
+                                };
+                                marker.opacity(0.7 + wave * 0.3)
+                            },
+                        )
+                        .into_any_element()
+                } else {
+                    marker.into_any_element()
+                };
             div()
                 .flex_1()
                 .min_w_0()
@@ -1832,7 +1834,7 @@ fn render_tooltip(
             move |surface, progress| {
                 let value = from + (target - from) * progress;
                 opacity.set(value);
-                surface.opacity(value)
+                oxide_ui::motion::surface_opacity(surface, value)
             },
         );
         let anchor = anchored()

@@ -1052,40 +1052,14 @@ impl WorkspaceApp {
             .w(relative(item_width))
             .rounded(px(self.theme_tokens.radii.sm))
             .bg(rgba((self.theme_tokens.ui.accent << 8) | 0x24));
-        let indicator = match (
-            transition_generation,
-            oxide_ui::segmented_control_motion(&self.theme_tokens),
-        ) {
-            (Some(generation), Some(motion)) if motion.spatial => indicator
-                .with_animation(
-                    (
-                        gpui::ElementId::from(control_id),
-                        format!("selection-{generation}"),
-                    ),
-                    Animation::new(motion.duration)
-                        .with_easing(oxide_ui::motion::ease_in_out_cubic),
-                    move |indicator, progress| {
-                        indicator.left(relative(oxide_ui::motion::lerp(
-                            previous_left,
-                            active_left,
-                            progress,
-                        )))
-                    },
-                )
-                .into_any_element(),
-            (Some(generation), Some(motion)) => indicator
-                .left(relative(active_left))
-                .with_animation(
-                    (
-                        gpui::ElementId::from(control_id),
-                        format!("selection-{generation}"),
-                    ),
-                    Animation::new(motion.duration),
-                    |indicator, progress| indicator.opacity(progress),
-                )
-                .into_any_element(),
-            _ => indicator.left(relative(active_left)).into_any_element(),
-        };
+        let indicator = oxide_ui::segmented_control::selection_indicator(
+            &self.theme_tokens,
+            control_id,
+            indicator,
+            previous_left,
+            active_left,
+            transition_generation.is_some(),
+        );
         let mut options = div()
             .relative()
             .grid()

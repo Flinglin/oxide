@@ -961,7 +961,7 @@ impl WorkspaceApp {
                     &self.theme_tokens,
                     oxide_ui::motion::MotionDuration::Overlay,
                 ))
-                .with_easing(oxide_ui::motion::ease_in_out_cubic),
+                .with_easing(oxide_ui::motion::ease_settle),
                 move |surface, progress| {
                     let surface = surface.opacity(1.0 - progress);
                     if !spatial {

@@ -1,5 +1,5 @@
 use super::*;
-
+use std::{cell::Cell, rc::Rc};
 pub(in crate::workspace) const TERMINAL_SETTINGS_SWITCHER_ID: &str =
     "terminal-settings-page-switcher";
 
@@ -32,12 +32,14 @@ pub(super) struct UserSegmentedControlMotionState {
     active_transitions: HashMap<&'static str, ActiveUserTransition>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct ActiveUserTransition {
     generation: u64,
     target_index: usize,
     previous_index: Option<usize>,
     vertical_offset_y: Option<f32>,
+    vertical_from: gpui::SpringState,
+    vertical_position: Rc<Cell<gpui::SpringState>>,
 }
 
 impl UserSegmentedControlMotionState {
@@ -61,6 +63,15 @@ impl UserSegmentedControlMotionState {
         // generation while its older completion task is still pending.
         self.next_generation = self.next_generation.wrapping_add(1).max(1);
         let generation = self.next_generation;
+        let previous = self
+            .active_transitions
+            .get(control_id)
+            .map(|transition| transition.vertical_position.get());
+        let vertical_from = gpui::SpringState {
+            position: vertical_offset_y.unwrap_or(0.0)
+                + previous.map_or(0.0, |state| state.position),
+            velocity: previous.map_or(0.0, |state| state.velocity),
+        };
         self.active_transitions.insert(
             control_id,
             ActiveUserTransition {
@@ -68,6 +79,8 @@ impl UserSegmentedControlMotionState {
                 target_index,
                 previous_index,
                 vertical_offset_y,
+                vertical_from,
+                vertical_position: Rc::new(Cell::new(vertical_from)),
             },
         );
         generation
@@ -115,7 +128,81 @@ impl UserSegmentedControlMotionState {
     }
 }
 
+impl UserSegmentedControlMotionState {
+    fn render_vertical(
+        &self,
+        control_id: &'static str,
+        active_index: usize,
+        tokens: &ThemeTokens,
+        surface: gpui::Div,
+    ) -> AnyElement {
+        let Some(entry) = self
+            .active_transitions
+            .get(control_id)
+            .filter(|entry| entry.target_index == active_index)
+        else {
+            return surface.into_any_element();
+        };
+        let Some(motion) = oxide_ui::segmented_control_motion(tokens) else {
+            entry.vertical_position.set(gpui::SpringState {
+                position: 0.0,
+                velocity: 0.0,
+            });
+            return surface.into_any_element();
+        };
+        let id = gpui::ElementId::NamedInteger(control_id.into(), entry.generation);
+        if !motion.spatial || entry.vertical_offset_y.is_none() {
+            entry.vertical_position.set(gpui::SpringState {
+                position: 0.0,
+                velocity: 0.0,
+            });
+            return oxide_ui::motion::fade_in(
+                tokens,
+                id,
+                surface,
+                oxide_ui::motion::MotionDuration::Control,
+            );
+        }
+        // Row reparenting changes the GPUI ID path. The workspace retains only
+        // scalar position and velocity so the next row continues the same motion.
+        let from = entry.vertical_from;
+        let position = entry.vertical_position.clone();
+        let config =
+            oxide_ui::motion::spring_config(tokens, oxide_ui::motion::MotionDuration::Control);
+        surface
+            .with_animation(
+                id,
+                Animation::new(motion.duration),
+                move |surface, progress| {
+                    let state = if progress >= 1.0 {
+                        gpui::SpringState {
+                            position: 0.0,
+                            velocity: 0.0,
+                        }
+                    } else {
+                        config.step(from, 0.0, progress * motion.duration.as_secs_f32())
+                    };
+                    position.set(state);
+                    surface.top(px(state.position)).bottom(px(-state.position))
+                },
+            )
+            .into_any_element()
+    }
+}
 impl WorkspaceApp {
+    pub(in crate::workspace) fn render_vertical_selection_surface(
+        &self,
+        control_id: &'static str,
+        active_index: usize,
+        surface: gpui::Div,
+    ) -> AnyElement {
+        self.segmented_control_user_motion.render_vertical(
+            control_id,
+            active_index,
+            &self.theme_tokens,
+            surface,
+        )
+    }
     pub(in crate::workspace) fn begin_user_segmented_control_transition(
         &mut self,
         control_id: &'static str,

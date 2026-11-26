@@ -1,5 +1,6 @@
 use gpui::{
-    AnyElement, Div, FontWeight, ParentElement, Styled, div, prelude::*, px, rgb, rgba, svg,
+    AnimationExt, AnyElement, Div, FontWeight, ParentElement, Styled, div, prelude::*, px, rgb,
+    rgba, svg,
 };
 use oxide_theme::ThemeTokens;
 
@@ -100,7 +101,15 @@ pub fn toast(tokens: &ThemeTokens, view: ToastView) -> AnyElement {
                                     .h_full()
                                     .rounded_full()
                                     .bg(rgb(tokens.ui.accent))
-                                    .w(gpui::relative((progress / 100.0).clamp(0.0, 1.0))),
+                                    .with_spring(
+                                        "toast-progress",
+                                        crate::motion::spatial_spring(
+                                            tokens,
+                                            crate::motion::MotionDuration::Control,
+                                            (progress / 100.0).clamp(0.0, 1.0),
+                                        ),
+                                        |bar, value| bar.w(gpui::relative(value.clamp(0.0, 1.0))),
+                                    ),
                             ),
                     )
                 })

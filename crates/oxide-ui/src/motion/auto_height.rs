@@ -1,4 +1,4 @@
-use super::{MotionDuration, duration, ease_out_cubic};
+use super::{MotionDuration, spring_config};
 use gpui::{
     AnyElement, App, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement,
     LayoutId, ParentElement, Pixels, Styled, Window, div, prelude::*, px,
@@ -8,10 +8,10 @@ use std::{cell::RefCell, rc::Rc};
 
 #[derive(Default)]
 struct HeightState {
-    from: f32,
+    velocity: f32,
     target: f32,
     current: f32,
-    started_at: Option<std::time::Instant>,
+    updated_at: Option<std::time::Instant>,
 }
 
 /// Animates the occupied space of a bounded composer region. Removed content
@@ -87,35 +87,33 @@ impl Element for AutoHeight {
             self.tokens.motion.enabled && self.tokens.motion.spatial_enabled && !cx.reduce_motion();
         let now = cx.background_executor().now();
         let mut current = state.borrow_mut();
-        let mut running = if let Some(started_at) = current.started_at {
-            let progress = (now - started_at).as_secs_f32()
-                / duration(&self.tokens, MotionDuration::Micro)
-                    .as_secs_f32()
-                    .max(f32::EPSILON);
-            current.current =
-                current.from + (current.target - current.from) * ease_out_cubic(progress.min(1.0));
-            if progress >= 1.0 {
-                current.started_at = None;
-            }
-            progress < 1.0
-        } else {
-            false
-        };
-        if let Some(target) = self.target_height {
-            if !animated {
-                current.from = target;
-                current.target = target;
-                current.current = target;
-                current.started_at = None;
-                running = false;
-            } else if (target - current.target).abs() > 0.1 {
-                current.from = current.current;
-                current.target = target;
-                current.started_at = Some(now);
-                running = true;
-            }
+        let config = spring_config(&self.tokens, MotionDuration::Micro);
+        if let Some(updated_at) = current.updated_at {
+            let sampled = config.step(
+                gpui::SpringState {
+                    position: current.current,
+                    velocity: current.velocity,
+                },
+                current.target,
+                now.saturating_duration_since(updated_at).as_secs_f32(),
+            );
+            current.current = sampled.position;
+            current.velocity = sampled.velocity;
         }
-        let height = current.current;
+        if let Some(target) = self.target_height {
+            current.target = target;
+        }
+        let sampled = gpui::SpringState {
+            position: current.current,
+            velocity: current.velocity,
+        };
+        let running = animated && !config.is_settled(sampled, current.target, 0.1);
+        if !running {
+            current.current = current.target;
+            current.velocity = 0.0;
+        }
+        current.updated_at = running.then_some(now);
+        let height = current.current.max(0.0);
         drop(current);
         if animated && running {
             window.request_animation_frame();
@@ -145,14 +143,13 @@ impl Element for AutoHeight {
                     .map_or(0.0, |bounds| f32::from(bounds.size.height));
                 let mut state = measured.borrow_mut();
                 if !animated {
-                    state.from = height;
+                    state.velocity = 0.0;
                     state.target = height;
                     state.current = height;
-                    state.started_at = None;
+                    state.updated_at = None;
                 } else if (height - state.target).abs() > 0.1 {
-                    state.from = state.current;
                     state.target = height;
-                    state.started_at = Some(cx.background_executor().now());
+                    state.updated_at = Some(cx.background_executor().now());
                     window.request_animation_frame();
                 }
             });
