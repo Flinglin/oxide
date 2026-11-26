@@ -1403,15 +1403,16 @@ impl WorkspaceApp {
                 } else {
                     format!("{user}@{hostname}:{port}")
                 };
+                let detail = format!(
+                    "{} {detail}",
+                    self.i18n.t("command_palette.ssh_config_source")
+                );
                 PaletteItem {
                     id: format!("ssh-config:{alias}"),
                     label: alias.clone(),
                     section: PaletteSection::Connections,
                     icon: LucideIcon::FileTerminal,
-                    detail: Some(format!(
-                        "{} {detail}",
-                        self.i18n.t("command_palette.ssh_config_source")
-                    )),
+                    detail: Some(detail.clone()),
                     shortcut: None,
                     value: format!("{alias} {detail}"),
                     action: PaletteAction::QuickConnectAlias(alias),
@@ -1954,32 +1955,47 @@ impl WorkspaceApp {
         selected: bool,
         muted: bool,
     ) -> AnyElement {
-        let mut label = div()
-            .flex()
-            .items_center()
+        let highlight_set = highlights.iter().copied().collect::<HashSet<_>>();
+        let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
+        // Search returns character indices; styled text uses UTF-8 byte ranges.
+        for (index, (offset, ch)) in text.char_indices().enumerate() {
+            if highlight_set.contains(&index) {
+                let end = offset + ch.len_utf8();
+                if let Some(previous) = ranges.last_mut()
+                    && previous.end == offset
+                {
+                    previous.end = end;
+                } else {
+                    ranges.push(offset..end);
+                }
+            }
+        }
+        let highlighted = gpui::StyledText::new(text.to_owned()).with_highlights(
+            ranges.into_iter().map(|range| {
+                (
+                    range,
+                    gpui::HighlightStyle {
+                        color: Some(rgb(self.theme_tokens.ui.accent).into()),
+                        font_weight: Some(gpui::FontWeight::SEMIBOLD),
+                        ..Default::default()
+                    },
+                )
+            }),
+        );
+        div()
             .min_w_0()
             .truncate()
             .text_size(px(if muted { 12.0 } else { 14.0 }))
-            .line_height(px(if muted { 16.0 } else { 20.0 }));
-        let highlight_set = highlights.iter().copied().collect::<HashSet<_>>();
-        for (index, ch) in text.chars().enumerate() {
-            let highlighted = highlight_set.contains(&index);
-            label = label.child(
-                div()
-                    .text_color(if highlighted || selected {
-                        rgb(self.theme_tokens.ui.accent)
-                    } else if muted {
-                        rgb(self.theme_tokens.ui.text_muted)
-                    } else {
-                        rgb(self.theme_tokens.ui.text)
-                    })
-                    .when(highlighted, |part| {
-                        part.font_weight(gpui::FontWeight::SEMIBOLD)
-                    })
-                    .child(ch.to_string()),
-            );
-        }
-        label.into_any_element()
+            .line_height(px(if muted { 16.0 } else { 20.0 }))
+            .text_color(rgb(if selected {
+                self.theme_tokens.ui.accent
+            } else if muted {
+                self.theme_tokens.ui.text_muted
+            } else {
+                self.theme_tokens.ui.text
+            }))
+            .child(highlighted)
+            .into_any_element()
     }
 
     pub(super) fn render_shortcuts_modal(&self, cx: &mut Context<Self>) -> AnyElement {
