@@ -971,6 +971,9 @@ impl WorkspaceApp {
                 )
                 .child(
                     div()
+                        .debug_selector(move || {
+                            "settings_view.general.app_lock_locked_description".into()
+                        })
                         .max_w(px(APP_LOCK_SCREEN_DESCRIPTION_WIDTH))
                         .text_center()
                         .text_size(px(self.theme_tokens.metrics.ui_text_sm))

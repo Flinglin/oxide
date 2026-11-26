@@ -8,6 +8,7 @@
     "hide_main_window": "Ocultar janela principal",
     "quit": "Sair do oxide",
     "confirm_quit": "Sair do Oxide? Todas as sessões de terminal e conexões ativas serão encerradas.",
+    "unlock_to_finish_quit": "Desbloqueie o aplicativo para salvar ou descartar suas alterações antes de sair.",
     "edit": "Editar",
     "cut": "Recortar",
     "copy": "Copiar",
