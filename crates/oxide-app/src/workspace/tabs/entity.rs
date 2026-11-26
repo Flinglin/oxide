@@ -241,10 +241,16 @@ impl WorkspaceTabHostEntity {
     }
 
     pub(in crate::workspace) fn switch_scope(&mut self, scope: TabScope) -> Option<TabId> {
+        // Clearing a filter reveals other tabs without leaving the current page.
+        // Empty scopes still fall back to the remembered selection.
+        let keep_active = (scope == TabScope::All)
+            .then_some(self.active_tab_id)
+            .flatten();
         self.prepare_scope(scope);
         let remembered = self.scope_selections.get(&self.scope).copied();
-        let next = remembered
+        let next = keep_active
             .filter(|id| self.main_tabs().any(|(_, tab)| tab.id == *id))
+            .or(remembered.filter(|id| self.main_tabs().any(|(_, tab)| tab.id == *id)))
             .or_else(|| self.main_tabs().next().map(|(_, tab)| tab.id));
         self.select_main_tab(next)
     }
