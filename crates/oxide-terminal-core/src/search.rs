@@ -100,10 +100,29 @@ impl SearchRow {
         } else {
             cols
         };
+        if let Some(prefix) = row.ascii_prefix() {
+            let cols = cols.min(row.len());
+            let mut text = String::with_capacity(cols);
+            text.push_str(&prefix[..prefix.len().min(cols)]);
+            if cols > prefix.len() {
+                text.extend(std::iter::repeat_n(
+                    char::from(*prefix.as_bytes().last().unwrap()),
+                    cols - prefix.len(),
+                ));
+            }
+            return Self {
+                identity: row.identity(),
+                start: 0,
+                text,
+                wrapped,
+                history: false,
+                adjustments: Vec::new(),
+            };
+        }
         let mut text = String::new();
         let mut adjustments = Vec::new();
         let mut next_col = 0;
-        for (col, cell) in row[..].iter().take(cols).enumerate() {
+        for (col, cell) in row.iter().take(cols).enumerate() {
             if cell
                 .flags
                 .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
@@ -444,13 +463,7 @@ pub(crate) fn search_matches_from_term<T: EventListener>(
 
     for line in top_line..bottom_line {
         let row = &grid[Line(line)];
-        append_grid_line_text(
-            row[..].iter(),
-            line,
-            cols,
-            &mut logical_text,
-            &mut logical_map,
-        );
+        append_grid_line_text(row.iter(), line, cols, &mut logical_text, &mut logical_map);
         let wrapped = row
             .last()
             .is_some_and(|cell| cell.flags.contains(Flags::WRAPLINE));
@@ -538,7 +551,7 @@ fn ranges_for_match(
 }
 
 pub(crate) fn append_grid_line_text<'a>(
-    cells: impl Iterator<Item = &'a Cell>,
+    cells: impl Iterator<Item = alacritty_terminal::term::cell::CellRef<'a>>,
     line: i32,
     max_cols: usize,
     text: &mut String,

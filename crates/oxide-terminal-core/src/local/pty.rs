@@ -1297,16 +1297,16 @@ fn snapshot_row_source<T: EventListener>(
     }
 
     let terminal_row = &term.grid()[Line(grid_line)];
-    let terminal_cells = &terminal_row[..];
+
     let default_cell = AlacrittyCell::default();
-    let populated_cols = terminal_cells
+  let populated_cols = terminal_row
         .iter()
         .take(size.cols)
         .rposition(|cell| cell != &default_cell)
         .map_or(0, |column| column + 1);
-    let visible_cells = &terminal_cells[..populated_cols];
-    let wrapped = visible_cells
+    let wrapped = terminal_row
         .iter()
+          .take(populated_cols)
         .any(|cell| cell.flags.contains(Flags::WRAPLINE));
 
     Some(SnapshotRowSource {
@@ -1327,14 +1327,14 @@ fn snapshot_row_from_source<T: EventListener>(
 ) -> TerminalRow {
     let grid_line = row as i32 - display_offset as i32;
     let terminal_row = &term.grid()[Line(grid_line)];
-    let terminal_cells = &terminal_row[..];
+
     let overrides = term.colors();
     let mut cells = Vec::with_capacity(size.cols);
     let mut recent_styles = [None, None];
     let mut next_style_slot = 0;
     let mut previous_extra = None;
     // Default trailing cells have fixed paint data, so skip color and metadata conversion.
-    for cell in &terminal_cells[..source.populated_cols] {
+  for cell in terminal_row.iter().take(source.populated_cols) {
         let spacer = cell
             .flags
             .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER);

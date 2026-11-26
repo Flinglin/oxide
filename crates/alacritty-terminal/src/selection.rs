@@ -9,10 +9,10 @@ use std::cmp::min;
 use std::mem;
 use std::ops::{Bound, Range, RangeBounds};
 
-use crate::grid::{Dimensions, GridCell, Indexed};
+use crate::grid::{Dimensions, Indexed};
 use crate::index::{Boundary, Column, Line, Point, Side};
 use crate::term::Term;
-use crate::term::cell::{Cell, Flags};
+use crate::term::cell::Flags;
 use crate::vte::ansi::CursorShape;
 
 /// A Point and side within that point.
@@ -59,7 +59,7 @@ impl SelectionRange {
     /// Check if the cell at a point is part of the selection.
     pub fn contains_cell(
         &self,
-        indexed: &Indexed<&Cell>,
+        indexed: &Indexed<crate::term::cell::CellRef<'_>>,
         point: Point,
         shape: CursorShape,
     ) -> bool {
@@ -296,8 +296,8 @@ impl Selection {
     }
 
     fn range_semantic<T>(term: &Term<T>, mut start: Point, mut end: Point) -> SelectionRange {
-        if start == end
-        && let Some(matching) = term.bracket_search(start) {
+        if start == end &&
+             let Some(matching) = term.bracket_search(start) {
                 if (matching.line == start.line && matching.column < start.column)
                     || (matching.line < start.line)
                 {
@@ -307,8 +307,8 @@ impl Selection {
                 }
 
                 return SelectionRange { start, end, is_block: false };
-            }
 
+        }
 
         let start = term.semantic_search_left(start);
         let end = term.semantic_search_right(end);
