@@ -1564,10 +1564,15 @@ fn extend_or_push_row_rect(
     color: Hsla,
 ) {
     if let Some(rect) = current
-        && rect.col + rect.cells == col
+        && col <= rect.col + rect.cells
+        && rect.col <= col + cells
         && rect.color == color
     {
-        rect.cells += cells;
+        // A wide glyph and its spacer overlap by one column. Union their
+        // coverage instead of painting translucent selection color twice.
+        let end = (rect.col + rect.cells).max(col + cells);
+        rect.col = rect.col.min(col);
+        rect.cells = end - rect.col;
         return;
     }
 
