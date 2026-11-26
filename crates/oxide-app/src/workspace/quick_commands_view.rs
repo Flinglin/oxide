@@ -219,6 +219,7 @@ pub(in crate::workspace) fn quick_command_input_uses_monospace(input: QuickComma
     matches!(
         input,
         QuickCommandInput::CommandText
+            | QuickCommandInput::CategoryColor
             | QuickCommandInput::CommandHostPattern
             | QuickCommandInput::ParameterName(_)
             | QuickCommandInput::ParameterDefault(_)
@@ -413,26 +414,30 @@ impl TerminalQuickCommandsState {
     pub(in crate::workspace) fn quick_bar_snapshot(
         &self,
         target: Option<&QuickCommandTargetContext>,
+        category_id: Option<&str>,
     ) -> (Vec<QuickCommandCategory>, Vec<QuickCommand>) {
         // QuickBar is a read-only projection of the existing persisted store.
         // Preserve category and command order instead of creating a second model.
+        let category_id =
+            category_id.filter(|id| self.store.categories.iter().any(|c| c.id == *id));
         (
             self.store.categories.clone(),
             self.store
                 .commands
                 .iter()
                 .filter(|command| {
-                    target.map_or_else(
-                        || {
-                            command.availability.protocols.is_empty()
-                                && command.availability.host_patterns.is_empty()
-                        },
-                        |target| {
-                            oxide_quick_commands::quick_command_available_for_target(
-                                command, target,
-                            )
-                        },
-                    )
+                    category_id.is_none_or(|id| command.category == id)
+                        && target.map_or_else(
+                            || {
+                                command.availability.protocols.is_empty()
+                                    && command.availability.host_patterns.is_empty()
+                            },
+                            |target| {
+                                oxide_quick_commands::quick_command_available_for_target(
+                                    command, target,
+                                )
+                            },
+                        )
                 })
                 .cloned()
                 .collect(),
@@ -682,6 +687,11 @@ impl TerminalQuickCommandsState {
                 .category_editor
                 .as_ref()
                 .map(|draft| draft.name.as_str()),
+            QuickCommandInput::CategoryColor => self
+                .store
+                .category_editor
+                .as_ref()
+                .map(|draft| draft.icon_color.as_str()),
         }
     }
 
@@ -749,6 +759,11 @@ impl TerminalQuickCommandsState {
                 .category_editor
                 .as_mut()
                 .map(|draft| &mut draft.name),
+            QuickCommandInput::CategoryColor => self
+                .store
+                .category_editor
+                .as_mut()
+                .map(|draft| &mut draft.icon_color),
         }
     }
 
@@ -811,6 +826,7 @@ impl TerminalQuickCommandsState {
         let mut fields = Vec::new();
         if self.store.category_editor.is_some() {
             fields.push(QuickCommandInput::CategoryName);
+            fields.push(QuickCommandInput::CategoryColor);
         } else if let Some(draft) = self.store.command_editor.as_ref() {
             fields.extend([
                 QuickCommandInput::CommandName,
@@ -921,6 +937,7 @@ impl TerminalQuickCommandsState {
             id: None,
             name: String::new(),
             icon: QuickCommandIcon::Zap,
+            icon_color: String::new(),
         });
         self.store.focused_input = Some(QuickCommandInput::CategoryName);
         self.store.highlighted_command = None;
@@ -934,6 +951,7 @@ impl TerminalQuickCommandsState {
             id: Some(category.id),
             name: category.name,
             icon: category.icon,
+            icon_color: category.icon_color.unwrap_or_default(),
         });
         self.store.focused_input = Some(QuickCommandInput::CategoryName);
         self.store.highlighted_command = None;
@@ -1078,7 +1096,11 @@ impl TerminalQuickCommandsState {
         let Some(draft) = self.store.category_editor.take() else {
             return false;
         };
-        self.store.upsert_category(draft);
+        self.store.upsert_category(draft.clone());
+        if self.store.last_persist_error.is_some() {
+            self.store.category_editor = Some(draft);
+            return false;
+        }
         self.store.focused_input = None;
         self.store.highlighted_command = None;
         true
@@ -1223,6 +1245,29 @@ impl WorkspaceApp {
             terminal.quick_commands.confirm_category_delete()
         });
         if changed {
+            if self
+                .settings_store
+                .settings()
+                .terminal
+                .command_bar
+                .quick_bar_category
+                .as_ref()
+                .is_some_and(|id| {
+                    !self
+                        .terminal
+                        .read(cx)
+                        .quick_commands
+                        .store
+                        .categories
+                        .iter()
+                        .any(|c| &c.id == id)
+                })
+            {
+                self.edit_settings(
+                    |settings| settings.terminal.command_bar.quick_bar_category = None,
+                    cx,
+                );
+            }
             cx.notify();
         }
         changed
@@ -1372,7 +1417,12 @@ impl WorkspaceApp {
                     cx.notify();
                 }
             }
-            "enter" if input == QuickCommandInput::CategoryName => {
+            "enter"
+                if matches!(
+                    input,
+                    QuickCommandInput::CategoryName | QuickCommandInput::CategoryColor
+                ) =>
+            {
                 if self.terminal.update(cx, |terminal, _cx| {
                     terminal.quick_commands.save_category_editor()
                 }) {
@@ -2019,11 +2069,18 @@ impl WorkspaceApp {
                             .child(Self::render_lucide_icon(
                                 quick_command_lucide_icon(category.icon),
                                 14.0,
-                                if active {
-                                    rgb(theme.accent)
-                                } else {
-                                    rgb(theme.text_muted)
-                                },
+                                category
+                                    .icon_color
+                                    .as_deref()
+                                    .and_then(oxide_quick_commands::parse_icon_color)
+                                    .map(rgb)
+                                    .unwrap_or_else(|| {
+                                        if active {
+                                            rgb(theme.accent)
+                                        } else {
+                                            rgb(theme.text_muted)
+                                        }
+                                    }),
                             ))
                             .child(div().flex_1().truncate().child(
                                 // Tauri renders category labels as plain spans inside
@@ -2826,6 +2883,8 @@ impl WorkspaceApp {
             return div().into_any_element();
         };
         let can_save = quick_command_category_draft_can_save(draft);
+        let parsed_color = oxide_quick_commands::parse_icon_color(&draft.icon_color);
+        let invalid_color = !draft.icon_color.trim().is_empty() && parsed_color.is_none();
         let mut icon_options = div().flex().items_center().gap(px(4.0));
         for icon in [
             QuickCommandIcon::Terminal,
@@ -2873,11 +2932,13 @@ impl WorkspaceApp {
                     .child(Self::render_lucide_icon(
                         quick_command_lucide_icon(icon),
                         13.0,
-                        if active {
-                            rgb(theme.accent)
-                        } else {
-                            rgb(theme.text_muted)
-                        },
+                        parsed_color.map(rgb).unwrap_or_else(|| {
+                            if active {
+                                rgb(theme.accent)
+                            } else {
+                                rgb(theme.text_muted)
+                            }
+                        }),
                     ))
                     .child(self.render_display_text_with_role(
                         SelectableTextRole::NonSelectable,
@@ -2936,7 +2997,61 @@ impl WorkspaceApp {
                             cx,
                         ),
                     )
-                    .child(icon_options),
+                    .child(icon_options)
+                    .child(
+                        div()
+                            .text_size(px(self.theme_tokens.metrics.ui_text_sm))
+                            .child(self.i18n.t("terminal.quick_commands.icon_color")),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(
+                                div()
+                                    .size(px(28.0))
+                                    .flex_none()
+                                    .rounded(px(self.theme_tokens.radii.md))
+                                    .border_1()
+                                    .border_color(rgb(theme.border))
+                                    .bg(rgb(parsed_color.unwrap_or(theme.text_muted))),
+                            )
+                            .child(div().flex_1().min_w_0().child(
+                                self.render_quick_command_text_input(
+                                    QuickCommandInput::CategoryColor,
+                                    draft.icon_color.clone(),
+                                    snapshot.focused_input,
+                                    self.i18n.t("terminal.quick_commands.icon_color_hint"),
+                                    cx,
+                                ),
+                            ))
+                            .child(self.quick_command_text_button(
+                                self.i18n.t("terminal.quick_commands.icon_color_reset"),
+                                !draft.icon_color.is_empty(),
+                                cx.listener(|this, _, _, cx| {
+                                    this.clear_ime_selection();
+                                    this.ime_marked_text = None;
+                                    this.terminal.update(cx, |terminal, _| {
+                                        if let Some(draft) =
+                                            terminal.quick_commands.store.category_editor.as_mut()
+                                        {
+                                            draft.icon_color.clear();
+                                        }
+                                    });
+                                    cx.stop_propagation();
+                                    cx.notify();
+                                }),
+                            )),
+                    )
+                    .when(invalid_color, |column| {
+                        column.child(
+                            div()
+                                .text_size(px(self.theme_tokens.metrics.ui_text_sm))
+                                .text_color(rgb(theme.error))
+                                .child(self.i18n.t("terminal.quick_commands.icon_color_invalid")),
+                        )
+                    }),
             )
             .child(self.render_quick_editor_buttons(
                 can_save,

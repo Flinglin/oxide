@@ -24,7 +24,42 @@ const TERMINAL_SENDER_SCOPE_CONTROL_WIDTH: f32 = 288.0;
 const TERMINAL_SENDER_TARGET_LIST_MIN_WIDTH: f32 = 160.0;
 const TERMINAL_SENDER_TARGET_CONTEXT_MAX_WIDTH: f32 = 220.0;
 const TERMINAL_SENDER_PROGRESS_HEIGHT: f32 = 2.0;
+const QUICK_BAR_COMMAND_MAX_WIDTH: f32 = 220.0;
+const QUICK_BAR_PREVIEW_MAX_CHARS: usize = 600;
+const QUICK_BAR_PREVIEW_MAX_LINES: usize = 8;
+const QUICK_BAR_PREVIEW_MAX_WIDTH: f32 = 480.0;
 
+struct QuickCommandPreview {
+    tokens: ThemeTokens,
+    text: Zeroizing<String>,
+}
+
+impl Render for QuickCommandPreview {
+    fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        // Keep command text out of tooltip animation identities and diagnostic state.
+        oxide_ui::tooltip::tooltip_surface(&self.tokens, self.text.to_string(), None).max_w(px(
+            QUICK_BAR_PREVIEW_MAX_WIDTH.min(f32::from(window.viewport_size().width)),
+        ))
+    }
+}
+
+fn quick_command_preview(name: &str, command: &str) -> Zeroizing<String> {
+    let mut preview = Zeroizing::new(format!("{name}\n"));
+    let mut lines = 1;
+    for (index, ch) in command.chars().enumerate() {
+        if index == QUICK_BAR_PREVIEW_MAX_CHARS
+            || (ch == '\n' && lines == QUICK_BAR_PREVIEW_MAX_LINES)
+        {
+            preview.push('…');
+            break;
+        }
+        preview.push(ch);
+        if ch == '\n' {
+            lines += 1;
+        }
+    }
+    preview
+}
 impl WorkspaceApp {
     pub(in crate::workspace) fn render_terminal_command_sender_panel(
         &self,
@@ -1582,23 +1617,70 @@ impl WorkspaceApp {
         let target = self
             .active_pane_id(cx)
             .and_then(|pane_id| self.quick_command_context_for_pane(pane_id, cx));
-        let (categories, commands) = self
+        let (categories, commands) = self.terminal.read(cx).quick_commands.quick_bar_snapshot(
+            target.as_ref(),
+            self.settings_store
+                .settings()
+                .terminal
+                .command_bar
+                .quick_bar_category
+                .as_deref(),
+        );
+        let selected = self
+            .settings_store
+            .settings()
             .terminal
-            .read(cx)
-            .quick_commands
-            .quick_bar_snapshot(target.as_ref());
-        if commands.is_empty() {
-            return div().into_any_element();
-        }
+            .command_bar
+            .quick_bar_category
+            .as_deref()
+            .and_then(|id| categories.iter().find(|category| category.id == id));
+        let label = selected
+            .map(|category| category.name.clone())
+            .unwrap_or_else(|| self.i18n.t("terminal.quick_commands.all_groups"));
+        let workspace = cx.entity().downgrade();
+        let selector =
+            oxide_ui::select::select_trigger(&self.theme_tokens, label.clone(), false, false)
+                .id("quick-bar-category")
+                .w(px(160.0))
+                .h(px(28.0))
+                .flex_none()
+                .role(gpui::Role::Button)
+                .aria_label(label)
+                .on_a11y_action(gpui::AccessibleAction::Click, move |_, window, cx| {
+                    let _ = workspace.update(cx, |this, cx| {
+                        this.open_quick_bar_category_picker(window, cx)
+                    });
+                })
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, window, cx| {
+                        this.open_quick_bar_category_picker(window, cx);
+                        cx.stop_propagation();
+                    }),
+                );
+        let filtered = selected.is_some();
 
         let mut content_row = div()
             .h_full()
             .px(px(8.0))
             .flex()
             .items_center()
-            .gap(px(5.0));
+            .gap(px(5.0))
+            .when(commands.is_empty(), |row| {
+                row.child(
+                    div()
+                        .text_size(px(self.theme_tokens.metrics.ui_text_sm))
+                        .text_color(rgb(self.theme_tokens.ui.text_muted))
+                        .child(self.i18n.t("terminal.quick_commands.group_empty")),
+                )
+            });
         for category in categories {
             let category_icon = terminal_quick_bar_icon(category.icon);
+            let icon_color = category
+                .icon_color
+                .as_deref()
+                .and_then(oxide_quick_commands::parse_icon_color)
+                .unwrap_or(self.theme_tokens.ui.text_muted);
             let category_commands = commands
                 .iter()
                 .filter(|command| command.category == category.id)
@@ -1607,23 +1689,29 @@ impl WorkspaceApp {
             if category_commands.is_empty() {
                 continue;
             }
-            content_row = content_row.child(
-                div()
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .gap(px(3.0))
-                    .text_size(px(10.0))
-                    .text_color(rgb(self.theme_tokens.ui.text_muted))
-                    .child(Self::render_lucide_icon(
-                        category_icon,
-                        11.0,
-                        rgb(self.theme_tokens.ui.text_muted),
-                    ))
-                    .child(category.name),
-            );
+            content_row = content_row.when(!filtered, |row| {
+                row.child(
+                    div()
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap(px(3.0))
+                        .text_size(px(10.0))
+                        .text_color(rgb(self.theme_tokens.ui.text_muted))
+                        .child(Self::render_lucide_icon(
+                            category_icon,
+                            11.0,
+                            rgb(icon_color),
+                        ))
+                        .child(category.name),
+                )
+            });
             for command in category_commands {
                 let command_for_run = command.clone();
+                let tooltip_name = command.name.clone();
+                // The render callback owns this preview source only while the chip exists.
+                let tooltip_command = Zeroizing::new(command.command);
+                let tokens = self.theme_tokens;
                 content_row = content_row.child(
                     action_chip(
                         &self.theme_tokens,
@@ -1631,10 +1719,20 @@ impl WorkspaceApp {
                         Some(Self::render_lucide_icon(
                             category_icon,
                             11.0,
-                            rgb(self.theme_tokens.ui.text_muted),
+                            rgb(icon_color),
                         )),
-                        ActionChipOptions::new().idle_text_tone(ActionChipTextTone::Muted),
+                        ActionChipOptions::new()
+                            .idle_text_tone(ActionChipTextTone::Muted)
+                            .max_width(QUICK_BAR_COMMAND_MAX_WIDTH),
                     )
+                    .id(format!("quick-bar-command-{}", command.id))
+                    .tooltip(move |_, cx| {
+                        cx.new(|_| QuickCommandPreview {
+                            tokens,
+                            text: quick_command_preview(&tooltip_name, &tooltip_command),
+                        })
+                        .into()
+                    })
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _event, window, cx| {
@@ -1650,12 +1748,50 @@ impl WorkspaceApp {
         div()
             .flex_none()
             .h(px(34.0))
-            .overflow_x_scrollbar()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .pl(px(self.theme_tokens.spacing.two))
             .border_t_1()
             .border_color(rgb(self.theme_tokens.ui.border))
             .bg(rgb(self.theme_tokens.ui.bg))
-            .child(content_row)
+            .child(selector)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    .overflow_x_scrollbar()
+                    .child(content_row),
+            )
             .into_any_element()
+    }
+
+    pub(in crate::workspace) fn quick_bar_category_choices(
+        &self,
+        cx: &App,
+    ) -> Vec<(Option<String>, String, LucideIcon)> {
+        let mut choices = vec![(
+            None,
+            self.i18n.t("terminal.quick_commands.all_groups"),
+            LucideIcon::Layers,
+        )];
+        choices.extend(
+            self.terminal
+                .read(cx)
+                .quick_commands
+                .store
+                .categories
+                .iter()
+                .map(|category| {
+                    (
+                        Some(category.id.clone()),
+                        category.name.clone(),
+                        terminal_quick_bar_icon(category.icon),
+                    )
+                }),
+        );
+        choices
     }
 }
 

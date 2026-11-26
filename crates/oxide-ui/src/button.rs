@@ -71,6 +71,7 @@ pub struct ActionChipOptions {
     pub disabled: bool,
     pub height: f32,
     pub min_width: Option<f32>,
+    pub max_width: Option<f32>,
     pub padding_x: f32,
     pub font_size: f32,
     pub radius: ButtonRadius,
@@ -87,6 +88,7 @@ impl ActionChipOptions {
             disabled: false,
             height: 28.0,
             min_width: None,
+            max_width: None,
             padding_x: 8.0,
             font_size: 11.0,
             radius: ButtonRadius::Md,
@@ -116,7 +118,10 @@ impl ActionChipOptions {
         self.min_width = Some(min_width);
         self
     }
-
+    pub const fn max_width(mut self, max_width: f32) -> Self {
+        self.max_width = Some(max_width);
+        self
+    }
     pub const fn padding_x(mut self, padding_x: f32) -> Self {
         self.padding_x = padding_x;
         self
@@ -499,6 +504,9 @@ pub fn action_chip(
         .when_some(options.min_width, |chip, min_width| {
             chip.min_w(px(min_width))
         })
+        .when_some(options.max_width, |chip, max_width| {
+            chip.max_w(px(max_width))
+        })
         .px(px(options.padding_x))
         .rounded(px(button_radius_px(tokens, options.radius)))
         .border_1()
@@ -534,8 +542,13 @@ pub fn action_chip(
             }
         });
 
+    let label = if options.max_width.is_some() {
+        div().min_w_0().truncate().child(label).into_any_element()
+    } else {
+        label.into_any_element()
+    };
     match icon {
-        Some(icon) => chip.child(icon).child(label),
+        Some(icon) => chip.child(div().flex_none().child(icon)).child(label),
         None => chip.child(label),
     }
 }

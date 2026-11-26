@@ -226,9 +226,23 @@ impl QuickCommandsState {
     }
 
     pub(super) fn upsert_category(&mut self, draft: QuickCommandCategoryDraft) -> String {
-        self.active_category =
-            upsert_quick_command_category(&mut self.categories, draft, &self.active_category);
-        self.persist();
+        let mut categories = self.categories.clone();
+        let active_category =
+            upsert_quick_command_category(&mut categories, draft, &self.active_category);
+        let snapshot = QuickCommandsSnapshot {
+            version: QUICK_COMMANDS_SCHEMA_VERSION,
+            categories,
+            commands: self.commands.clone(),
+            updated_at: now_ms(),
+        };
+        match oxide_quick_commands::save_snapshot(&self.settings_path, &snapshot) {
+            Ok(()) => {
+                self.categories = snapshot.categories;
+                self.active_category = active_category;
+                self.last_persist_error = None;
+            }
+            Err(error) => self.last_persist_error = Some(error),
+        }
         self.active_category.clone()
     }
 

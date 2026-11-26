@@ -47,6 +47,7 @@ fn migrate_v1(snapshot: QuickCommandsSnapshotV1) -> QuickCommandsSnapshot {
             id: category.id,
             name: category.name,
             icon: category.icon,
+            icon_color: None,
             sort_order: migration_sort_order(index),
         })
         .collect();

@@ -12,6 +12,7 @@ use super::{PaletteExecution, PaletteItem};
 pub(in crate::workspace) enum PaletteContent {
     Commands,
     TabScopes,
+    QuickBarCategories,
     BackgroundTasks,
 }
 /// Immutable palette state consumed by the window renderer.
@@ -94,7 +95,14 @@ impl CommandPaletteEntity {
     pub(super) fn is_background_task_picker(&self) -> bool {
         self.content == PaletteContent::BackgroundTasks
     }
+    pub(super) fn is_quick_bar_category_picker(&self) -> bool {
+        self.content == PaletteContent::QuickBarCategories
+    }
 
+    pub(super) fn open_quick_bar_categories(&mut self, cx: &mut Context<Self>) {
+        self.open(false, HashSet::new(), cx);
+        self.content = PaletteContent::QuickBarCategories;
+    }
     pub(super) fn open_background_tasks(&mut self, cx: &mut Context<Self>) {
         self.open(false, HashSet::new(), cx);
         self.content = PaletteContent::BackgroundTasks;

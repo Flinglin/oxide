@@ -437,6 +437,7 @@ fn merge_snapshot(
                         &format!("{} (Imported)", incoming_category.name),
                     ),
                     icon: incoming_category.icon,
+                    icon_color: incoming_category.icon_color,
                     sort_order: next_category_sort_order(&categories),
                 };
                 category_remap.insert(incoming_category.id, renamed.id.clone());
@@ -452,6 +453,7 @@ fn merge_snapshot(
                     if category.id == conflict.id {
                         category.name = incoming_category.name.clone();
                         category.icon = incoming_category.icon;
+                        category.icon_color = incoming_category.icon_color.clone();
                         category.sort_order = incoming_category.sort_order;
                     }
                 }
@@ -600,10 +602,21 @@ fn sanitize_snapshot(snapshot: QuickCommandsSnapshot) -> Result<QuickCommandsSna
 }
 
 fn sanitize_category(category: QuickCommandCategory) -> Result<QuickCommandCategory, String> {
+    let icon_color = category
+        .icon_color
+        .map(|value| {
+            crate::parse_icon_color(&value)
+                .map(|color| format!("#{color:06x}"))
+                .ok_or_else(|| {
+                    "Invalid category icon color: expected six hexadecimal digits".to_string()
+                })
+        })
+        .transpose()?;
     Ok(QuickCommandCategory {
         id: bounded_required(category.id, "category.id", MAX_ID_LEN)?,
         name: bounded_required(category.name, "category.name", MAX_NAME_LEN)?,
         icon: category.icon,
+        icon_color,
         sort_order: category.sort_order,
     })
 }
@@ -893,6 +906,7 @@ fn quick_category(
         id: id.to_string(),
         name: name.to_string(),
         icon,
+        icon_color: None,
         sort_order,
     }
 }

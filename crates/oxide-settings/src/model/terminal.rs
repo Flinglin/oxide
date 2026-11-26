@@ -108,6 +108,8 @@ pub struct TerminalCommandBarSettings {
     pub quick_commands_enabled: bool,
     #[serde(default)]
     pub quick_bar_enabled: bool,
+      #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quick_bar_category: Option<String>,
     pub quick_commands_confirm_before_run: bool,
     pub quick_commands_show_toast: bool,
     pub focus_handoff_commands: Vec<String>,
@@ -154,6 +156,7 @@ impl Default for TerminalCommandBarSettings {
             smart_completion: true,
             quick_commands_enabled: true,
             quick_bar_enabled: false,
+              quick_bar_category: None,
             quick_commands_confirm_before_run: false,
             quick_commands_show_toast: true,
             focus_handoff_commands: RECOMMENDED_FOCUS_HANDOFF_COMMANDS
