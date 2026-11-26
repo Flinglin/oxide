@@ -1,9 +1,13 @@
+use crate::{
+    EMACS_FREE_TYPE_INTEGRATION_SOURCE, VIM_FREE_TYPE_INTEGRATION_SOURCE,
+    integration_scripts::normalize_integration_script,
+};
 use oxide_ssh::{RemoteEnvInfo, SftpError, SftpSession};
+use std::borrow::Cow;
 use zeroize::Zeroizing;
 
-use crate::{EMACS_FREE_TYPE_INTEGRATION_SOURCE, VIM_FREE_TYPE_INTEGRATION_SOURCE};
-
-pub const REMOTE_SHELL_INTEGRATION_VERSION: u32 = 5;
+// Older clients must not replace repaired LF programs with their CRLF payloads.
+pub const REMOTE_SHELL_INTEGRATION_VERSION: u32 = 6;
 pub const REMOTE_SHELL_INTEGRATION_RELATIVE_DIR: &str = ".oxide/shell-integration";
 
 const MANAGED_BLOCK_START: &str = ">>> Oxide remote shell integration >>>";
@@ -147,7 +151,7 @@ pub async fn inspect_remote_shell_integration(
         has_package_file |= content.is_some();
         package_matches &= content
             .as_deref()
-            .is_some_and(|content| content == expected_content);
+            .is_some_and(|content| content == expected_content.as_ref());
     }
     let state = if newer_version {
         RemoteShellIntegrationState::NewerVersion
@@ -206,16 +210,22 @@ pub async fn install_remote_shell_integration(
             file.content.as_ref().map_or("", |content| content.as_str()),
             &startup_reference(layout.shell),
         ));
+        if file
+            .content
+            .as_ref()
+            .is_some_and(|current| current.as_str() == updated.as_str())
+        {
+            continue;
+        }
         sftp.replace_config_content(&file.path, updated.as_bytes())
             .await
             .map_err(|_| RemoteShellIntegrationError::WriteFailed)?;
     }
 
-    Ok(status_from_layout(
-        layout,
-        RemoteShellIntegrationState::Installed,
-        startup_files.into_iter().map(|file| file.path).collect(),
-    ))
+    // A completed write is not proof of a complete installation. Return the
+    // read-back state so both automatic and explicit repairs can be retried
+    // without advertising success after partial or externally changed writes.
+    inspect_remote_shell_integration(sftp, remote_env).await
 }
 
 /// Removes only Oxide's marked startup block and optionally its owned files.
@@ -411,7 +421,7 @@ fn startup_file_path(shell: RemoteShellKind, remote_env: &RemoteEnvInfo, home: &
     }
 }
 
-fn integration_files() -> [(&'static str, &'static str); 8] {
+fn integration_files() -> [(&'static str, Cow<'static, str>); 8] {
     [
         ("README.txt", REMOTE_INTEGRATION_README),
         ("bash.sh", BASH_INTEGRATION),
@@ -422,6 +432,7 @@ fn integration_files() -> [(&'static str, &'static str); 8] {
         ("oxide-free-type.vim", VIM_FREE_TYPE_INTEGRATION_SOURCE),
         ("oxide-free-type.el", EMACS_FREE_TYPE_INTEGRATION_SOURCE),
     ]
+    .map(|(name, source)| (name, normalize_integration_script(source)))
 }
 
 fn startup_reference(shell: RemoteShellKind) -> String {
@@ -578,7 +589,7 @@ fn remote_parent(path: &str) -> Option<String> {
 const REMOTE_INTEGRATION_README: &str = r#"Oxide Remote Shell Integration
 =====================================
 
-Version: 5
+Version: 6
 Directory protocol: OSC 7
 Command boundary protocol: OSC 133
 Private editor protocol: OSC 7719 v3
@@ -602,7 +613,7 @@ configuration to enable full-screen editor integration.
 "#;
 
 const BASH_INTEGRATION: &str = concat!(
-    r#"# Oxide remote shell integration v5.
+    r#"# Oxide remote shell integration v6.
 # Reports cwd and host through standard OSC 7 and gates private editor adapters.
 if [ -n "${LC_OXIDE_SESSION:-}" ] || [ "${OXIDE_PRIVATE_OSC:-}" = 1 ]; then
   export OXIDE_PRIVATE_OSC=1
@@ -657,7 +668,7 @@ fi
 );
 
 const ZSH_INTEGRATION: &str = concat!(
-    "# Oxide remote shell integration v5.\n",
+    "# Oxide remote shell integration v6.\n",
     "# Reports cwd and host through standard OSC 7 and gates private editor adapters.\n",
     "if [ -n \"${LC_OXIDE_SESSION:-}\" ] || [ \"${OXIDE_PRIVATE_OSC:-}\" = 1 ]; then\n  export OXIDE_PRIVATE_OSC=1\n  export OXIDE_VIM_INTEGRATION=\"$HOME/.oxide/shell-integration/oxide-free-type.vim\"\n  export OXIDE_EMACS_INTEGRATION=\"$HOME/.oxide/shell-integration/oxide-free-type.el\"\nfi\n",
     "unset LC_OXIDE_SESSION\n",
@@ -669,7 +680,7 @@ const ZSH_INTEGRATION: &str = concat!(
 );
 
 const FISH_INTEGRATION: &str = concat!(
-    r#"# Oxide remote shell integration v5.
+    r#"# Oxide remote shell integration v6.
 # Reports cwd and host through standard OSC 7 and gates private editor adapters.
 set -l __oxide_private_session 0
 if set -q LC_OXIDE_SESSION; and test -n "$LC_OXIDE_SESSION"
@@ -703,7 +714,7 @@ end
 );
 
 const NUSHELL_INTEGRATION: &str = concat!(
-    r#"# Oxide remote shell integration v5.
+    r#"# Oxide remote shell integration v6.
 # Reports cwd and host through standard OSC 7 and gates private editor adapters.
 let __oxide_private_session = (($env.LC_OXIDE_SESSION? | default '') != '') or (($env.OXIDE_PRIVATE_OSC? | default '') == '1')
 if $__oxide_private_session {
@@ -717,7 +728,7 @@ hide-env --ignore-errors LC_OXIDE_SESSION
 );
 
 const POWERSHELL_INTEGRATION: &str = concat!(
-    r#"# Oxide remote shell integration v5.
+    r#"# Oxide remote shell integration v6.
 # Reports cwd and host through standard OSC 7 and gates private editor adapters.
 if ($env:LC_OXIDE_SESSION -or $env:OXIDE_PRIVATE_OSC -eq '1') {
     $env:OXIDE_PRIVATE_OSC = '1'

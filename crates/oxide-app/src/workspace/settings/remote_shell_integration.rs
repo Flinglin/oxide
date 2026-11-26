@@ -387,7 +387,22 @@ impl RemoteShellIntegrationRuntimeState {
             return None;
         }
         self.maintenance = None;
+        if action == RemoteShellIntegrationAction::Install {
+            self.terminal_ready_nodes.remove(&node_id);
+        }
         match result {
+            Ok(status)
+                if action == RemoteShellIntegrationAction::Install
+                    && status.state
+                        != oxide_terminal_core::RemoteShellIntegrationState::Installed =>
+            {
+                self.terminal_statuses.insert(node_id, status.state);
+                self.status = Some(status);
+                self.failure = Some(RemoteShellIntegrationFailure::InstallationIncomplete);
+                Some(RemoteShellIntegrationNotice::Failed(
+                    RemoteShellIntegrationFailure::InstallationIncomplete,
+                ))
+            }
             Ok(status) => {
                 let previous = self
                     .status

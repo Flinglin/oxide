@@ -1,13 +1,13 @@
 use std::{collections::HashMap, fs, path::Path};
 
-use anyhow::{Context, Result};
-use tempfile::TempDir;
-
+use crate::integration_scripts::normalize_integration_script;
 use crate::{
     EMACS_FREE_TYPE_INTEGRATION_SOURCE, LocalPtyConfig, ShellInfo,
     VIM_FREE_TYPE_INTEGRATION_SOURCE,
     local_shell::{TerminalRelay, shell_args_for_profile},
 };
+use anyhow::{Context, Result};
+use tempfile::TempDir;
 const VIM_FREE_TYPE_INTEGRATION_ENV: &str = "OXIDE_VIM_INTEGRATION";
 const EMACS_FREE_TYPE_INTEGRATION_ENV: &str = "OXIDE_EMACS_INTEGRATION";
 
@@ -124,8 +124,14 @@ fn prepare_editor_integration(env: &mut HashMap<String, String>) -> Result<Local
         .context("create temporary editor integration directory")?;
     let vim_path = directory.path().join("oxide-free-type.vim");
     let emacs_path = directory.path().join("oxide-free-type.el");
-    write_private_file(&vim_path, VIM_FREE_TYPE_INTEGRATION_SOURCE)?;
-    write_private_file(&emacs_path, EMACS_FREE_TYPE_INTEGRATION_SOURCE)?;
+    write_private_file(
+        &vim_path,
+        &normalize_integration_script(VIM_FREE_TYPE_INTEGRATION_SOURCE),
+    )?;
+    write_private_file(
+        &emacs_path,
+        &normalize_integration_script(EMACS_FREE_TYPE_INTEGRATION_SOURCE),
+    )?;
     env.insert(
         VIM_FREE_TYPE_INTEGRATION_ENV.to_string(),
         vim_path.display().to_string(),
@@ -196,7 +202,7 @@ fi"#
         &format!(
             "{profile_loader}\n{}\n{}",
             posix_prompt_hook(),
-            include_str!("shell_integration/bash.sh"),
+            normalize_integration_script(include_str!("shell_integration/bash.sh")),
         ),
     )?;
     Ok(vec![
@@ -245,7 +251,7 @@ fn prepare_zsh(
                 .then(|| zsh_source_user_file(".zshrc", true))
                 .unwrap_or_default(),
             zsh_prompt_hook(config.load_profile),
-            include_str!("shell_integration/zsh.zsh"),
+            normalize_integration_script(include_str!("shell_integration/zsh.zsh")),
         ),
     )?;
     env.insert("ZDOTDIR".to_string(), directory.display().to_string());
@@ -261,7 +267,7 @@ fn prepare_fish(config: &LocalPtyConfig, directory: &Path) -> Result<Vec<String>
         &format!(
             "{}\n{}",
             fish_prompt_hook(),
-            include_str!("shell_integration/fish.fish")
+            normalize_integration_script(include_str!("shell_integration/fish.fish"))
         ),
     )?;
     let mut args = shell_args_for_profile(
@@ -301,7 +307,7 @@ fn prepare_powershell(directory: &Path, default_args: &[String]) -> Result<Vec<S
         &format!(
             "{}\n{}",
             powershell_prompt_hook(),
-            include_str!("shell_integration/powershell.ps1")
+            normalize_integration_script(include_str!("shell_integration/powershell.ps1"))
         ),
     )?;
     let mut args = default_args.to_vec();
@@ -338,15 +344,15 @@ fn prepare_wsl(
     prepare_powershell(path, &[])?;
     write_private_file(
         &path.join("nushell.nu"),
-        include_str!("shell_integration/nushell.nu"),
+        &normalize_integration_script(include_str!("shell_integration/nushell.nu")),
     )?;
     write_private_file(
         &path.join("oxide-free-type.vim"),
-        VIM_FREE_TYPE_INTEGRATION_SOURCE,
+        &normalize_integration_script(VIM_FREE_TYPE_INTEGRATION_SOURCE),
     )?;
     write_private_file(
         &path.join("oxide-free-type.el"),
-        EMACS_FREE_TYPE_INTEGRATION_SOURCE,
+        &normalize_integration_script(EMACS_FREE_TYPE_INTEGRATION_SOURCE),
     )?;
     let zshenv = if config.load_profile {
         format!(
@@ -368,7 +374,7 @@ fn prepare_wsl(
                 .then(|| zsh_source_user_file(".zshrc", true))
                 .unwrap_or_default(),
             zsh_prompt_hook(config.load_profile),
-            include_str!("shell_integration/zsh.zsh"),
+            normalize_integration_script(include_str!("shell_integration/zsh.zsh")),
         ),
     )?;
     env.insert("OXIDE_SHELL_DIR".to_string(), path.display().to_string());
@@ -382,7 +388,7 @@ fn prepare_wsl(
         "--exec".to_string(),
         "/bin/sh".to_string(),
         "-c".to_string(),
-        include_str!("shell_integration/wsl.sh").to_string(),
+        normalize_integration_script(include_str!("shell_integration/wsl.sh")).into_owned(),
         "oxide".to_string(),
         if config.load_profile { "1" } else { "0" }.to_string(),
     ]);
@@ -477,7 +483,7 @@ __oxide_emit_cwd"#
 }
 
 fn nushell_prompt_hook() -> String {
-    include_str!("shell_integration/nushell.nu").to_string()
+    normalize_integration_script(include_str!("shell_integration/nushell.nu")).into_owned()
 }
 
 fn powershell_prompt_hook() -> String {
