@@ -74,6 +74,37 @@ pub(in crate::workspace) struct ActiveSessionSidebarRow {
     local_group: bool,
     local_profile_id: Option<String>,
     active_local_session_count: usize,
+    group: Option<SessionGroupRow>,
+}
+
+#[derive(Clone)]
+struct SessionGroupRow {
+    // Host headers only carry a label; user rows embed their member session
+    // rows so option items render without re-querying the node maps.
+    user_level: bool,
+    label: String,
+    /// Saved connection names owned by a user row's members, deduplicated in
+    /// member order. SSH node titles mirror the saved name, so grouping can
+    /// name the owning connections without reading the connection store.
+    connection_name: Option<String>,
+    members: Vec<ActiveSessionSidebarRow>,
+}
+
+/// Group rows fold several nodes into one line, so the saved connection name is
+/// the only place a user row can still say which connection it belongs to.
+/// Nodes without a saved connection have no name to show; their title is
+/// `user@host` and would just repeat the row label.
+fn session_group_connection_name(members: &[ActiveSessionSidebarRow]) -> Option<String> {
+    let mut names = Vec::<&str>::new();
+    for member in members
+        .iter()
+        .filter(|member| member.saved_connection_id.is_some())
+    {
+        if !names.contains(&member.title.as_str()) {
+            names.push(member.title.as_str());
+        }
+    }
+    (!names.is_empty()).then(|| names.join(" · "))
 }
 
 struct LocalSessionRowState {
@@ -292,6 +323,252 @@ fn filter_active_session_rows(
     rows
 }
 
+const SESSION_HOST_GROUP_ID_PREFIX: &str = "session-host-group:";
+/// Separator between host and user keys inside a synthetic user row id. A
+/// control character cannot appear in a DNS name or username, so ids stay
+/// collision-free against real node ids.
+const SESSION_HOST_GROUP_ID_SEPARATOR: char = '\u{1}';
+/// Placeholder label for SSH nodes without a username. Punctuation keeps it out
+/// of the locale catalogs.
+const SESSION_HOST_GROUP_UNKNOWN_USER: &str = "—";
+
+struct SessionUserGroup {
+    key: String,
+    label: String,
+    members: Vec<ActiveSessionSidebarRow>,
+}
+
+struct SessionHostGroup {
+    key: String,
+    label: String,
+    users: Vec<SessionUserGroup>,
+    user_indices: HashMap<String, usize>,
+}
+
+fn readiness_rank(readiness: &ActiveSessionReadiness) -> u8 {
+    match readiness {
+        ActiveSessionReadiness::Ready => 0,
+        ActiveSessionReadiness::Connecting => 1,
+        ActiveSessionReadiness::Error => 2,
+        ActiveSessionReadiness::Disconnected => 3,
+    }
+}
+
+fn readiness_from_rank(rank: u8) -> ActiveSessionReadiness {
+    match rank {
+        0 => ActiveSessionReadiness::Ready,
+        1 => ActiveSessionReadiness::Connecting,
+        2 => ActiveSessionReadiness::Error,
+        _ => ActiveSessionReadiness::Disconnected,
+    }
+}
+
+fn aggregate_group_readiness<'a>(
+    members: impl Iterator<Item = &'a ActiveSessionSidebarRow>,
+) -> ActiveSessionReadiness {
+    // Only ConnectedFirst ordering reads this value; the group rows never draw
+    // a status dot. Report the healthiest member so a group hides nothing.
+    members
+        .map(|row| readiness_rank(&row.node_view.readiness))
+        .min()
+        .map(readiness_from_rank)
+        .unwrap_or(ActiveSessionReadiness::Disconnected)
+}
+
+fn host_group_row_id(host_key: &str) -> NodeId {
+    NodeId::new(format!("{SESSION_HOST_GROUP_ID_PREFIX}{host_key}"))
+}
+
+fn user_group_row_id(host_key: &str, user_key: &str) -> NodeId {
+    NodeId::new(format!(
+        "{SESSION_HOST_GROUP_ID_PREFIX}{host_key}{SESSION_HOST_GROUP_ID_SEPARATOR}{user_key}"
+    ))
+}
+
+/// Synthetic ids must never collide with a real node id: restored session-tree
+/// snapshots are unvalidated strings, and a duplicate id would let the collapsed
+/// host filter hide rows that belong to a real node.
+fn unique_session_group_row_id(base: NodeId, taken: &mut HashSet<String>) -> NodeId {
+    if taken.insert(base.0.clone()) {
+        return base;
+    }
+    let mut suffix = 2u32;
+    loop {
+        let candidate = format!("{}#{}", base.0, suffix);
+        if taken.insert(candidate.clone()) {
+            return NodeId::new(candidate);
+        }
+        suffix += 1;
+    }
+}
+
+/// Groups rows and applies the configured ordering to the groups. Manual order
+/// only ranks real node ids, so the default mode must not re-sort grouped rows:
+/// doing so would rank every synthetic id last and push the draggable
+/// local/standalone rows above all host groups.
+fn arrange_active_session_group_rows(
+    rows: Vec<ActiveSessionSidebarRow>,
+    sort_order: SessionSortOrder,
+    manual_order: &[String],
+) -> Vec<ActiveSessionSidebarRow> {
+    let grouped = group_active_session_rows_by_host_user(rows);
+    if sort_order == SessionSortOrder::Default {
+        // `manual_order` is deliberately ignored: it ranks real node ids, and a
+        // synthetic group id would rank last, pushing ranked pass-through rows
+        // ahead of every group.
+        return grouped;
+    }
+    sort_active_session_rows(grouped, sort_order, manual_order)
+}
+
+fn group_active_session_rows_by_host_user(
+    rows: Vec<ActiveSessionSidebarRow>,
+) -> Vec<ActiveSessionSidebarRow> {
+    let mut taken_ids = rows
+        .iter()
+        .map(|row| row.node_id.0.clone())
+        .collect::<HashSet<_>>();
+    let mut host_indices = HashMap::<String, usize>::new();
+    let mut hosts = Vec::<SessionHostGroup>::new();
+    let mut passthrough = Vec::new();
+
+    for row in rows {
+        let host = row.host.trim();
+        let is_ssh_node = !row.local_group && row.standalone_session.is_none();
+        if !is_ssh_node || host.is_empty() {
+            // Local groups, local profiles, standalone connections, and jump
+            // hosts without a known endpoint keep their original row shape.
+            passthrough.push(row);
+            continue;
+        }
+        let host_key = host.to_lowercase();
+        let host_index = match host_indices.get(&host_key) {
+            Some(index) => *index,
+            None => {
+                hosts.push(SessionHostGroup {
+                    key: host_key.clone(),
+                    // First spelling seen wins so the header matches the label
+                    // the user typed for that connection.
+                    label: host.to_string(),
+                    users: Vec::new(),
+                    user_indices: HashMap::new(),
+                });
+                let index = hosts.len() - 1;
+                host_indices.insert(host_key, index);
+                index
+            }
+        };
+        let host_group = &mut hosts[host_index];
+        let user_key = row.username.clone();
+        let user_index = match host_group.user_indices.get(&user_key) {
+            Some(index) => *index,
+            None => {
+                host_group.users.push(SessionUserGroup {
+                    key: user_key.clone(),
+                    label: if user_key.is_empty() {
+                        SESSION_HOST_GROUP_UNKNOWN_USER.to_string()
+                    } else {
+                        user_key.clone()
+                    },
+                    members: Vec::new(),
+                });
+                let index = host_group.users.len() - 1;
+                host_group.user_indices.insert(user_key, index);
+                index
+            }
+        };
+        host_group.users[user_index].members.push(row);
+    }
+
+    let root_count = hosts.len() + passthrough.len();
+    let host_count = hosts.len();
+    let mut output = Vec::with_capacity(hosts.len() + root_count);
+    for (host_position, host) in hosts.into_iter().enumerate() {
+        let host_id = unique_session_group_row_id(host_group_row_id(&host.key), &mut taken_ids);
+        let host_label = host.label.clone();
+        let host_readiness =
+            aggregate_group_readiness(host.users.iter().flat_map(|user| user.members.iter()));
+        let user_count = host.users.len();
+        let mut user_rows = Vec::with_capacity(user_count);
+        for (user_position, user) in host.users.into_iter().enumerate() {
+            let user_id = unique_session_group_row_id(
+                user_group_row_id(&host.key, &user.key),
+                &mut taken_ids,
+            );
+            let user_readiness = aggregate_group_readiness(user.members.iter());
+            let user_connection_name = session_group_connection_name(&user.members);
+            user_rows.push(ActiveSessionSidebarRow {
+                node_id: user_id.clone(),
+                parent_id: Some(host_id.clone()),
+                saved_connection_id: None,
+                title: user.label.clone(),
+                host: host_label.clone(),
+                username: user.key,
+                port: 0,
+                node_view: ActiveSessionNode {
+                    id: user_id.0,
+                    title: user.label.clone(),
+                    port: 0,
+                    terminal_ids: Vec::new(),
+                    readiness: user_readiness,
+                },
+                depth: 1,
+                is_last: user_position + 1 == user_count,
+                has_children: false,
+                local_group: false,
+                local_profile_id: None,
+                active_local_session_count: 0,
+                standalone_session: None,
+                group: Some(SessionGroupRow {
+                    user_level: true,
+                    label: user.label,
+                    connection_name: user_connection_name,
+                    members: user.members,
+                }),
+            });
+        }
+        output.push(ActiveSessionSidebarRow {
+            node_id: host_id.clone(),
+            parent_id: None,
+            saved_connection_id: None,
+            title: host_label.clone(),
+            host: host_label.clone(),
+            username: String::new(),
+            port: 0,
+            node_view: ActiveSessionNode {
+                id: host_id.0,
+                title: host_label.clone(),
+                port: 0,
+                terminal_ids: Vec::new(),
+                readiness: host_readiness,
+            },
+            depth: 0,
+            // Depth and last-child flags are set here because the default sort
+            // order early-returns without recomputing them.
+            is_last: host_position + 1 == root_count,
+            has_children: user_count > 0,
+            local_group: false,
+            local_profile_id: None,
+            active_local_session_count: 0,
+            standalone_session: None,
+            group: Some(SessionGroupRow {
+                user_level: false,
+                label: host_label,
+                connection_name: None,
+                members: Vec::new(),
+            }),
+        });
+        output.extend(user_rows);
+    }
+    for (position, mut row) in passthrough.into_iter().enumerate() {
+        row.parent_id = None;
+        row.depth = 0;
+        row.has_children = false;
+        row.is_last = host_count + position + 1 == root_count;
+        output.push(row);
+    }
+    output
+}
 impl WorkspaceApp {
     fn first_running_local_terminal(
         &self,
@@ -561,7 +838,9 @@ impl WorkspaceApp {
             return self.render_active_sessions_focus_sidebar_content(cx);
         }
 
-        let rows = self.active_session_sidebar_rows(cx);
+        // Node churn can outlive the groups that owned a disclosure entry.
+        self.prune_session_group_expanded();
+        let rows = self.active_session_sidebar_display_rows(cx);
         if rows.is_empty() {
             if !self.session_search_query.trim().is_empty() {
                 return div()
@@ -574,9 +853,15 @@ impl WorkspaceApp {
             return self.render_empty_sessions_sidebar_content(cx);
         }
 
-        self.sync_active_session_sidebar_list_state(&rows, ActiveSessionSidebarViewMode::Tree, cx);
+        let list_mode =
+            if self.active_session_sidebar_view_mode == ActiveSessionSidebarViewMode::Host {
+                ActiveSessionSidebarViewMode::Host
+            } else {
+                ActiveSessionSidebarViewMode::Tree
+            };
+        self.sync_active_session_sidebar_list_state(&rows, list_mode, cx);
         let state = self.active_session_sidebar_list_state.clone();
-        let spec = self.active_session_sidebar_list_spec(ActiveSessionSidebarViewMode::Tree);
+        let spec = self.active_session_sidebar_list_spec(list_mode);
         let workspace = cx.entity();
         div()
             .id("active-sessions-sidebar-scroll")
@@ -667,6 +952,38 @@ impl WorkspaceApp {
         )
     }
 
+    fn active_session_sidebar_display_rows(&self, cx: &App) -> Vec<ActiveSessionSidebarRow> {
+        let rows = self.active_session_sidebar_rows(cx);
+        if self.active_session_sidebar_view_mode != ActiveSessionSidebarViewMode::Host {
+            return rows;
+        }
+        // Host view folds real SSH nodes into synthetic host/user rows; every
+        // other consumer keeps the ungrouped list so counts and drag order stay
+        // tied to real nodes.
+        let mut rows = arrange_active_session_group_rows(
+            rows,
+            self.settings_store.settings().sidebar_ui.session_sort_order,
+            &self
+                .settings_store
+                .settings()
+                .sidebar_ui
+                .session_manual_order,
+        );
+        // User rows are their own virtual rows, so collapsing a host drops them
+        // from the list instead of animating height inside the header.
+        let collapsed_hosts = rows
+            .iter()
+            .filter(|row| row.parent_id.is_none() && !self.session_group_row_expanded(row))
+            .map(|row| row.node_id.clone())
+            .collect::<HashSet<_>>();
+        if !collapsed_hosts.is_empty() {
+            rows.retain(|row| match row.parent_id.as_ref() {
+                Some(parent) => !collapsed_hosts.contains(parent),
+                None => true,
+            });
+        }
+        rows
+    }
     fn unfiltered_active_session_sidebar_rows(&self, cx: &App) -> Vec<ActiveSessionSidebarRow> {
         let mut tree_nodes = self.node_router.flatten_tree();
         let flat_node_child_counts = tree_nodes
@@ -708,6 +1025,7 @@ impl WorkspaceApp {
                     local_profile_id: None,
                     active_local_session_count: 0,
                     standalone_session: None,
+                    group: None,
                 })
             })
             .collect::<Vec<_>>();
@@ -798,6 +1116,7 @@ impl WorkspaceApp {
                 local_group: true,
                 local_profile_id: Some(profile.id.clone()),
                 active_local_session_count: state.active_count,
+                group: None,
             });
         }
         if let Some(state) = local_rows.remove(&None) {
@@ -827,6 +1146,7 @@ impl WorkspaceApp {
                 local_group: true,
                 local_profile_id: None,
                 active_local_session_count: state.active_count,
+                group: None,
             });
         }
         rows
@@ -982,6 +1302,7 @@ impl WorkspaceApp {
             local_group: false,
             local_profile_id: None,
             active_local_session_count: 0,
+            group: None,
             standalone_session: Some(StandaloneActiveSession {
                 connection_id: record.id.clone(),
                 kind: record.kind,
@@ -1016,6 +1337,7 @@ impl WorkspaceApp {
             local_group: false,
             local_profile_id: None,
             active_local_session_count: 0,
+            group: None,
             standalone_session: Some(StandaloneActiveSession {
                 connection_id: record.id.clone(),
                 kind: record.kind,
@@ -1048,7 +1370,9 @@ impl WorkspaceApp {
         view_mode: ActiveSessionSidebarViewMode,
     ) -> TauriVirtualListSpec {
         let estimated_height = match view_mode {
-            ActiveSessionSidebarViewMode::Tree => ACTIVE_SESSION_SIDEBAR_LIST_ESTIMATED_HEIGHT,
+            ActiveSessionSidebarViewMode::Tree | ActiveSessionSidebarViewMode::Host => {
+                ACTIVE_SESSION_SIDEBAR_LIST_ESTIMATED_HEIGHT
+            }
             ActiveSessionSidebarViewMode::Focus => ACTIVE_SESSION_FOCUS_LIST_ESTIMATED_HEIGHT,
         };
         TauriVirtualListSpec::new(px(estimated_height), ACTIVE_SESSION_SIDEBAR_LIST_OVERSCAN)
@@ -1059,7 +1383,11 @@ impl WorkspaceApp {
         index: usize,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let Some(row) = self.active_session_sidebar_rows(cx).into_iter().nth(index) else {
+        let Some(row) = self
+            .active_session_sidebar_display_rows(cx)
+            .into_iter()
+            .nth(index)
+        else {
             return div().into_any_element();
         };
         div()
@@ -1092,6 +1420,11 @@ impl WorkspaceApp {
         row.standalone_session.hash(&mut hasher);
         row.local_group.hash(&mut hasher);
         row.local_profile_id.hash(&mut hasher);
+        // Owning a saved connection swaps "save as connection" for the
+        // port-forwarding row, so it changes the option stack height.
+        row.saved_connection_id.hash(&mut hasher);
+        self.can_save_runtime_node_as_connection(&row.node_id, row.saved_connection_id.as_deref())
+            .hash(&mut hasher);
         if row.local_group {
             row.active_local_session_count.hash(&mut hasher);
             if row.local_profile_id.is_none() {
@@ -1115,6 +1448,25 @@ impl WorkspaceApp {
         self.has_active_reconnect_job(&row.node_id, cx)
             .hash(&mut hasher);
         (self.active_ssh_node_id.as_ref() == Some(&row.node_id)).hash(&mut hasher);
+        if let Some(group) = &row.group {
+            group.user_level.hash(&mut hasher);
+            group.label.hash(&mut hasher);
+            group.connection_name.hash(&mut hasher);
+            // Expansion decides whether the user row renders its option stack,
+            // and the group disclosure keys live outside the tree namespace, so
+            // they need their own signature or the collapse animation would
+            // leave the measured expanded height cached.
+            self.session_group_row_expanded(row).hash(&mut hasher);
+            self.disclosure_motions
+                .signature(&format!("session-group:{}:", row.node_id.0))
+                .hash(&mut hasher);
+            for member in &group.members {
+                // Reuse the full member signature so option visibility, lifecycle
+                // actions, and reconnect state all invalidate the cached height.
+                self.active_session_sidebar_row_signature(member, view_mode, cx)
+                    .hash(&mut hasher);
+            }
+        }
         hasher.finish()
     }
 
@@ -1170,7 +1522,8 @@ impl WorkspaceApp {
     ) {
         self.active_session_sidebar_view_mode = match self.active_session_sidebar_view_mode {
             ActiveSessionSidebarViewMode::Tree => ActiveSessionSidebarViewMode::Focus,
-            ActiveSessionSidebarViewMode::Focus => ActiveSessionSidebarViewMode::Tree,
+            ActiveSessionSidebarViewMode::Focus => ActiveSessionSidebarViewMode::Host,
+            ActiveSessionSidebarViewMode::Host => ActiveSessionSidebarViewMode::Tree,
         };
         // Tauri stores the focus node separately from expansion. Keep native's
         // selected node visible when entering focus mode, but fall back to root
@@ -2002,31 +2355,21 @@ impl WorkspaceApp {
             .into_any_element()
     }
 
-    pub(in crate::workspace) fn render_active_session_node(
+    /// Renders the children a node shows when expanded. Host view stacks this
+    /// block under a user group row, so the block must not depend on disclosure
+    /// state.
+    fn session_node_option_items(
         &self,
-        row: ActiveSessionSidebarRow,
+        node_id: &NodeId,
+        node_view: &ActiveSessionNode,
+        saved_connection_id: Option<&str>,
+        depth: usize,
+        is_last: bool,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
-        if row.local_group {
-            return self.render_local_session_sidebar_row(row, cx);
-        }
-        if row.standalone_session.is_some() {
-            return self.render_standalone_session_sidebar_row(row, cx);
-        }
-        let node_id = row.node_id;
-        let node_view = row.node_view;
-        let node_depth = row.depth;
-        let is_last = row.is_last;
-        let expanded = self.expanded_ssh_nodes.contains(&node_id);
-        let motion_key = format!("session:{}:children", node_id.0);
-        let selected = self.active_ssh_node_id.as_ref() == Some(&node_id);
-        let status = self.session_node_status(node_view.status());
-        let terminal_ids = node_view.terminal_ids.clone();
+    ) -> Vec<AnyElement> {
         let mut children = Vec::new();
 
-        if self.disclosure_motions.retained(&motion_key, expanded)
-            && !self.has_active_reconnect_job(&node_id, cx)
-        {
+        if !self.has_active_reconnect_job(node_id, cx) {
             if matches!(
                 node_view.status(),
                 ActiveSessionStatus::Active | ActiveSessionStatus::Connected
@@ -2043,7 +2386,7 @@ impl WorkspaceApp {
                     }
                 });
                 children.push(self.render_session_action_item(
-                    node_depth + 1,
+                    depth,
                     false,
                     LucideIcon::Plus,
                     self.i18n.t("sessions.tree.actions.new_terminal"),
@@ -2059,7 +2402,7 @@ impl WorkspaceApp {
                     }
                 });
                 children.push(self.render_session_action_item(
-                    node_depth + 1,
+                    depth,
                     false,
                     LucideIcon::FolderOpen,
                     self.i18n.t("sessions.tree.actions.sftp"),
@@ -2075,7 +2418,7 @@ impl WorkspaceApp {
                     }
                 });
                 children.push(self.render_session_action_item(
-                    node_depth + 1,
+                    depth,
                     false,
                     LucideIcon::Code2,
                     "IDE".to_string(),
@@ -2091,7 +2434,7 @@ impl WorkspaceApp {
                     }
                 });
                 children.push(self.render_session_action_item(
-                    node_depth + 1,
+                    depth,
                     false,
                     LucideIcon::ArrowLeftRight,
                     self.i18n.t("sessions.tree.actions.port_forwarding"),
@@ -2099,10 +2442,7 @@ impl WorkspaceApp {
                     listener,
                     cx,
                 ));
-                if self.can_save_runtime_node_as_connection(
-                    &node_id,
-                    row.saved_connection_id.as_deref(),
-                ) {
+                if self.can_save_runtime_node_as_connection(node_id, saved_connection_id) {
                     let listener = cx.listener({
                         let node_id = node_id.clone();
                         move |this, _event, window, cx| {
@@ -2111,7 +2451,7 @@ impl WorkspaceApp {
                         }
                     });
                     children.push(self.render_session_action_item(
-                        node_depth + 1,
+                        depth,
                         false,
                         LucideIcon::Save,
                         self.i18n.t("sessions.tree.actions.save_as_connection"),
@@ -2120,9 +2460,9 @@ impl WorkspaceApp {
                         cx,
                     ));
                 }
-                for (index, session_id) in terminal_ids.iter().copied().enumerate() {
+                for (index, session_id) in node_view.terminal_ids.iter().copied().enumerate() {
                     children.push(self.render_session_terminal_item(
-                        node_depth + 1,
+                        depth,
                         false,
                         session_id,
                         index + 1,
@@ -2137,7 +2477,7 @@ impl WorkspaceApp {
                     }
                 });
                 children.push(self.render_session_action_item(
-                    node_depth + 1,
+                    depth,
                     false,
                     LucideIcon::ArrowDownRight,
                     self.i18n.t("sessions.tree.actions.drill_in"),
@@ -2148,7 +2488,7 @@ impl WorkspaceApp {
             } else if matches!(node_view.status(), ActiveSessionStatus::Error) {
                 let listener = cx.listener({
                     let node_id = node_id.clone();
-                    let saved_connection_id = row.saved_connection_id.clone();
+                    let saved_connection_id = saved_connection_id.map(str::to_owned);
                     move |this, _event, window, cx| {
                         if let Some(saved_connection_id) = saved_connection_id.as_deref() {
                             this.open_saved_connection_reconnect_editor(
@@ -2164,7 +2504,7 @@ impl WorkspaceApp {
                     }
                 });
                 children.push(self.render_session_action_item(
-                    node_depth + 1,
+                    depth,
                     false,
                     LucideIcon::Pencil,
                     self.i18n.t("sessions.tree.actions.edit_and_reconnect"),
@@ -2175,8 +2515,7 @@ impl WorkspaceApp {
             }
         }
 
-        if self.disclosure_motions.retained(&motion_key, expanded)
-            && row.saved_connection_id.is_some()
+        if saved_connection_id.is_some()
             && !matches!(
                 node_view.status(),
                 ActiveSessionStatus::Active | ActiveSessionStatus::Connected
@@ -2184,7 +2523,7 @@ impl WorkspaceApp {
         {
             let forward_node = node_id.clone();
             children.push(self.render_session_action_item(
-                node_depth + 1,
+                depth,
                 false,
                 LucideIcon::ArrowLeftRight,
                 self.i18n.t("sessions.tree.actions.port_forwarding"),
@@ -2197,10 +2536,352 @@ impl WorkspaceApp {
             ));
         }
 
+        children.extend(self.render_session_node_lifecycle_items(
+            node_id,
+            node_view.status(),
+            depth,
+            is_last,
+            cx,
+        ));
+        children
+    }
+
+    fn session_group_row_expanded(&self, row: &ActiveSessionSidebarRow) -> bool {
+        // Host headers open by default so the host/user outline is visible at a
+        // glance; user rows stay closed so option stacks never crowd the list.
+        let default_expanded = row.group.as_ref().is_some_and(|group| !group.user_level);
+        self.session_group_expanded
+            .get(&row.node_id)
+            .copied()
+            .unwrap_or(default_expanded)
+    }
+
+    fn session_group_chevron(
+        &self,
+        node_id: NodeId,
+        expanded: bool,
+        default_expanded: bool,
+        label: String,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = self.theme_tokens.ui;
+        self.session_group_toggle(
+            SharedString::from(format!("session-group-toggle-{}", node_id.0)),
+            node_id.clone(),
+            expanded,
+            default_expanded,
+            label,
+            cx,
+        )
+        .child(self.render_animated_chevron(
+            (
+                SharedString::from(format!("session-group-chevron-{}", node_id.0)),
+                expanded as usize,
+            ),
+            expanded,
+            12.0,
+            rgb(theme.text_muted),
+        ))
+        .into_any_element()
+    }
+
+    fn session_group_toggle(
+        &self,
+        id: SharedString,
+        node_id: NodeId,
+        expanded: bool,
+        default_expanded: bool,
+        label: String,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<Div> {
+        let theme = self.theme_tokens.ui;
+        let expanded_target = !expanded;
+        div()
+            .id(id)
+            .w(px(12.0))
+            .h(px(20.0))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .role(gpui::Role::Button)
+            .aria_label(label)
+            .focusable()
+            .tab_stop(true)
+            .focus_visible(move |style| style.border_1().border_color(rgb(theme.accent)))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.set_session_group_expanded(node_id.clone(), expanded_target, default_expanded);
+                // The user-level option block animates through the same
+                // disclosure set as tree nodes; host-level rows are separate
+                // virtual rows, so their motion key only resets state.
+                this.begin_disclosure_motion(
+                    format!("session-group:{}:children", node_id.0),
+                    expanded_target,
+                    cx,
+                );
+                cx.stop_propagation();
+                cx.notify();
+            }))
+    }
+
+    fn set_session_group_expanded(
+        &mut self,
+        node_id: NodeId,
+        expanded: bool,
+        default_expanded: bool,
+    ) {
+        // Store only deviations from the level default so a group that comes
+        // back after node churn cannot inherit a stale disclosure state.
+        if expanded == default_expanded {
+            self.session_group_expanded.remove(&node_id);
+        } else {
+            self.session_group_expanded.insert(node_id, expanded);
+        }
+    }
+
+    /// Drops disclosure entries whose host or user no longer exists. Called from
+    /// the sidebar content renderer so node churn cannot grow the map forever.
+    fn prune_session_group_expanded(&mut self) {
+        if self.session_group_expanded.is_empty() {
+            return;
+        }
+        let mut live = HashSet::new();
+        for node in self.ssh_nodes.values() {
+            let host = node.endpoint.host.trim();
+            if host.is_empty() {
+                continue;
+            }
+            let host_key = host.to_lowercase();
+            live.insert(host_group_row_id(&host_key).0);
+            live.insert(user_group_row_id(&host_key, &node.endpoint.username).0);
+        }
+        self.session_group_expanded.retain(|node_id, _| {
+            let id = node_id.0.as_str();
+            // Suffixed ids come from the collision guard, so compare the base.
+            live.contains(id)
+                || id
+                    .rsplit_once('#')
+                    .is_some_and(|(base, _)| live.contains(base))
+        });
+    }
+
+    fn render_session_group_row(
+        &self,
+        row: &ActiveSessionSidebarRow,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(group) = row.group.as_ref() else {
+            return div().into_any_element();
+        };
+        let theme = self.theme_tokens.ui;
+        let expanded = self.session_group_row_expanded(row);
+        let chevron_label = self.i18n.t(if expanded {
+            "settings_view.tool_use_collapse"
+        } else {
+            "settings_view.tool_use_expand"
+        });
+        let node_id = row.node_id.clone();
+        let motion_key = format!("session-group:{}:children", node_id.0);
+        let default_expanded = !group.user_level;
+        // Both levels share one row shape: chevron, level icon, label. Only the
+        // icon color and trailing affordances differ.
+        let header = self
+            .session_sidebar_row(false, SESSION_TREE_NODE_HEIGHT)
+            .id(SharedString::from(format!(
+                "session-group-header-{}",
+                node_id.0
+            )))
+            .child(self.session_group_chevron(
+                node_id.clone(),
+                expanded,
+                default_expanded,
+                chevron_label,
+                cx,
+            ));
+        let header = if group.user_level {
+            header
+                .child(Self::render_lucide_icon(
+                    LucideIcon::UserRound,
+                    SESSION_TREE_CHILD_ICON_SIZE,
+                    rgb(theme.text_muted),
+                ))
+                .child(
+                    div()
+                        .ml(px(6.0))
+                        .min_w(px(0.0))
+                        .flex_1()
+                        .truncate()
+                        .text_size(px(SESSION_TREE_TEXT_SIZE))
+                        .text_color(rgb(theme.text))
+                        .child(group.label.clone()),
+                )
+                .when_some(group.connection_name.as_ref(), |header, connection_name| {
+                    header.child(
+                        div()
+                            .ml(px(6.0))
+                            .min_w(px(0.0))
+                            .truncate()
+                            .text_size(px(SESSION_TREE_META_TEXT_SIZE))
+                            .text_color(rgb(theme.text_muted))
+                            .debug_selector(|| "session-group-connection-name".to_string())
+                            .child(connection_name.clone()),
+                    )
+                })
+        } else {
+            header
+                .child(Self::render_lucide_icon(
+                    LucideIcon::Server,
+                    SESSION_TREE_CHILD_ICON_SIZE,
+                    rgb(theme.text_muted),
+                ))
+                .child(
+                    div()
+                        .ml(px(6.0))
+                        .min_w(px(0.0))
+                        .flex_1()
+                        .truncate()
+                        .text_size(px(self.theme_tokens.metrics.sidebar_title_font_size))
+                        .text_color(rgb(theme.text_muted))
+                        .child(group.label.clone()),
+                )
+        };
+        let toggle_id = node_id;
+        let expanded_target = !expanded;
+        let header = header
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.set_session_group_expanded(
+                    toggle_id.clone(),
+                    expanded_target,
+                    default_expanded,
+                );
+                this.begin_disclosure_motion(
+                    format!("session-group:{}:children", toggle_id.0),
+                    expanded_target,
+                    cx,
+                );
+                cx.stop_propagation();
+                cx.notify();
+            }))
+            .into_any_element();
+
+        if !group.user_level {
+            return header;
+        }
+
+        let mut items = Vec::new();
         if self.disclosure_motions.retained(&motion_key, expanded) {
-            children.extend(self.render_session_node_lifecycle_items(
+            let member_count = group.members.len();
+            let multi_member = member_count > 1;
+            for (index, member) in group.members.iter().enumerate() {
+                let member_is_last = index + 1 == member_count;
+                let member_is_last_row = row.is_last && member_is_last;
+                let member_items = self.session_node_option_items(
+                    &member.node_id,
+                    &member.node_view,
+                    member.saved_connection_id.as_deref(),
+                    if multi_member { 3 } else { 2 },
+                    member_is_last_row,
+                    cx,
+                );
+                if multi_member {
+                    // Two nodes on the same host and user would otherwise render
+                    // two identical option stacks, so label which node owns them.
+                    // The rail stops at the label when nothing follows it.
+                    items.push(self.render_session_tree_child(
+                        2,
+                        member_is_last_row && member_items.is_empty(),
+                        self.render_session_group_member_label(member),
+                    ));
+                }
+                items.extend(member_items);
+            }
+        }
+
+        let mut container = div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .child(self.render_session_tree_child(
+                row.depth,
+                row.is_last && items.is_empty(),
+                header,
+            ));
+        if !items.is_empty() {
+            // The inner id makes the rendered option stack observable in tests
+            // without depending on a private cache key.
+            container = container.child(
+                self.disclosure_motions.render(
+                    &motion_key,
+                    &self.theme_tokens,
+                    div().w_full().flex().flex_col().child(
+                        div()
+                            .id(SharedString::from(format!(
+                                "session-group-options-{}",
+                                row.node_id.0
+                            )))
+                            .debug_selector(|| "session-group-options".to_string())
+                            .w_full()
+                            .flex()
+                            .flex_col()
+                            .children(items)
+                            .into_any_element(),
+                    ),
+                    None,
+                ),
+            );
+        }
+        container.into_any_element()
+    }
+
+    fn render_session_group_member_label(&self, member: &ActiveSessionSidebarRow) -> AnyElement {
+        let theme = self.theme_tokens.ui;
+        div()
+            .h(px(SESSION_TREE_ITEM_HEIGHT))
+            .ml_1()
+            .px_2()
+            .flex()
+            .flex_row()
+            .items_center()
+            .text_size(px(SESSION_TREE_TEXT_SIZE))
+            .text_color(rgb(theme.text_muted))
+            .child(div().min_w(px(0.0)).truncate().child(member.title.clone()))
+            .child(
+                self.render_session_status_dot(self.session_node_status(member.node_view.status())),
+            )
+            .into_any_element()
+    }
+
+    pub(in crate::workspace) fn render_active_session_node(
+        &self,
+        row: ActiveSessionSidebarRow,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if row.group.is_some() {
+            return self.render_session_group_row(&row, cx);
+        }
+        if row.local_group {
+            return self.render_local_session_sidebar_row(row, cx);
+        }
+        if row.standalone_session.is_some() {
+            return self.render_standalone_session_sidebar_row(row, cx);
+        }
+        let node_id = row.node_id;
+        let node_view = row.node_view;
+        let node_depth = row.depth;
+        let is_last = row.is_last;
+        let expanded = self.expanded_ssh_nodes.contains(&node_id);
+        let motion_key = format!("session:{}:children", node_id.0);
+        let selected = self.active_ssh_node_id.as_ref() == Some(&node_id);
+        let status = self.session_node_status(node_view.status());
+        let mut children = Vec::new();
+
+        if self.disclosure_motions.retained(&motion_key, expanded) {
+            // Host view stacks the same option block under a user row, so the
+            // block is shared instead of duplicated per view mode.
+            children.extend(self.session_node_option_items(
                 &node_id,
-                node_view.status(),
+                &node_view,
+                row.saved_connection_id.as_deref(),
                 node_depth + 1,
                 is_last,
                 cx,
@@ -3098,8 +3779,13 @@ impl WorkspaceApp {
         };
         let drop_id = id.clone();
         let accent = self.theme_tokens.ui.accent;
-        row.id(SharedString::from(format!("session-reorder-{}", id.0)))
-            .on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone()))
+        let base = row.id(SharedString::from(format!("session-reorder-{}", id.0)));
+        if self.active_session_sidebar_view_mode == ActiveSessionSidebarViewMode::Host {
+            // Host groups are derived ordering; dragging here would persist
+            // synthetic group parents into session_manual_order.
+            return base;
+        }
+        base.on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone()))
             .can_drop(move |value, _, _| {
                 value
                     .downcast_ref::<ActiveSessionDrag>()

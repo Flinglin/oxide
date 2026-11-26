@@ -94,6 +94,7 @@
       "ai_hint": "OxideSens",
       "switch_tree": "ツリービューに切替",
       "switch_focus": "フォーカスビューに切替",
+      "switch_host": "ホストビューに切り替え",
       "new_connection": "新規接続",
       "lock_app": "oxide をロック",
       "setup_app_lock": "アプリロックを設定",
