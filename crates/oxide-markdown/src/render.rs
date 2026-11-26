@@ -2857,6 +2857,9 @@ fn render_image(
 }
 
 fn image_path_from_url(url: &str, opts: &MarkdownOptions) -> Option<PathBuf> {
+    if !should_load_image(url, opts) {
+        return None;
+    }
     if let Some(scheme) = url_scheme(url) {
         if !image_scheme_allowed(scheme, opts) {
             return None;
@@ -2880,7 +2883,8 @@ fn image_path_from_url(url: &str, opts: &MarkdownOptions) -> Option<PathBuf> {
 
 fn should_load_image(url: &str, opts: &MarkdownOptions) -> bool {
     let Some(scheme) = url_scheme(url) else {
-        return true;
+        // Relative and absolute filesystem paths share the file-scheme policy.
+        return image_scheme_allowed("file", opts);
     };
     image_scheme_allowed(scheme, opts)
 }

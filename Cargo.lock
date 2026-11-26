@@ -7216,6 +7216,7 @@ dependencies = [
  "oxide-editor-syntax",
  "oxide-ide-core",
  "oxide-ide-fs",
+ "oxide-markdown",
  "oxide-ssh",
  "oxide-theme",
  "oxide-ui",

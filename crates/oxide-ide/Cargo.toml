@@ -12,6 +12,7 @@ gpui.workspace = true
 oxide-audit = { path = "../oxide-audit" }
 oxide-editor-syntax = { path = "../oxide-editor-syntax" }
 oxide-editor = { path = "../oxide-editor" }
+oxide-markdown = { path = "../oxide-markdown" }
 oxide-ui = { path = "../oxide-ui" }
 oxide-ide-core = { path = "../oxide-ide-core" }
 oxide-ide-fs = { path = "../oxide-ide-fs" }

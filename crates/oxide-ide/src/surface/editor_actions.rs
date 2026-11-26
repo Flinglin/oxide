@@ -163,6 +163,9 @@ impl IdeSurface {
     }
 
     pub fn copy_active_editor_selection(&mut self, cx: &mut Context<Self>) -> bool {
+         if self.is_markdown_preview() {
+            return true;
+        }
         let Some(editor) = self.active_editor() else {
             return false;
         };
@@ -172,6 +175,9 @@ impl IdeSurface {
     }
 
     pub fn cut_active_editor_selection(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.is_markdown_preview() {
+            return true;
+        }
         let Some(editor) = self.active_editor() else {
             return false;
         };
@@ -179,6 +185,9 @@ impl IdeSurface {
     }
 
     pub fn paste_into_active_editor(&mut self, cx: &mut Context<Self>) -> bool {
+         if self.is_markdown_preview() {
+            return true;
+        }
         let Some(editor) = self.active_editor() else {
             return false;
         };
@@ -189,6 +198,9 @@ impl IdeSurface {
     }
 
     pub fn select_all_in_active_editor(&mut self, cx: &mut Context<Self>) -> bool {
+         if self.is_markdown_preview() {
+            return true;
+        }
         let Some(editor) = self.active_editor() else {
             return false;
         };
@@ -199,6 +211,9 @@ impl IdeSurface {
     }
 
    pub fn open_active_editor_search(&mut self, cx: &mut Context<Self>) -> bool {
+     if let Some(tab_id) = self.workspace.active_tab() {
+            self.show_markdown_source(tab_id);
+        }
         let Some(editor) = self.active_editor() else {
             return false;
         };
@@ -206,6 +221,9 @@ impl IdeSurface {
     }
 
     pub fn select_next_active_editor_search_match(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.is_markdown_preview() {
+            return true;
+        }
         let Some(editor) = self.active_editor() else {
             return false;
         };
@@ -214,6 +232,9 @@ impl IdeSurface {
     }
 
     pub fn select_previous_active_editor_search_match(&mut self, cx: &mut Context<Self>) -> bool {
+         if self.is_markdown_preview() {
+            return true;
+        }
         let Some(editor) = self.active_editor() else {
             return false;
         };
@@ -243,6 +264,7 @@ impl IdeSurface {
         self.root_path = Some(root_path);
         self.load_state = IdeLoadState::Ready;
         self.editors.clear();
+         self.markdown_previews.clear();
         self.loading_file_tabs.clear();
            self.file_open_errors.clear();
         self.pending_saves.clear();
@@ -906,6 +928,7 @@ impl IdeSurface {
         else {
             return;
         };
+         self.show_markdown_source(tab_id);
         if let Some(editor) = self.editors.get(&tab_id) {
             editor.update(cx, |editor, cx| editor.set_find_query(query, cx));
         }
@@ -931,6 +954,7 @@ impl IdeSurface {
         else {
             return;
         };
+           self.show_markdown_source(tab_id);
         if let Some(editor) = self.editors.get(&tab_id) {
             editor.update(cx, |editor, cx| {
                 editor.reveal_line_column(reveal.line, reveal.column, cx)
@@ -1252,7 +1276,7 @@ impl IdeSurface {
         self.sync_editor_to_workspace(tab_id, cx);
         match self.workspace.request_close_tab(tab_id) {
             Ok(None) => {
-                self.editors.remove(&tab_id);
+                 self.remove_editor(tab_id);
                 self.loading_file_tabs.remove(&tab_id);
                     self.file_open_errors.remove(&tab_id);
                 self.pending_saves.remove(&tab_id);
@@ -1863,7 +1887,7 @@ impl IdeSurface {
             match self.workspace.close_clean_tabs_under(&entry.location) {
                 Ok(closed_tabs) => {
                     for tab_id in closed_tabs {
-                        self.editors.remove(&tab_id);
+                        self.remove_editor(tab_id);
                           self.file_open_errors.remove(&tab_id);
                         self.pending_saves.remove(&tab_id);
                     }
@@ -2007,7 +2031,8 @@ impl IdeSurface {
                 let closing_tab = request.tab_id;
                 let resolved = self.workspace.resolve_dirty_close(request.id, decision);
                 if matches!(resolved, Ok(None)) && decision == DirtyCloseDecision::Discard {
-                    self.editors.remove(&closing_tab);
+
+                   self.remove_editor(closing_tab);
                      self.file_open_errors.remove(&closing_tab);
                     self.pending_saves.remove(&closing_tab);
                     if self
@@ -2233,7 +2258,7 @@ impl IdeSurface {
                         .unwrap_or(false)
                 };
                 if close_request.is_some() && clean_after_save {
-                    self.editors.remove(&tab_id);
+                       self.remove_editor(tab_id);
                     self.file_open_errors.remove(&tab_id);
                 } else if clean_after_save && let Some(editor) = self.editors.get(&tab_id) {
                     editor.update(cx, |editor, cx| editor.mark_saved_external(cx));
@@ -2297,7 +2322,7 @@ impl IdeSurface {
                     .complete_dirty_close_after_save(request, version)
                     .is_ok()
                 {
-                    self.editors.remove(&tab_id);
+                     self.remove_editor(tab_id);
                     self.file_open_errors.remove(&tab_id);
                 }
             }
@@ -2455,7 +2480,7 @@ impl IdeSurface {
                                 .unwrap_or(false)
                         };
                         if conflict.close_request.is_some() && clean_after_save {
-                            this.editors.remove(&conflict.tab_id);
+                             this.remove_editor(conflict.tab_id);
                         } else if clean_after_save
                             && let Some(editor) = this.editors.get(&conflict.tab_id)
                         {
