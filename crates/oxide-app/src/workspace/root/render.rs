@@ -1,4 +1,4 @@
-use crate::PaletteRightSidebar;
+use crate::{PaletteRightSidebar, Quit};
 
 use super::super::*;
 
@@ -366,6 +366,10 @@ impl WorkspaceApp {
                     cx.stop_propagation();
                 }),
             )
+            .on_action(cx.listener(|this, _: &Quit, _window, cx| {
+                this.request_application_quit(cx);
+                cx.stop_propagation();
+            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _event: &MouseDownEvent, _window, cx| {

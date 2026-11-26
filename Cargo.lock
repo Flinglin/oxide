@@ -7059,9 +7059,11 @@ name = "oxide-desktop-presence"
 version = "0.1.3"
 dependencies = [
  "anyhow",
+ "block2 0.6.2",
  "gpui-pre",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
  "raw-window-handle",
  "tokio",
  "windows 0.61.3",

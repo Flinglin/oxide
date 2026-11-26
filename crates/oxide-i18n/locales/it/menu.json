@@ -6,6 +6,7 @@
     "close_tab": "Chiudi scheda",
     "show_main_window": "Mostra finestra principale",
     "hide_main_window": "Nascondi finestra principale",
+    "confirm_quit": "Uscire da Oxide? Tutte le sessioni del terminale e le connessioni attive verranno chiuse.",
     "quit": "Esci da oxide",
     "edit": "Modifica",
     "cut": "Taglia",

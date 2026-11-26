@@ -258,8 +258,11 @@ impl Render for DetachedTabWindow {
                     cx.stop_propagation();
                 }
             }))
-            .on_action(cx.listener(|_, _: &Quit, _window, cx| {
-                cx.propagate();
+            .on_action(cx.listener(|detached, _: &Quit, _window, cx| {
+                detached
+                    .session
+                    .update(cx, |session, cx| session.request_application_quit(cx));
+                cx.stop_propagation();
             }))
             .map(|root| {
                 // Window creation can paint this root while its Workspace is leased.

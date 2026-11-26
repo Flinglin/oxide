@@ -1104,8 +1104,8 @@ impl WorkspaceApp {
         // render before GPUI begins app shutdown.
         cx.spawn(async move |weak, cx| {
             Timer::after(std::time::Duration::from_millis(750)).await;
-            let _ = weak.update(cx, |_, cx| {
-                super::request_app_quit(cx);
+            let _ = weak.update(cx, |workspace, cx| {
+                workspace.quit_after_confirmation(cx);
             });
         })
         .detach();

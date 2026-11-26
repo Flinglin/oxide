@@ -7,6 +7,7 @@
     "show_main_window": "Show Main Window",
     "hide_main_window": "Hide Main Window",
     "quit": "Quit oxide",
+    "confirm_quit": "Quit Oxide? All active terminal sessions and connections will be closed.",
     "edit": "Edit",
     "cut": "Cut",
     "copy": "Copy",
