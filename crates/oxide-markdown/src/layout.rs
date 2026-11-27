@@ -1,3 +1,6 @@
+// Copyright (C) 2026 AnalyseDeCircuit
+// SPDX-License-Identifier: GPL-3.0-only
+
 //! Block-level layout estimates for virtualized markdown rendering.
 //!
 //! GPUI's variable-size virtual list needs a stable height before it decides
@@ -44,12 +47,23 @@ pub(crate) struct MarkdownMeasurements(Rc<RefCell<Option<MeasurementState>>>);
 #[derive(Debug)]
 struct MeasurementState {
     layout: MarkdownBlockLayout,
+    document_released: bool,
     width: f32,
     fonts: (String, String),
     geometry_style: Vec<f32>,
 }
 
 impl MarkdownMeasurements {
+    pub(crate) fn release_document(&self) {
+        if let Some(state) = self.0.borrow_mut().as_mut() {
+            if state.document_released {
+                return;
+            }
+            state.layout.items = Rc::new(Vec::new());
+            state.document_released = true;
+        }
+    }
+
     pub(crate) fn prepare(
         &self,
         mut layout: MarkdownBlockLayout,
@@ -80,7 +94,7 @@ impl MarkdownMeasurements {
             opts.heading_font_scales[5],
         ];
         if let Some(previous) = state.as_ref()
-            && previous.layout.items == layout.items
+            && (previous.document_released || previous.layout.items == layout.items)
         {
             layout.disclosures = previous.layout.disclosures.clone();
         }
@@ -88,11 +102,16 @@ impl MarkdownMeasurements {
             && previous.width == width
             && previous.fonts == fonts
             && previous.geometry_style == geometry_style
-            && previous.layout.items == layout.items
+            && (previous.document_released || previous.layout.items == layout.items)
             && previous.layout.item_sizes == layout.item_sizes
         {
             layout.measured = previous.layout.measured.clone();
             layout.disclosures = previous.layout.disclosures.clone();
+            if previous.document_released {
+                let previous = state.as_mut().unwrap();
+                previous.layout = layout.clone();
+                previous.document_released = false;
+            }
             return layout;
         }
         let mut measured = vec![None; layout.items.len()];
@@ -146,6 +165,7 @@ impl MarkdownMeasurements {
         layout.measured = Some(Rc::new(RefCell::new(measured)));
         *state = Some(MeasurementState {
             layout: layout.clone(),
+            document_released: false,
             width,
             fonts,
             geometry_style,
