@@ -310,7 +310,7 @@ impl SizedImage {
     ) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
         let frame = frame.min(image.frame_count().saturating_sub(1));
         if image.frame_ready(frame) {
-            image.prefetch_frame(frame);
+            image.prefetch_frame(frame + 1);
             if image.frame_count() > 1
                 && self
                     .ready
