@@ -235,6 +235,13 @@ default-features = false
 [dependencies.inventory]
 version = "0.3.19"
 
+[dependencies.oxide-image-decoder]
+path = "../../oxide-image-decoder"
+
+[dependencies.fast_image_resize]
+version = "6.0"
+features = ["image", "only_u8x4"]
+
 [dependencies.itertools]
 version = "0.14.0"
 

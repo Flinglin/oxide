@@ -3691,6 +3691,7 @@ dependencies = [
  "embed-resource",
  "env_logger",
  "etagere",
+ "fast_image_resize",
  "futures",
  "futures-concurrency",
  "getrandom 0.3.4",
@@ -3718,6 +3719,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-core-video",
  "objc2-metal 0.3.2",
+ "oxide-image-decoder",
  "palette",
  "parking",
  "parking_lot",
@@ -5075,6 +5077,12 @@ dependencies = [
  "getrandom 0.4.3",
  "libc",
 ]
+
+[[package]]
+name = "jpeg-decoder"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00810f1d8b74be64b13dbf3db89ac67740615d6c891f0e7b6179326533011a07"
 
 [[package]]
 name = "js-sys"
@@ -6943,6 +6951,7 @@ dependencies = [
  "objc2-core-media",
  "objc2-core-video",
  "objc2-foundation 0.3.2",
+ "oxide-image-decoder",
  "tempfile",
  "thiserror 2.0.21",
  "windows 0.62.2",
@@ -7261,6 +7270,17 @@ dependencies = [
  "uuid",
  "zeroize",
  "zstd",
+]
+
+[[package]]
+name = "oxide-image-decoder"
+version = "0.1.3"
+dependencies = [
+ "anyhow",
+ "fast_image_resize",
+ "image",
+ "jpeg-decoder",
+ "png 0.18.1",
 ]
 
 [[package]]
