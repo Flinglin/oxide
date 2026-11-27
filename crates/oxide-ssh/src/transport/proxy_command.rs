@@ -1,5 +1,8 @@
 const PROXY_COMMAND_BUFFER_BYTES: usize = 64 * 1024;
-
+// ProxyCommand runs while the GUI process has no console, so Windows would otherwise
+// allocate a console window for the helper and its children.
+#[cfg(windows)]
+const PROXY_COMMAND_CREATE_NO_WINDOW: u32 = 0x08000000;
 pub(super) struct ProxyCommandStream {
     stream: tokio::io::DuplexStream,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
@@ -73,6 +76,8 @@ pub(super) async fn dial_proxy_command(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true);
+    #[cfg(windows)]
+    command.creation_flags(PROXY_COMMAND_CREATE_NO_WINDOW);
     let mut child = command.spawn().map_err(|_| {
         // Never include the executable, arguments, or child stderr in an error because
         // ProxyCommand values may contain credentials supplied by external tooling.
@@ -122,12 +127,12 @@ fn spawn_proxy_command_worker(
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let (mut worker_read, mut worker_write) = tokio::io::split(worker_stream);
-        let mut input = tokio::spawn(async move {
-            tokio::io::copy(&mut worker_read, &mut child_stdin).await
-        });
-        let mut output = tokio::spawn(async move {
-            tokio::io::copy(&mut child_stdout, &mut worker_write).await
-        });
+        let mut input =
+            tokio::spawn(async move { tokio::io::copy(&mut worker_read, &mut child_stdin).await });
+        let mut output =
+            tokio::spawn(
+                async move { tokio::io::copy(&mut child_stdout, &mut worker_write).await },
+            );
 
         let child_exited = tokio::select! {
             _ = &mut shutdown => false,
