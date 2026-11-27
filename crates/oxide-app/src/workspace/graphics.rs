@@ -331,7 +331,7 @@ pub(super) struct GraphicsWorkspaceEntity {
     vnc_session_id: Option<String>,
     vnc_input: Option<tokio::sync::mpsc::UnboundedSender<GraphicsVncInput>>,
     vnc_stop: Option<tokio::sync::oneshot::Sender<()>>,
-    vnc_frame: Option<GraphicsVncFrame>,
+    vnc_size: Option<(u32, u32)>,
     vnc_render_image: Option<Arc<RenderImage>>,
     vnc_retired_images: Vec<Arc<RenderImage>>,
     vnc_geometry: SharedGraphicsVncGeometry,
@@ -371,7 +371,7 @@ impl GraphicsWorkspaceEntity {
             vnc_session_id: None,
             vnc_input: None,
             vnc_stop: None,
-            vnc_frame: None,
+            vnc_size: None,
             vnc_render_image: None,
             vnc_retired_images: Vec::new(),
             vnc_geometry: SharedGraphicsVncGeometry::default(),
@@ -1313,10 +1313,7 @@ impl WorkspaceApp {
         let (frame_size, render_image, geometry, show_status_overlay) = {
             let graphics = self.graphics.read(cx);
             (
-                graphics
-                    .vnc_frame
-                    .as_ref()
-                    .map(|frame| (frame.width, frame.height)),
+                graphics.vnc_size,
                 graphics.vnc_render_image.clone(),
                 graphics.vnc_geometry.clone(),
                 graphics.status != GraphicsStatus::Active
@@ -2132,7 +2129,7 @@ impl GraphicsWorkspaceEntity {
                 self.vnc_input = None;
                 self.vnc_stop = None;
                 self.vnc_button_mask = 0;
-                self.vnc_frame = None;
+                self.vnc_size = None;
                 self.worker_delivery.frame_slot.clear();
                 let old_image = self.vnc_render_image.take();
                 self.retire_vnc_image(old_image);
@@ -2151,11 +2148,11 @@ impl GraphicsWorkspaceEntity {
         if !self.session_matches(&session_id) {
             return false;
         }
+        self.vnc_size = Some((frame.width, frame.height));
         if let Some(render_image) = frame.render_image() {
             let old_image = self.vnc_render_image.replace(render_image);
             self.retire_vnc_image(old_image);
         }
-        self.vnc_frame = Some(frame);
         self.status = GraphicsStatus::Active;
         self.error = None;
         true
@@ -2188,7 +2185,7 @@ impl GraphicsWorkspaceEntity {
         self.vnc_geometry.clear();
         if clear_frame {
             self.worker_delivery.frame_slot.clear();
-            self.vnc_frame = None;
+            self.vnc_size = None;
             let image = self.vnc_render_image.take();
             self.retire_vnc_image(image);
         }

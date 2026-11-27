@@ -33,10 +33,10 @@ pub(super) struct GraphicsVncFrame {
 }
 
 impl GraphicsVncFrame {
-    pub(super) fn render_image(&self) -> Option<Arc<RenderImage>> {
+    pub(super) fn render_image(self) -> Option<Arc<RenderImage>> {
         // The native RFB client negotiates 32-bit little-endian true color:
         // bytes arrive as B,G,R,unused. GPUI's atlas accepts that BGRA layout.
-        let buffer = RgbaImage::from_raw(self.width, self.height, self.bgra.clone())?;
+        let buffer = RgbaImage::from_raw(self.width, self.height, self.bgra)?;
         Some(Arc::new(RenderImage::new(vec![Frame::new(buffer)])))
     }
 }
