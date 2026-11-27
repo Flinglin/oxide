@@ -85,6 +85,9 @@ pub struct Arena {
     current_chunk_index: usize,
     chunk_size: NonZeroUsize,
     scope_depth: usize,
+    low_usage_clears: usize,
+    recent_chunks: usize,
+    recent_elements: usize,
 }
 
 impl Drop for Arena {
@@ -103,6 +106,9 @@ impl Arena {
             current_chunk_index: 0,
             chunk_size,
             scope_depth: 0,
+            low_usage_clears: 0,
+            recent_chunks: 0,
+            recent_elements: 0,
         }
     }
 
@@ -148,6 +154,8 @@ impl Arena {
     }
 
     fn force_clear(&mut self) {
+        let used_chunks = self.current_chunk_index + 1;
+        let used_elements = self.elements.len();
         self.valid.set(false);
         self.valid = Rc::new(Cell::new(true));
         self.elements.clear();
@@ -155,6 +163,28 @@ impl Arena {
             self.chunks[chunk_index].reset();
         }
         self.current_chunk_index = 0;
+        // Keep normal frame capacity warm, but retire a transient large page
+        // after sustained lower demand. Only completed outer scopes reach here.
+        if self.chunks.len() > used_chunks.saturating_mul(2)
+            || self.elements.capacity() > used_elements.saturating_mul(4).max(1024)
+        {
+            self.low_usage_clears += 1;
+            self.recent_chunks = self.recent_chunks.max(used_chunks);
+            self.recent_elements = self.recent_elements.max(used_elements);
+            if self.low_usage_clears >= 32 {
+                self.chunks
+                    .truncate(self.recent_chunks.saturating_mul(2).max(1));
+                self.elements
+                    .shrink_to(self.recent_elements.saturating_mul(2));
+                self.low_usage_clears = 0;
+                self.recent_chunks = 0;
+                self.recent_elements = 0;
+            }
+        } else {
+            self.low_usage_clears = 0;
+            self.recent_chunks = 0;
+            self.recent_elements = 0;
+        }
     }
 
     #[inline(always)]
