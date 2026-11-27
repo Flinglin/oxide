@@ -46,6 +46,34 @@ impl Drop for OwnedSyntax {
 }
 
 impl TextEditorView {
+    /// Owners suspend derived state for hidden editors without replacing the buffer.
+    pub fn set_render_cache_active(&mut self, active: bool, cx: &mut Context<Self>) {
+        if self.render_cache_active == active {
+            return;
+        }
+        self.render_cache_active = active;
+        if active {
+            self.request_syntax(None, true, cx);
+            self.viewport
+                .clamp(self.document_row_count(), self.metrics.line_height);
+        } else {
+            self.syntax_generation.fetch_add(1, Ordering::AcqRel);
+            self.pending_syntax = None;
+            // Keep the receiver until cancellation completes. A quick return
+            // queues one fresh request rather than overlapping two parsers.
+            drop(self.take_syntax_state());
+            self.highlight_chunk_cache.borrow_mut().clear();
+            self.display_rows_cache.borrow_mut().take();
+            *self.segment_cache.borrow_mut() = Default::default();
+            *self.wrap_measurements.borrow_mut() = Default::default();
+            self.buffer.release_text_cache();
+            self.finish_selection_drag(cx);
+            self.sync_caret_blink_focus(false, cx);
+            self.context_menu = None;
+        }
+        cx.notify();
+    }
+
     fn take_syntax_state(&mut self) -> OwnedSyntax {
         OwnedSyntax {
             state: Some(SyntaxState {
@@ -67,6 +95,11 @@ impl TextEditorView {
     ) {
         let generation = self.syntax_generation.fetch_add(1, Ordering::AcqRel) + 1;
         self.highlight_chunk_cache.borrow_mut().clear();
+        if !self.render_cache_active {
+            self.pending_syntax = None;
+            drop(self.take_syntax_state());
+            return;
+        }
         self.plugin_grammar = self.language.as_ref().and_then(|id| {
             cx.try_global::<crate::EditorLanguagePlugins>()
                 .and_then(|plugins| plugins.grammars.get(id))
@@ -112,13 +145,15 @@ impl TextEditorView {
         let version = request.version;
         let language = request.language.clone();
         let token = self.syntax_generation.clone();
-        let text = self.buffer.text_snapshot();
+        let text = self.buffer.shared_snapshot();
         let background =
             self.syntax_executor
                 .scheduler_executor()
                 .spawn_dedicated(move |_| async move {
                     let work = SyntaxWork::new(token, generation, SYNTAX_SLICE);
-                    compute(runtime, &request, &text, &work)
+                    // Legacy query collectors need a contiguous view, but that
+                    // temporary belongs to the worker, not the document cache.
+                    text.with_text(|text| compute(runtime, &request, text, &work))
                 });
         self.syntax_task = Some(cx.spawn(async move |weak, cx| {
             let result = background.await;
@@ -151,6 +186,7 @@ impl TextEditorView {
         cx: &mut Context<Self>,
     ) -> bool {
         if self.syntax_generation.load(Ordering::Acquire) != generation
+            || !self.render_cache_active
             || self.buffer.version() != version
             || self.language != Some(language)
         {

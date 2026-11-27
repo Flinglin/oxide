@@ -13,11 +13,43 @@ impl EntityInputHandler for TextEditorView {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<String> {
-        let text = self.text_with_marked();
-        let end = text.encode_utf16().count();
-        let range = range_utf16.start.min(end)..range_utf16.end.min(end);
-        *adjusted_range = Some(range.clone());
-        Some(utf16_slice(&text, range))
+        let buffer_end = self.buffer.utf16_offset(self.buffer.len());
+        if let Some(marked) = &self.marked_text {
+            let marked_start = self.buffer.utf16_offset(marked.range.start.0);
+            let replaced_end = self.buffer.utf16_offset(marked.range.end.0);
+            let marked_end = marked_start + marked.text.encode_utf16().count();
+            let end = buffer_end - (replaced_end - marked_start) + marked_end - marked_start;
+            let range = range_utf16.start.min(end)..range_utf16.end.min(end);
+            *adjusted_range = Some(range.clone());
+            let mut text = String::new();
+            // Compose only the requested slice, not another copy of the document.
+            if range.start < marked_start {
+                text.push_str(
+                    &self
+                        .buffer
+                        .slice_utf16(range.start..range.end.min(marked_start)),
+                );
+            }
+            if range.start < marked_end && range.end > marked_start {
+                text.push_str(&utf16_slice(
+                    &marked.text,
+                    range.start.saturating_sub(marked_start)
+                        ..range.end.min(marked_end) - marked_start,
+                ));
+            }
+            if range.end > marked_end {
+                text.push_str(&self.buffer.slice_utf16(
+                    replaced_end + range.start.max(marked_end) - marked_end
+                        ..replaced_end + range.end - marked_end,
+                ));
+            }
+            Some(text)
+        } else {
+            let end = buffer_end;
+            let range = range_utf16.start.min(end)..range_utf16.end.min(end);
+            *adjusted_range = Some(range.clone());
+            Some(self.buffer.slice_utf16(range))
+        }
     }
 
     fn selected_text_range(
@@ -28,9 +60,8 @@ impl EntityInputHandler for TextEditorView {
     ) -> Option<UTF16Selection> {
         let selection = self.cursor.selection();
         let range = selection.range();
-        let text = self.buffer.text();
         Some(UTF16Selection {
-            range: byte_range_to_utf16_range(&text, range.start.0..range.end.0),
+            range: self.buffer.utf16_offset(range.start.0)..self.buffer.utf16_offset(range.end.0),
             reversed: selection.anchor > selection.head,
         })
     }
@@ -41,8 +72,7 @@ impl EntityInputHandler for TextEditorView {
         _cx: &mut Context<Self>,
     ) -> Option<Range<usize>> {
         let marked = self.marked_text.as_ref()?;
-        let text = self.buffer.text();
-        let start = byte_to_utf16_index(&text, marked.range.start.0);
+        let start = self.buffer.utf16_offset(marked.range.start.0);
         let end = start + marked.text.encode_utf16().count();
         Some(start..end)
     }
@@ -103,8 +133,7 @@ impl EntityInputHandler for TextEditorView {
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
         let index = range_utf16.start;
-        let text = self.buffer.text();
-        let byte = utf16_index_to_byte(&text, index);
+        let byte = self.buffer.byte_offset_for_utf16(index);
         Some(self.bounds_for_byte_offset(BufferOffset(byte), element_bounds, window))
     }
 
@@ -115,45 +144,26 @@ impl EntityInputHandler for TextEditorView {
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
         let offset = self.offset_for_window_point(point, window)?;
-        let text = self.buffer.text();
-        Some(byte_to_utf16_index(&text, offset.0))
+        Some(self.buffer.utf16_offset(offset.0))
     }
 }
 
 impl TextEditorView {
-    pub(super) fn text_with_marked(&self) -> String {
-        let Some(marked) = self.marked_text.as_ref() else {
-            return self.buffer.text();
-        };
-        let mut text = self.buffer.text();
-        let start = marked.range.start.0;
-        let end = marked.range.end.0;
-        if start <= end
-            && end <= text.len()
-            && text.is_char_boundary(start)
-            && text.is_char_boundary(end)
-        {
-            text.replace_range(start..end, &marked.text);
-        }
-        text
-    }
-
     pub(super) fn ime_replacement_range(
         &self,
         range_utf16: Option<Range<usize>>,
     ) -> Option<TextRange> {
         let range_utf16 = range_utf16?;
-        let text = self.buffer.text();
         if let Some(marked) = self.marked_text.as_ref() {
-            let marked_start = byte_to_utf16_index(&text, marked.range.start.0);
+            let marked_start = self.buffer.utf16_offset(marked.range.start.0);
             let marked_end = marked_start + marked.text.encode_utf16().count();
             if ranges_overlap(&range_utf16, &(marked_start..marked_end)) {
                 return Some(marked.range);
             }
         }
 
-        let start = utf16_index_to_byte(&text, range_utf16.start);
-        let end = utf16_index_to_byte(&text, range_utf16.end);
+        let start = self.buffer.byte_offset_for_utf16(range_utf16.start);
+        let end = self.buffer.byte_offset_for_utf16(range_utf16.end);
         Some(TextRange::new(BufferOffset(start), BufferOffset(end)))
     }
 }
@@ -167,12 +177,6 @@ pub(super) fn keystroke_commits_platform_text(keystroke: &gpui::Keystroke) -> bo
         .key_char
         .as_deref()
         .is_some_and(|text| !text.is_empty() && !text.chars().any(char::is_control))
-}
-
-fn byte_to_utf16_index(text: &str, byte: usize) -> usize {
-    let byte = byte.min(text.len());
-    let byte = super::coords::floor_char_boundary(text, byte);
-    text[..byte].encode_utf16().count()
 }
 
 fn utf16_index_to_byte(text: &str, utf16_index: usize) -> usize {
@@ -192,10 +196,6 @@ fn utf16_index_to_byte(text: &str, utf16_index: usize) -> usize {
         units = next;
     }
     text.len()
-}
-
-fn byte_range_to_utf16_range(text: &str, range: Range<usize>) -> Range<usize> {
-    byte_to_utf16_index(text, range.start)..byte_to_utf16_index(text, range.end)
 }
 
 fn utf16_slice(text: &str, range: Range<usize>) -> String {

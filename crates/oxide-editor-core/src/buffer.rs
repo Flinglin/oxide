@@ -1,11 +1,13 @@
+// Copyright (C) 2026 AnalyseDeCircuit
+// SPDX-License-Identifier: GPL-3.0-only
+
 use std::{cell::RefCell, cmp::Ordering, sync::Arc};
 
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
     BufferOffset, EditTransaction, EditorError, LineCol, Selection, TextEdit, TextRange,
-    line_index::{compute_line_starts, update_line_starts_after_edits},
-    piece_table::PieceTableTextBuffer,
+    line_index::LineIndex, piece_table::PieceTableTextBuffer,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -20,7 +22,7 @@ struct HistoryEntry {
 pub struct TextBuffer {
     storage: PieceTableTextBuffer,
     text_cache: RefCell<Option<Arc<str>>>,
-    line_starts: Vec<usize>,
+    line_starts: LineIndex,
     version: u64,
     content_revision: u64,
     saved_revision: u64,
@@ -28,6 +30,37 @@ pub struct TextBuffer {
     undo_stack: Vec<HistoryEntry>,
     redo_stack: Vec<HistoryEntry>,
     changes: Option<Vec<BufferChange>>,
+}
+
+/// Immutable piece snapshot. Text allocations are shared; history and line indexes are not copied.
+#[derive(Clone, Debug)]
+pub struct TextSnapshot {
+    storage: PieceTableTextBuffer,
+}
+
+impl TextSnapshot {
+    pub fn len(&self) -> usize {
+        self.storage.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.storage.is_empty()
+    }
+
+    pub fn chunks(&self) -> impl Iterator<Item = &str> {
+        self.storage.chunks()
+    }
+
+    /// Materialize only for a consumer whose API requires contiguous text.
+    pub fn with_text<R>(&self, f: impl FnOnce(&str) -> R) -> R {
+        let mut chunks = self.chunks();
+        let first = chunks.next().unwrap_or_default();
+        if chunks.next().is_none() {
+            f(first)
+        } else {
+            f(&self.storage.to_text())
+        }
+    }
 }
 
 /// Coordinate changes only; readers do not need another copy of edited text.
@@ -69,7 +102,7 @@ impl TextBuffer {
 
     pub fn new(text: impl Into<Arc<str>>) -> Self {
         let text = text.into();
-        let line_starts = compute_line_starts(&text);
+        let line_starts = LineIndex::new(&text);
         let storage = PieceTableTextBuffer::new(text);
         let text_cache = RefCell::new(Some(storage.original.clone()));
         Self {
@@ -99,6 +132,25 @@ impl TextBuffer {
             .clone()
     }
 
+    pub fn shared_snapshot(&self) -> TextSnapshot {
+        TextSnapshot {
+            storage: self.storage.clone(),
+        }
+    }
+
+    /// Drop only the contiguous read cache; pieces and undo history retain ownership.
+    pub fn release_text_cache(&self) {
+        let mut cache = self.text_cache.borrow_mut();
+        // Shared save/workspace snapshots already own these bytes. Keep their
+        // identity instead of allocating a duplicate on the next read.
+        if cache
+            .as_ref()
+            .is_some_and(|text| Arc::strong_count(text) == 1)
+        {
+            cache.take();
+        }
+    }
+
     pub fn with_text<R>(&self, f: impl FnOnce(&str) -> R) -> R {
         if self.text_cache.borrow().is_none() {
             *self.text_cache.borrow_mut() = Some(self.storage.to_text().into());
@@ -107,6 +159,67 @@ impl TextBuffer {
         f(cache
             .as_deref()
             .expect("text cache should be materialized before callback"))
+    }
+
+    /// Contiguous access for one operation, without retaining a document-sized copy.
+    pub fn with_temporary_text<R>(&self, f: impl FnOnce(&str) -> R) -> R {
+        let cache = self.text_cache.borrow();
+        if let Some(text) = cache.as_deref() {
+            f(text)
+        } else {
+            f(&self.storage.to_text())
+        }
+    }
+
+    pub(crate) fn chunks(&self) -> impl Iterator<Item = &str> {
+        self.storage.chunks()
+    }
+
+    pub fn utf16_offset(&self, byte: usize) -> usize {
+        let mut remaining = byte.min(self.len());
+        let mut units = 0;
+        for chunk in self.chunks() {
+            let end = crate::utf16::floor_char_boundary(chunk, remaining.min(chunk.len()));
+            units += chunk[..end].encode_utf16().count();
+            if remaining <= chunk.len() {
+                break;
+            }
+            remaining -= chunk.len();
+        }
+        units
+    }
+
+    /// Offsets inside a surrogate pair resolve to its starting byte, as required by the editor adapter.
+    pub fn byte_offset_for_utf16(&self, offset: usize) -> usize {
+        let mut units = 0;
+        let mut base = 0;
+        for chunk in self.chunks() {
+            if chunk.is_ascii() {
+                if offset - units <= chunk.len() {
+                    return base + offset - units;
+                }
+                units += chunk.len();
+            } else {
+                for (byte, ch) in chunk.char_indices() {
+                    let next = units + ch.len_utf16();
+                    if next > offset {
+                        return base + byte;
+                    }
+                    if next == offset {
+                        return base + byte + ch.len_utf8();
+                    }
+                    units = next;
+                }
+            }
+            base += chunk.len();
+        }
+        self.len()
+    }
+
+    pub fn slice_utf16(&self, range: std::ops::Range<usize>) -> String {
+        let start = self.byte_offset_for_utf16(range.start);
+        let end = self.byte_offset_for_utf16(range.end);
+        self.storage.slice_to_string(start..end)
     }
 
     pub fn len(&self) -> usize {
@@ -139,13 +252,23 @@ impl TextBuffer {
     }
 
     pub fn line_text(&self, line: usize) -> Option<String> {
-        let start = *self.line_starts.get(line)?;
+        let start = self.line_starts.get(line)?;
         let end = self.line_end_offset(line)?.0;
         Some(self.storage.slice_to_string(start..end))
     }
 
+    pub fn word_at(&self, offset: BufferOffset) -> String {
+        let byte = offset.0.min(self.len());
+        let line = self.line_starts.line_for_offset(byte);
+        let start = self.line_starts.get(line).unwrap();
+        self.with_line_text(line, |text| {
+            crate::word_at(text, BufferOffset(byte - start))
+        })
+        .unwrap_or_default()
+    }
+
     pub fn with_line_text<R>(&self, line: usize, f: impl FnOnce(&str) -> R) -> Option<R> {
-        let start = *self.line_starts.get(line)?;
+        let start = self.line_starts.get(line)?;
         let end = self.line_end_offset(line)?.0;
         if start == 0 && end == self.storage.len() {
             // A single-line document is already the requested row; cache it for repeated paints.
@@ -169,11 +292,10 @@ impl TextBuffer {
         self.with_text(|text| {
             (0..self.line_starts.len())
                 .map(|line| {
-                    let start = self.line_starts[line];
+                    let start = self.line_starts.get(line).unwrap();
                     let end = self
                         .line_starts
                         .get(line + 1)
-                        .copied()
                         .map(|next| next.saturating_sub(1))
                         .unwrap_or_else(|| text.len())
                         .max(start);
@@ -187,15 +309,15 @@ impl TextBuffer {
 
     pub fn offset_to_line_col(&self, offset: BufferOffset) -> Result<LineCol, EditorError> {
         self.validate_offset(offset)?;
-        let line = match self.line_starts.binary_search(&offset.0) {
-            Ok(line) => line,
-            Err(next_line) => next_line.saturating_sub(1),
-        };
-        Ok(LineCol::new(line, offset.0 - self.line_starts[line]))
+        let line = self.line_starts.line_for_offset(offset.0);
+        Ok(LineCol::new(
+            line,
+            offset.0 - self.line_starts.get(line).unwrap(),
+        ))
     }
 
     pub fn line_col_to_offset(&self, position: LineCol) -> Result<BufferOffset, EditorError> {
-        let start = *self
+        let start = self
             .line_starts
             .get(position.line)
             .ok_or(EditorError::InvalidLine {
@@ -222,12 +344,12 @@ impl TextBuffer {
     }
 
     pub fn line_start_offset(&self, line: usize) -> Option<BufferOffset> {
-        self.line_starts.get(line).copied().map(BufferOffset)
+        self.line_starts.get(line).map(BufferOffset)
     }
 
     pub fn line_end_offset(&self, line: usize) -> Option<BufferOffset> {
-        let start = *self.line_starts.get(line)?;
-        let next_start = self.line_starts.get(line + 1).copied();
+        let start = self.line_starts.get(line)?;
+        let next_start = self.line_starts.get(line + 1);
         let end = next_start
             .map(|next| next.saturating_sub(1))
             .unwrap_or_else(|| self.storage.len());
@@ -238,26 +360,28 @@ impl TextBuffer {
         if self.validate_offset(offset).is_err() || offset.0 >= self.storage.len() {
             return BufferOffset(self.storage.len());
         }
-        self.with_text(|text| {
-            let remaining = &text[offset.0..];
-            let next_len = remaining.graphemes(true).next().map(str::len).unwrap_or(0);
-            BufferOffset((offset.0 + next_len).min(text.len()))
-        })
+        let line = self.line_starts.line_for_offset(offset.0);
+        let end = self.line_starts.get(line + 1).unwrap_or(self.len());
+        let remaining = self.storage.slice_to_string(offset.0..end);
+        let next_len = remaining.graphemes(true).next().map(str::len).unwrap_or(0);
+        BufferOffset(offset.0 + next_len)
     }
 
     pub fn previous_grapheme_offset(&self, offset: BufferOffset) -> BufferOffset {
         if self.validate_offset(offset).is_err() || offset.0 == 0 {
             return BufferOffset::ZERO;
         }
-        self.with_text(|text| {
-            let prefix = &text[..offset.0];
-            let previous_len = prefix
-                .graphemes(true)
-                .next_back()
-                .map(str::len)
-                .unwrap_or(0);
-            BufferOffset(offset.0.saturating_sub(previous_len))
-        })
+        // Newlines terminate grapheme context, including regional-indicator runs.
+        // Include the preceding physical line when the caret follows its newline.
+        let line = self.line_starts.line_for_offset(offset.0 - 1);
+        let start = self.line_starts.get(line).unwrap();
+        let prefix = self.storage.slice_to_string(start..offset.0);
+        let previous_len = prefix
+            .graphemes(true)
+            .next_back()
+            .map(str::len)
+            .unwrap_or(0);
+        BufferOffset(offset.0.saturating_sub(previous_len))
     }
 
     pub fn apply_transaction(&mut self, transaction: EditTransaction) -> Result<(), EditorError> {
@@ -355,15 +479,15 @@ impl TextBuffer {
             delta += edit.replacement.len() as isize - edit.range.len() as isize;
         }
 
-        update_line_starts_after_edits(&mut self.line_starts, &edits);
+        let new_len = apply_delta(self.len(), delta)?;
+        self.line_starts.update(&edits, new_len);
 
         for edit in edits.iter().rev() {
             self.storage
                 .replace(edit.range.as_range(), &edit.replacement);
         }
-        // Syntax, save, search, and IME still require contiguous text at their
-        // API boundary. Keep that as an explicit on-demand cache instead of
-        // forcing every edit through full-document materialization.
+        // Syntax and save snapshots still require contiguous text. Invalidate
+        // that version without forcing ordinary reads to materialize it again.
         *self.text_cache.borrow_mut() = None;
         self.storage.reclaim_unused_text();
         self.version = self.version.saturating_add(1);
