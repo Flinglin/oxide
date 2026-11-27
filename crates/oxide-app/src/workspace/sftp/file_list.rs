@@ -70,11 +70,7 @@ impl WorkspaceApp {
         let tokens = self.theme_tokens;
         let theme = tokens.ui;
         let compact = self.sftp_view().read(cx).current_surface_id == Some(SftpSurfaceId::Sidebar);
-        let tree_mode = pane == SftpPane::Remote
-            && compact
-            && self.settings_store.settings().sftp.sidebar_view_mode
-                == oxide_settings::SftpSidebarViewMode::Tree
-            && self.sftp_view().read(cx).remote_filter.trim().is_empty();
+        let tree_mode = pane == SftpPane::Remote && self.sftp_tree_mode(cx);
         let drag_over = self.sftp_view().read(cx).drag_over_pane == Some(pane);
         let list = div()
             .id(("sftp-file-list-scroll", pane as u64))
@@ -487,7 +483,7 @@ impl WorkspaceApp {
                                 .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
                                     window.focus(&chevron_focus, cx);
                                     chevron_view.update(cx, |sftp, cx| {
-                                        sftp.tree_selected = Some(path.clone());
+                                        sftp.select_tree_file(path.clone());
                                         sftp.request_tree_toggle(path.clone(), cx);
                                         cx.stop_propagation();
                                         cx.notify();
@@ -558,7 +554,7 @@ impl WorkspaceApp {
                                 move |event: &MouseDownEvent, window, cx| {
                                     window.focus(&row_focus, cx);
                                     row_view.update(cx, |sftp, cx| {
-                                        sftp.tree_selected = Some(row_path.clone());
+                                        sftp.select_tree_file(row_path.clone());
                                         if event.click_count >= 2 {
                                             if is_directory {
                                                 sftp.request_tree_toggle(row_path.clone(), cx);

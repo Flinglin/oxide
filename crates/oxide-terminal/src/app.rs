@@ -1703,7 +1703,19 @@ impl TerminalPane {
         let mode = self.terminal.lock().mode();
         !mode.contains(TermMode::ALT_SCREEN) && !mode.intersects(TermMode::MOUSE_MODE)
     }
-
+    pub fn can_sync_working_directory(&self) -> bool {
+        // SFTP can target an unfocused pane. Only submit to a recognized empty
+        // shell prompt, never append to a draft or feed a foreground program.
+        let mode = self.terminal.lock().mode();
+        self.terminal_accepts_input()
+            && self.autosuggest_prompt_active
+            && self.history_input_available(mode)
+            && !self.input_tracker.untracked
+            && self.input_tracker.value.is_empty()
+            && self.marked_text.is_none()
+            && self.pending_paste.is_none()
+            && self.tmux_prompt.is_none()
+    }
     pub fn command_marks(&self) -> Vec<TerminalCommandMark> {
         self.command_marks.clone()
     }
