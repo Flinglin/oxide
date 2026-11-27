@@ -4,12 +4,12 @@
       "accepted": "Transfert X11 accepté",
       "accepted_description": "Le serveur SSH a accepté le transfert X11 pour ce terminal. Le serveur attribue la valeur DISPLAY distante.",
       "unavailable": "Transfert X11 indisponible",
-      "local_display_unavailable": "Aucune adresse d’affichage locale valide n’a été trouvée. Démarrez un serveur X local et configurez DISPLAY avant de lancer Oxide.",
+      "local_display_unavailable": "Aucune adresse d’affichage locale valide n’a été trouvée. Démarrez un serveur X local et configurez DISPLAY avant de lancer OxideTerm.",
       "local_authorization_unavailable": "Impossible de préparer l’autorisation X11 locale. Vérifiez XAUTHORITY, le fichier d’autorisation et la disponibilité de xauth.",
       "server_rejected": "Le serveur SSH a refusé le transfert X11. Vérifiez sa politique de transfert et l’installation de xauth.",
       "request_timed_out": "Le serveur SSH n’a pas répondu à temps à la demande de transfert X11.",
       "channel_unavailable": "Le canal SSH n’a pas pu terminer la négociation du transfert X11.",
-      "windows_requirement": "Windows nécessite un serveur X local en cours d’exécution. Définissez DISPLAY sur son adresse avant de lancer Oxide. Le serveur SSH attribue séparément la valeur DISPLAY distante."
+      "windows_requirement": "Windows nécessite un serveur X local en cours d’exécution. Définissez DISPLAY sur son adresse avant de lancer OxideTerm. Le serveur SSH attribue séparément la valeur DISPLAY distante."
     },
     "fido": {
       "touch_title": "Clé de sécurité",
@@ -204,7 +204,9 @@
       "ssh_algorithms_negotiation_order_hint": "L’ordre de la liste correspond à la priorité du client pendant la négociation SSH.",
       "save": "Enregistrer",
       "save_and_connect": "Enregistrer et se connecter",
-      "runtime_node_missing": "Le nœud SSH en cours n’est plus disponible"
+      "runtime_node_missing": "Le nœud SSH en cours n’est plus disponible",
+      "open_sftp_on_connect": "Ouvrir le panneau SFTP avec la connexion",
+      "open_sftp_on_connect_hint": "Ouvre l'explorateur SFTP lorsqu'un terminal de cette connexion est ouvert. Ctrl-clic sur « Connexion » ou « Nouveau terminal » pour le forcer une fois."
     },
     "auth": {
       "password": "Mot de passe",
@@ -225,7 +227,7 @@
       "title_unknown": "Clé d’hôte inconnue",
       "title_changed": "Clé d’hôte modifiée",
       "title_error": "Erreur de clé d’hôte",
-      "unknown_message": "oxide voit cette clé d’hôte SSH pour la première fois. Vérifiez l’empreinte avant de continuer.",
+      "unknown_message": "OxideTerm voit cette clé d’hôte SSH pour la première fois. Vérifiez l’empreinte avant de continuer.",
       "changed_warning": "La clé d’hôte SSH enregistrée pour cet hôte ne correspond pas à la clé du serveur. Cela peut indiquer une attaque de l’homme du milieu.",
       "key_type_label": "Type de clé",
       "fingerprint_label": "Empreinte",

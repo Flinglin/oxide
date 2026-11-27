@@ -4,12 +4,12 @@
       "accepted": "Encaminhamento X11 aceito",
       "accepted_description": "O servidor SSH aceitou o encaminhamento X11 para este terminal. O servidor atribui o DISPLAY remoto.",
       "unavailable": "Encaminhamento X11 indisponível",
-      "local_display_unavailable": "Nenhum endereço de exibição local válido foi encontrado. Inicie um servidor X local e configure DISPLAY antes de iniciar o Oxide.",
+      "local_display_unavailable": "Nenhum endereço de exibição local válido foi encontrado. Inicie um servidor X local e configure DISPLAY antes de iniciar o OxideTerm.",
       "local_authorization_unavailable": "Não foi possível preparar a autorização X11 local. Verifique XAUTHORITY, o arquivo de autorização e a disponibilidade de xauth.",
       "server_rejected": "O servidor SSH rejeitou o encaminhamento X11. Verifique a política de encaminhamento e a instalação do xauth no servidor.",
       "request_timed_out": "O servidor SSH não respondeu a tempo à solicitação de encaminhamento X11.",
       "channel_unavailable": "O canal SSH não conseguiu concluir a negociação do encaminhamento X11.",
-      "windows_requirement": "O Windows precisa de um servidor X local em execução. Defina DISPLAY com o endereço dele antes de iniciar o Oxide. O servidor SSH atribui o DISPLAY remoto separadamente."
+      "windows_requirement": "O Windows precisa de um servidor X local em execução. Defina DISPLAY com o endereço dele antes de iniciar o OxideTerm. O servidor SSH atribui o DISPLAY remoto separadamente."
     },
     "fido": {
       "touch_title": "Chave de segurança",
@@ -204,7 +204,9 @@
       "ssh_algorithms_negotiation_order_hint": "A ordem da lista é a prioridade usada pelo cliente durante a negociação SSH.",
       "save": "Salvar",
       "save_and_connect": "Salvar e conectar",
-      "runtime_node_missing": "O nó SSH em execução não está mais disponível"
+      "runtime_node_missing": "O nó SSH em execução não está mais disponível",
+      "open_sftp_on_connect": "Abrir painel SFTP com a conexão",
+      "open_sftp_on_connect_hint": "Abre o navegador SFTP ao abrir um terminal desta conexão. Ctrl+clique em “Conectar” ou “Novo terminal” para forçar uma vez."
     },
     "auth": {
       "password": "Senha",
@@ -225,7 +227,7 @@
       "title_unknown": "Chave de host desconhecida",
       "title_changed": "Chave de host alterada",
       "title_error": "Erro de chave de host",
-      "unknown_message": "Esta é a primeira vez que o oxide vê esta chave de host SSH. Verifique a impressão digital antes de continuar.",
+      "unknown_message": "Esta é a primeira vez que o OxideTerm vê esta chave de host SSH. Verifique a impressão digital antes de continuar.",
       "changed_warning": "A chave de host SSH salva para este host não corresponde à chave do servidor. Isso pode indicar um ataque man-in-the-middle.",
       "key_type_label": "Tipo de chave",
       "fingerprint_label": "Impressão digital",

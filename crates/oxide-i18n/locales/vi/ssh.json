@@ -4,12 +4,12 @@
       "accepted": "Đã chấp nhận chuyển tiếp X11",
       "accepted_description": "Máy chủ SSH đã chấp nhận chuyển tiếp X11 cho cửa sổ dòng lệnh này. Máy chủ cấp giá trị DISPLAY từ xa.",
       "unavailable": "Không thể dùng chuyển tiếp X11",
-      "local_display_unavailable": "Không tìm thấy địa chỉ hiển thị cục bộ hợp lệ. Hãy khởi động máy chủ X cục bộ và đặt DISPLAY trước khi mở Oxide.",
+      "local_display_unavailable": "Không tìm thấy địa chỉ hiển thị cục bộ hợp lệ. Hãy khởi động máy chủ X cục bộ và đặt DISPLAY trước khi mở OxideTerm.",
       "local_authorization_unavailable": "Không thể chuẩn bị xác thực X11 cục bộ. Hãy kiểm tra XAUTHORITY, tệp xác thực và khả năng sử dụng xauth.",
       "server_rejected": "Máy chủ SSH đã từ chối chuyển tiếp X11. Hãy kiểm tra chính sách chuyển tiếp và việc cài đặt xauth trên máy chủ.",
       "request_timed_out": "Máy chủ SSH không phản hồi yêu cầu chuyển tiếp X11 đúng hạn.",
       "channel_unavailable": "Kênh SSH không thể hoàn tất thương lượng chuyển tiếp X11.",
-      "windows_requirement": "Windows cần một máy chủ X cục bộ đang chạy. Đặt DISPLAY thành địa chỉ của máy chủ đó trước khi mở Oxide. Máy chủ SSH cấp DISPLAY từ xa riêng biệt."
+      "windows_requirement": "Windows cần một máy chủ X cục bộ đang chạy. Đặt DISPLAY thành địa chỉ của máy chủ đó trước khi mở OxideTerm. Máy chủ SSH cấp DISPLAY từ xa riêng biệt."
     },
     "fido": {
       "touch_title": "Khóa bảo mật",
@@ -204,7 +204,9 @@
       "ssh_algorithms_negotiation_order_hint": "Thứ tự danh sách là mức ưu tiên của máy khách khi thương lượng SSH.",
       "save": "Lưu",
       "save_and_connect": "Lưu và kết nối",
-      "runtime_node_missing": "Nút SSH đang chạy không còn khả dụng"
+      "runtime_node_missing": "Nút SSH đang chạy không còn khả dụng",
+      "open_sftp_on_connect": "Mở bảng SFTP cùng kết nối",
+      "open_sftp_on_connect_hint": "Mở trình duyệt SFTP khi mở terminal cho kết nối này. Giữ Ctrl và nhấp “Kết nối” hoặc “Terminal mới” để buộc mở một lần."
     },
     "auth": {
       "password": "Mật khẩu",
@@ -225,7 +227,7 @@
       "title_unknown": "Khóa máy chủ không xác định",
       "title_changed": "Khóa máy chủ đã thay đổi",
       "title_error": "Lỗi khóa máy chủ",
-      "unknown_message": "Đây là lần đầu oxide thấy khóa máy chủ SSH này. Hãy xác minh dấu vân tay trước khi tiếp tục.",
+      "unknown_message": "Đây là lần đầu OxideTerm thấy khóa máy chủ SSH này. Hãy xác minh dấu vân tay trước khi tiếp tục.",
       "changed_warning": "Khóa máy chủ SSH đã lưu cho máy này không khớp với khóa máy chủ. Điều này có thể là tấn công trung gian.",
       "key_type_label": "Loại khóa",
       "fingerprint_label": "Dấu vân tay",

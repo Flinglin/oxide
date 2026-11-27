@@ -43,7 +43,7 @@ pub fn join_remote_path(base: &str, component: &str) -> String {
 }
 
 /// Normalizes a remote path to the absolute forward-slash form used by SFTP.
-pub fn normalize_remote_path(path: &str) -> Cow<'_, str> {
+pub fn normalize_remote_path<'a>(path: &'a str) -> Cow<'a, str> {
     // trim 产生的是原串的子切片，生命周期仍是 'a，可安全借用
     let trimmed = path.trim();
 
@@ -101,7 +101,7 @@ fn is_normalized_remote(s: &str) -> bool {
     true
 }
 /// Returns the parent of an absolute remote path without crossing the root.
-pub fn remote_parent_path(path: &str) -> Cow<'_, str> {
+pub fn remote_parent_path<'a>(path: &'a str) -> Cow<'a, str> {
     match normalize_remote_path(path) {
         Cow::Borrowed(s) => {
             // s: &'a str，结果可以借它，生命周期仍是 'a

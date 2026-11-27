@@ -4,12 +4,12 @@
       "accepted": "Reenvío X11 aceptado",
       "accepted_description": "El servidor SSH aceptó el reenvío X11 para este terminal. El servidor asigna el DISPLAY remoto.",
       "unavailable": "Reenvío X11 no disponible",
-      "local_display_unavailable": "No se encontró una dirección de pantalla local válida. Inicia un servidor X local y configura DISPLAY antes de iniciar Oxide.",
+      "local_display_unavailable": "No se encontró una dirección de pantalla local válida. Inicia un servidor X local y configura DISPLAY antes de iniciar OxideTerm.",
       "local_authorization_unavailable": "No se pudo preparar la autorización X11 local. Comprueba XAUTHORITY, el archivo de autorización y la disponibilidad de xauth.",
       "server_rejected": "El servidor SSH rechazó el reenvío X11. Comprueba su política de reenvío y la instalación de xauth.",
       "request_timed_out": "El servidor SSH no respondió a tiempo a la solicitud de reenvío X11.",
       "channel_unavailable": "El canal SSH no pudo completar la negociación del reenvío X11.",
-      "windows_requirement": "Windows necesita un servidor X local en ejecución. Configura DISPLAY con su dirección antes de iniciar Oxide. El servidor SSH asigna el DISPLAY remoto por separado."
+      "windows_requirement": "Windows necesita un servidor X local en ejecución. Configura DISPLAY con su dirección antes de iniciar OxideTerm. El servidor SSH asigna el DISPLAY remoto por separado."
     },
     "fido": {
       "touch_title": "Llave de seguridad",
@@ -204,7 +204,9 @@
       "ssh_algorithms_negotiation_order_hint": "El orden de la lista es la preferencia del cliente durante la negociación SSH.",
       "save": "Guardar",
       "save_and_connect": "Guardar y conectar",
-      "runtime_node_missing": "El nodo SSH en ejecución ya no está disponible"
+      "runtime_node_missing": "El nodo SSH en ejecución ya no está disponible",
+      "open_sftp_on_connect": "Abrir el panel SFTP con la conexión",
+      "open_sftp_on_connect_hint": "Abre el explorador SFTP al abrir un terminal de esta conexión. Ctrl+clic en «Conectar» o «Nueva terminal» para forzarlo una vez."
     },
     "auth": {
       "password": "Contraseña",
@@ -225,7 +227,7 @@
       "title_unknown": "Clave de host desconocida",
       "title_changed": "La clave de host cambió",
       "title_error": "Error de clave de host",
-      "unknown_message": "Es la primera vez que oxide ve esta clave de host SSH. Verifica la huella antes de continuar.",
+      "unknown_message": "Es la primera vez que OxideTerm ve esta clave de host SSH. Verifica la huella antes de continuar.",
       "changed_warning": "La clave de host SSH guardada para este host no coincide con la clave del servidor. Esto puede indicar un ataque de intermediario.",
       "key_type_label": "Tipo de clave",
       "fingerprint_label": "Huella",

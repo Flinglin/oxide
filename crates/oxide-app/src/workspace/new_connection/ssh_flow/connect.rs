@@ -984,6 +984,7 @@ impl WorkspaceApp {
 
         match run.intent {
             SshConnectionIntent::Connect(connection_options) => {
+                let open_sftp_on_connect = connection_options.open_sftp_on_connect;
                 if let Some(node) = self.ssh_nodes.get_mut(&target_node_id) {
                     // Manual connections have no saved record, so the runtime node
                     // retains their terminal and SSH connection behavior until all panes close.
@@ -1002,11 +1003,16 @@ impl WorkspaceApp {
                     None,
                     None,
                     run.save_after_open,
+                    open_sftp_on_connect,
                     window,
                     cx,
                 );
             }
-            SshConnectionIntent::ConnectSaved { id, .. } => {
+            SshConnectionIntent::ConnectSaved {
+                id,
+                open_sftp_on_connect,
+                ..
+            } => {
                 if let Some(connection_options) = self.connection_store.get(&id).map(|connection| {
                     (
                         connection.options.terminal.clone(),
@@ -1036,6 +1042,7 @@ impl WorkspaceApp {
                     Some(id.clone()),
                     Some(id),
                     None,
+                    open_sftp_on_connect,
                     window,
                     cx,
                 );
@@ -1273,6 +1280,7 @@ impl WorkspaceApp {
                 }
             }
             SshConnectionIntent::Connect(connection_options) => {
+                let open_sftp_on_connect = connection_options.open_sftp_on_connect;
                 self.update_connection_form_state(cx, ConnectionFormState::clear);
                 self.connection_flow.update(cx, |connection_flow, cx| {
                     connection_flow.clear_host_key_challenge(cx);
@@ -1307,6 +1315,7 @@ impl WorkspaceApp {
                                     None,
                                     None,
                                     None,
+                                    open_sftp_on_connect,
                                     window,
                                     cx,
                                 );
@@ -1337,6 +1346,7 @@ impl WorkspaceApp {
                     None,
                     None,
                     None,
+                    open_sftp_on_connect,
                     window,
                     cx,
                 );
@@ -1344,6 +1354,7 @@ impl WorkspaceApp {
             SshConnectionIntent::ConnectSaved {
                 id,
                 auth_save_target,
+                open_sftp_on_connect,
             } => {
                 self.connection_flow.update(cx, |connection_flow, cx| {
                     connection_flow.clear_host_key_challenge(cx);
@@ -1359,6 +1370,7 @@ impl WorkspaceApp {
                     config,
                     title,
                     auth_save_target,
+                    open_sftp_on_connect,
                     window,
                     cx,
                 );

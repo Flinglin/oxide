@@ -981,7 +981,12 @@ impl WorkspaceApp {
                             }
                         }
                         SessionManagerItemPointerAction::Open => {
-                            this.open_session_manager_target(open_target.clone(), window, cx);
+                            this.open_session_manager_target_with_sftp(
+                                open_target.clone(),
+                                event.modifiers.control,
+                                window,
+                                cx,
+                            );
                         }
                         SessionManagerItemPointerAction::None => {}
                     }
@@ -1031,8 +1036,13 @@ impl WorkspaceApp {
                 MANAGER_ROW_ACTION_ICON_SIZE,
                 rgb(theme.accent),
                 has_background,
-                move |this, _event, window, cx| {
-                    this.open_session_manager_target(open_button_target.clone(), window, cx);
+                move |this, event: &MouseDownEvent, window, cx| {
+                    this.open_session_manager_target_with_sftp(
+                        open_button_target.clone(),
+                        event.modifiers.control,
+                        window,
+                        cx,
+                    );
                     cx.stop_propagation();
                 },
                 cx,
@@ -1121,7 +1131,12 @@ impl WorkspaceApp {
                             }
                         }
                         SessionManagerItemPointerAction::Open => {
-                            this.open_session_manager_target(open_target.clone(), window, cx);
+                            this.open_session_manager_target_with_sftp(
+                                open_target.clone(),
+                                event.modifiers.control,
+                                window,
+                                cx,
+                            );
                         }
                         SessionManagerItemPointerAction::None => {}
                     }
@@ -1821,7 +1836,12 @@ impl WorkspaceApp {
                             }
                         }
                         SessionManagerItemPointerAction::Open => {
-                            this.open_session_manager_target(open_target.clone(), window, cx);
+                            this.open_session_manager_target_with_sftp(
+                                open_target.clone(),
+                                event.modifiers.control,
+                                window,
+                                cx,
+                            );
                         }
                         SessionManagerItemPointerAction::None => {}
                     }
@@ -2055,8 +2075,13 @@ impl WorkspaceApp {
                         MANAGER_ROW_ACTION_ICON_SIZE,
                         rgb(self.theme_tokens.ui.accent),
                         has_background,
-                        move |this, _event, window, cx| {
-                            this.open_saved_connection(&open_id, window, cx);
+                        move |this, event: &MouseDownEvent, window, cx| {
+                            this.open_saved_connection_with_sftp(
+                                &open_id,
+                                event.modifiers.control,
+                                window,
+                                cx,
+                            );
                             cx.stop_propagation();
                         },
                         cx,
@@ -2982,9 +3007,10 @@ impl WorkspaceApp {
         )
     }
 
-    pub(super) fn open_session_manager_target(
+    pub(super) fn open_session_manager_target_with_sftp(
         &mut self,
         target: SessionManagerOpenTarget,
+        open_sftp_on_connect_override: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -2992,9 +3018,13 @@ impl WorkspaceApp {
             SessionManagerOpenTarget::Tunnel(id) => self.open_ssh_tunnel(&id, false, window, cx),
             SessionManagerOpenTarget::Plugin(id) => self.open_plugin_connection(&id, cx),
             SessionManagerOpenTarget::Ftp(id) => self.open_saved_ftp_profile(&id, window, cx),
-            SessionManagerOpenTarget::Connection(connection_id) => {
-                self.open_saved_connection(&connection_id, window, cx)
-            }
+            SessionManagerOpenTarget::Connection(connection_id) => self
+                .open_saved_connection_with_sftp(
+                    &connection_id,
+                    open_sftp_on_connect_override,
+                    window,
+                    cx,
+                ),
             SessionManagerOpenTarget::SshConfig(alias) => {
                 self.open_ssh_config_alias_from_palette(alias, window, cx)
             }

@@ -62,6 +62,7 @@ pub(in crate::workspace) struct PendingSshTerminalOpen {
     pub(in crate::workspace) save_after_open: Option<SaveConnectionRequest>,
     pub(in crate::workspace) cleanup_node_id: Option<NodeId>,
     pub(in crate::workspace) title: String,
+    pub(in crate::workspace) open_sftp_on_connect: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -534,6 +535,9 @@ impl WorkspaceRuntimeEntity {
             if existing.post_connect_command.is_none() {
                 existing.post_connect_command = request.post_connect_command.take();
             }
+            // The flag is a one-shot user intent; a later Ctrl+click must not
+            // be lost behind an already queued plain open.
+            existing.open_sftp_on_connect |= request.open_sftp_on_connect;
             QueueSshTerminalOpenOutcome::Coalesced
         } else {
             self.pending_ssh_terminal_opens.push_back(request);

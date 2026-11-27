@@ -4,12 +4,12 @@
       "accepted": "X11 转发已获服务器接受",
       "accepted_description": "SSH 服务器已接受当前终端的 X11 转发请求。远端 DISPLAY 由服务器分配。",
       "unavailable": "X11 转发不可用",
-      "local_display_unavailable": "未找到有效的本地显示地址。请先启动本地 X 服务器并配置 DISPLAY，再启动 Oxide。",
+      "local_display_unavailable": "未找到有效的本地显示地址。请先启动本地 X 服务器并配置 DISPLAY，再启动 OxideTerm。",
       "local_authorization_unavailable": "无法准备本地 X11 授权。请检查 XAUTHORITY、授权文件和 xauth 是否可用。",
       "server_rejected": "SSH 服务器拒绝了 X11 转发。请检查服务器转发策略及 xauth 是否已安装。",
       "request_timed_out": "SSH 服务器未在规定时间内回应 X11 转发请求。",
       "channel_unavailable": "SSH 通道未能完成 X11 转发协商。",
-      "windows_requirement": "Windows 需要运行本地 X 服务器。请先将 DISPLAY 设置为其地址，再启动 Oxide。远端 DISPLAY 由 SSH 服务器单独分配。"
+      "windows_requirement": "Windows 需要运行本地 X 服务器。请先将 DISPLAY 设置为其地址，再启动 OxideTerm。远端 DISPLAY 由 SSH 服务器单独分配。"
     },
     "fido": {
       "touch_title": "安全密钥",
@@ -204,7 +204,9 @@
       "ssh_algorithms_negotiation_order_hint": "列表顺序就是客户端在 SSH 协商时使用的优先级。",
       "save": "保存",
       "save_and_connect": "保存并连接",
-      "runtime_node_missing": "运行中的 SSH 节点已不可用"
+      "runtime_node_missing": "运行中的 SSH 节点已不可用",
+      "open_sftp_on_connect": "连接时同时打开 SFTP 面板",
+      "open_sftp_on_connect_hint": "为此连接打开终端时同时打开 SFTP 浏览器。按住 Ctrl 点击“连接”或“新建终端”可仅对本次强制打开。"
     },
     "auth": {
       "password": "密码",
@@ -225,7 +227,7 @@
       "title_unknown": "未知主机密钥",
       "title_changed": "主机密钥已变更",
       "title_error": "主机密钥错误",
-      "unknown_message": "这是 oxide 第一次见到这个 SSH 主机密钥。继续前请确认指纹可信。",
+      "unknown_message": "这是 OxideTerm 第一次见到这个 SSH 主机密钥。继续前请确认指纹可信。",
       "changed_warning": "这个主机保存过的 SSH 主机密钥和服务器当前密钥不一致，可能存在中间人攻击风险。",
       "key_type_label": "密钥类型",
       "fingerprint_label": "指纹",

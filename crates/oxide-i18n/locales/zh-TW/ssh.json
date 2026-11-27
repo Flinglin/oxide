@@ -4,12 +4,12 @@
       "accepted": "X11 轉送已獲伺服器接受",
       "accepted_description": "SSH 伺服器已接受目前終端的 X11 轉送請求。遠端 DISPLAY 由伺服器分配。",
       "unavailable": "X11 轉送無法使用",
-      "local_display_unavailable": "找不到有效的本機顯示位址。請先啟動本機 X 伺服器並設定 DISPLAY，再啟動 Oxide。",
+      "local_display_unavailable": "找不到有效的本機顯示位址。請先啟動本機 X 伺服器並設定 DISPLAY，再啟動 OxideTerm。",
       "local_authorization_unavailable": "無法準備本機 X11 授權。請檢查 XAUTHORITY、授權檔案及 xauth 是否可用。",
       "server_rejected": "SSH 伺服器拒絕了 X11 轉送。請檢查伺服器轉送原則及是否已安裝 xauth。",
       "request_timed_out": "SSH 伺服器未在期限內回應 X11 轉送請求。",
       "channel_unavailable": "SSH 通道未能完成 X11 轉送協商。",
-      "windows_requirement": "Windows 需要執行本機 X 伺服器。請先將 DISPLAY 設為其位址，再啟動 Oxide。遠端 DISPLAY 由 SSH 伺服器另外分配。"
+      "windows_requirement": "Windows 需要執行本機 X 伺服器。請先將 DISPLAY 設為其位址，再啟動 OxideTerm。遠端 DISPLAY 由 SSH 伺服器另外分配。"
     },
     "fido": {
       "touch_title": "安全金鑰",
@@ -204,7 +204,9 @@
       "ssh_algorithms_negotiation_order_hint": "清單順序就是用戶端在 SSH 協商時使用的優先順序。",
       "save": "儲存",
       "save_and_connect": "儲存並連線",
-      "runtime_node_missing": "執行中的 SSH 節點已不可用"
+      "runtime_node_missing": "執行中的 SSH 節點已不可用",
+      "open_sftp_on_connect": "連線時一併開啟 SFTP 面板",
+      "open_sftp_on_connect_hint": "為此連線開啟終端機時一併開啟 SFTP 瀏覽器。按住 Ctrl 點選「連線」或「新增終端機」可僅對本次強制開啟。"
     },
     "auth": {
       "password": "密碼",
@@ -225,7 +227,7 @@
       "title_unknown": "未知主機金鑰",
       "title_changed": "主機金鑰已變更",
       "title_error": "主機金鑰錯誤",
-      "unknown_message": "這是 oxide 第一次見到這個 SSH 主機金鑰。繼續前請確認指紋可信。",
+      "unknown_message": "這是 OxideTerm 第一次見到這個 SSH 主機金鑰。繼續前請確認指紋可信。",
       "changed_warning": "這個主機已儲存的 SSH 主機金鑰與伺服器目前金鑰不一致，可能存在中間人攻擊風險。",
       "key_type_label": "金鑰類型",
       "fingerprint_label": "指紋",
